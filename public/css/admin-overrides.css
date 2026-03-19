@@ -1,0 +1,59 @@
+/* Immediate UI fixes applied after Vite build (no rebuild required) */
+
+.table-responsive {
+    overflow-x: auto;
+    overflow-y: visible;
+    position: relative;
+    -webkit-overflow-scrolling: touch;
+}
+
+.table {
+    width: 100%;
+}
+
+.table-responsive .table {
+    min-width: 1100px;
+}
+
+.table thead th,
+.table tbody td {
+    white-space: nowrap;
+}
+
+.dataTables_wrapper {
+    width: 100%;
+    overflow-x: auto;
+}
+
+.dataTables_scrollBody {
+    overflow: auto !important;
+    scrollbar-gutter: stable both-edges;
+    padding-bottom: 6px;
+}
+
+.dataTables_scrollHead table,
+.dataTables_scrollBody table {
+    min-width: 1100px;
+}
+
+/* Action column: scrolls with table (no sticky) */
+.table .action-col {
+    min-width: 120px;
+    text-align: right;
+}
+
+.table .action-col .btn-group {
+    justify-content: flex-end;
+}
+
+/* Touch-friendly targets on coarse pointers */
+@media (pointer: coarse) {
+    .table tbody td {
+        padding-top: 1rem;
+        padding-bottom: 1rem;
+    }
+
+    .table .btn-group .btn {
+        padding: 0.5rem 0.7rem;
+    }
+}
