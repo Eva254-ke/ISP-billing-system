@@ -62,6 +62,5 @@
         </div>
     </div>
 
-    @vite(['resources/js/admin.js'])
 </body>
 </html>
