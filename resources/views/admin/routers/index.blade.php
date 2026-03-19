@@ -6,7 +6,7 @@
 <!-- Page Header -->
 <div class="d-flex justify-content-between align-items-center mb-4">
     <h2>MikroTik Routers</h2>
-    <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addRouterModal">
+    <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addRouterModal" data-toggle="modal" data-target="#addRouterModal">
         <i class="fas fa-plus me-2"></i>Add Router
     </button>
 </div>

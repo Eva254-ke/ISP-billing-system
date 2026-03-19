@@ -339,7 +339,7 @@
         <div class="modal-content">
             <div class="modal-header">
                 <h5 class="modal-title">Payment Details</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" data-dismiss="modal"></button>
             </div>
             <div class="modal-body">
                 <div class="row mb-4">
@@ -402,7 +402,7 @@
                 </div>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal" data-dismiss="modal">Close</button>
                 <button type="button" class="btn btn-outline-secondary" onclick="copyRef()">
                     <i class="fas fa-copy me-1"></i>Copy Ref
                 </button>
@@ -501,7 +501,13 @@ function viewPaymentDetails(ref) {
         document.getElementById('detailPackage').textContent = '1 Hour Pass';
     }
     
-    new bootstrap.Modal(document.getElementById('paymentDetailsModal')).show();
+    if (window.CBModal && window.CBModal.showById) {
+        window.CBModal.showById('paymentDetailsModal');
+    } else if (window.bootstrap && window.bootstrap.Modal) {
+        new bootstrap.Modal(document.getElementById('paymentDetailsModal')).show();
+    } else if (window.jQuery && window.jQuery.fn && window.jQuery.fn.modal) {
+        window.jQuery('#paymentDetailsModal').modal('show');
+    }
 }
 
 // Copy reference

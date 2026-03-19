@@ -9,7 +9,7 @@
         <h2 class="mb-1">Customer Directory</h2>
         <p class="text-muted mb-0">Manage active subscribers and support requests.</p>
     </div>
-    <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addCustomerModal">
+    <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addCustomerModal" data-toggle="modal" data-target="#addCustomerModal">
         <i class="fas fa-user-plus me-2"></i>Add Customer
     </button>
 </div>
@@ -322,7 +322,7 @@
         <div class="modal-content">
             <div class="modal-header">
                 <h5 class="modal-title">Add Customer</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" data-dismiss="modal"></button>
             </div>
             <div class="modal-body">
                 <div class="row g-3">
@@ -370,7 +370,7 @@
                 </div>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal" data-dismiss="modal">Cancel</button>
                 <button type="button" class="btn btn-primary" onclick="saveCustomer()">
                     <i class="fas fa-save me-1"></i>Save Customer
                 </button>
@@ -385,7 +385,7 @@
         <div class="modal-content">
             <div class="modal-header">
                 <h5 class="modal-title">Customer Details</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" data-dismiss="modal"></button>
             </div>
             <div class="modal-body">
                 <div class="mb-2"><strong id="custName">Customer Name</strong></div>
@@ -426,7 +426,7 @@
                 </div>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal" data-dismiss="modal">Close</button>
                 <button type="button" class="btn btn-outline-primary" onclick="sendCustomerMessage()">
                     <i class="fas fa-paper-plane me-1"></i>Message
                 </button>
@@ -450,7 +450,13 @@ function viewCustomerDetails(button) {
     document.getElementById('custPayment').textContent = data.lastPayment;
     document.getElementById('custRouter').textContent = data.router;
 
-    new bootstrap.Modal(document.getElementById('customerDetailsModal')).show();
+    if (window.CBModal && window.CBModal.showById) {
+        window.CBModal.showById('customerDetailsModal');
+    } else if (window.bootstrap && window.bootstrap.Modal) {
+        new bootstrap.Modal(document.getElementById('customerDetailsModal')).show();
+    } else if (window.jQuery && window.jQuery.fn && window.jQuery.fn.modal) {
+        window.jQuery('#customerDetailsModal').modal('show');
+    }
 }
 
 function toggleCustomerStatus(name, action) {

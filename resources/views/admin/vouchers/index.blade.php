@@ -6,7 +6,7 @@
 <!-- Page Header -->
 <div class="d-flex justify-content-between align-items-center mb-4">
     <h2>Voucher Codes</h2>
-    <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#generateVouchersModal">
+    <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#generateVouchersModal" data-toggle="modal" data-target="#generateVouchersModal">
         <i class="fas fa-ticket-alt me-2"></i>Generate Codes
     </button>
 </div>
@@ -372,7 +372,7 @@
         <div class="modal-content">
             <div class="modal-header">
                 <h5 class="modal-title">Generate Voucher Codes</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" data-dismiss="modal"></button>
             </div>
             <div class="modal-body">
                 <form id="generateVouchersForm">
@@ -447,7 +447,7 @@
                 </form>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal" data-dismiss="modal">Cancel</button>
                 <button type="button" class="btn btn-primary" onclick="generateVouchers()">
                     <i class="fas fa-magic me-1"></i>Generate Codes
                 </button>
@@ -462,7 +462,7 @@
         <div class="modal-content">
             <div class="modal-header">
                 <h5 class="modal-title">Voucher Details</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" data-dismiss="modal"></button>
             </div>
             <div class="modal-body">
                 <div class="mb-3">
@@ -508,7 +508,7 @@
                 </div>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal" data-dismiss="modal">Close</button>
                 <button type="button" class="btn btn-danger" onclick="confirmDelete(document.getElementById('detailCode').textContent)">
                     <i class="fas fa-trash me-1"></i>Delete Voucher
                 </button>
@@ -600,7 +600,13 @@ function generateVouchers() {
 // View voucher details
 function viewVoucherDetails(code) {
     document.getElementById('detailCode').textContent = code;
-    new bootstrap.Modal(document.getElementById('voucherDetailsModal')).show();
+    if (window.CBModal && window.CBModal.showById) {
+        window.CBModal.showById('voucherDetailsModal');
+    } else if (window.bootstrap && window.bootstrap.Modal) {
+        new bootstrap.Modal(document.getElementById('voucherDetailsModal')).show();
+    } else if (window.jQuery && window.jQuery.fn && window.jQuery.fn.modal) {
+        window.jQuery('#voucherDetailsModal').modal('show');
+    }
 }
 
 // Confirm delete

@@ -379,7 +379,7 @@
         <div class="modal-content">
             <div class="modal-header">
                 <h5 class="modal-title">Client Details</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" data-dismiss="modal"></button>
             </div>
             <div class="modal-body">
                 <div class="row mb-4">
@@ -462,7 +462,7 @@
                 </div>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal" data-dismiss="modal">Close</button>
                 <button type="button" class="btn btn-outline-warning" onclick="limitSpeedFromModal()">
                     <i class="fas fa-tachometer-alt me-1"></i>Limit Speed
                 </button>
@@ -532,7 +532,13 @@ function viewClientDetails(username) {
         document.getElementById('detailLastActivity').textContent = '2 minutes ago - HTTPS request to google.com';
     }
     
-    new bootstrap.Modal(document.getElementById('clientDetailsModal')).show();
+    if (window.CBModal && window.CBModal.showById) {
+        window.CBModal.showById('clientDetailsModal');
+    } else if (window.bootstrap && window.bootstrap.Modal) {
+        new bootstrap.Modal(document.getElementById('clientDetailsModal')).show();
+    } else if (window.jQuery && window.jQuery.fn && window.jQuery.fn.modal) {
+        window.jQuery('#clientDetailsModal').modal('show');
+    }
 }
 
 // Confirm disconnect

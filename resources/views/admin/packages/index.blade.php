@@ -6,7 +6,7 @@
 <!-- Page Header -->
 <div class="d-flex justify-content-between align-items-center mb-4">
     <h2>WiFi Packages</h2>
-    <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addPackageModal">
+    <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addPackageModal" data-toggle="modal" data-target="#addPackageModal">
         <i class="fas fa-plus me-2"></i>Create Package
     </button>
 </div>
@@ -102,7 +102,7 @@
                     <td>156</td>
                     <td>
                         <div class="btn-group">
-                            <button class="btn btn-sm btn-outline-primary" title="Edit" data-bs-toggle="modal" data-bs-target="#editPackageModal">
+                            <button class="btn btn-sm btn-outline-primary" title="Edit" data-bs-toggle="modal" data-bs-target="#editPackageModal" data-toggle="modal" data-target="#editPackageModal">
                                 <i class="fas fa-edit"></i>
                             </button>
                             <button class="btn btn-sm btn-outline-danger" title="Delete" onclick="confirmDelete('1 Hour Pass')">
@@ -135,7 +135,7 @@
                     <td>89</td>
                     <td>
                         <div class="btn-group">
-                            <button class="btn btn-sm btn-outline-primary" title="Edit" data-bs-toggle="modal" data-bs-target="#editPackageModal">
+                            <button class="btn btn-sm btn-outline-primary" title="Edit" data-bs-toggle="modal" data-bs-target="#editPackageModal" data-toggle="modal" data-target="#editPackageModal">
                                 <i class="fas fa-edit"></i>
                             </button>
                             <button class="btn btn-sm btn-outline-danger" title="Delete" onclick="confirmDelete('3 Hours Pass')">
@@ -168,7 +168,7 @@
                     <td>234</td>
                     <td>
                         <div class="btn-group">
-                            <button class="btn btn-sm btn-outline-primary" title="Edit" data-bs-toggle="modal" data-bs-target="#editPackageModal">
+                            <button class="btn btn-sm btn-outline-primary" title="Edit" data-bs-toggle="modal" data-bs-target="#editPackageModal" data-toggle="modal" data-target="#editPackageModal">
                                 <i class="fas fa-edit"></i>
                             </button>
                             <button class="btn btn-sm btn-outline-danger" title="Delete" onclick="confirmDelete('24 Hours Pass')">
@@ -201,7 +201,7 @@
                     <td>45</td>
                     <td>
                         <div class="btn-group">
-                            <button class="btn btn-sm btn-outline-primary" title="Edit" data-bs-toggle="modal" data-bs-target="#editPackageModal">
+                            <button class="btn btn-sm btn-outline-primary" title="Edit" data-bs-toggle="modal" data-bs-target="#editPackageModal" data-toggle="modal" data-target="#editPackageModal">
                                 <i class="fas fa-edit"></i>
                             </button>
                             <button class="btn btn-sm btn-outline-danger" title="Delete" onclick="confirmDelete('Weekly Pass')">
@@ -234,7 +234,7 @@
                     <td>12</td>
                     <td>
                         <div class="btn-group">
-                            <button class="btn btn-sm btn-outline-primary" title="Edit" data-bs-toggle="modal" data-bs-target="#editPackageModal">
+                            <button class="btn btn-sm btn-outline-primary" title="Edit" data-bs-toggle="modal" data-bs-target="#editPackageModal" data-toggle="modal" data-target="#editPackageModal">
                                 <i class="fas fa-edit"></i>
                             </button>
                             <button class="btn btn-sm btn-outline-danger" title="Delete" onclick="confirmDelete('Monthly Pass')">
@@ -261,7 +261,7 @@
         <div class="modal-content">
             <div class="modal-header">
                 <h5 class="modal-title">Create New Package</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" data-dismiss="modal"></button>
             </div>
             <div class="modal-body">
                 <form id="addPackageForm">
@@ -329,7 +329,7 @@
                 </form>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal" data-dismiss="modal">Cancel</button>
                 <button type="button" class="btn btn-primary" onclick="savePackage()">
                     <i class="fas fa-save me-1"></i>Create Package
                 </button>
@@ -344,7 +344,7 @@
         <div class="modal-content">
             <div class="modal-header">
                 <h5 class="modal-title">Edit Package</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" data-dismiss="modal"></button>
             </div>
             <div class="modal-body">
                 <form id="editPackageForm">
@@ -400,7 +400,7 @@
                 </form>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal" data-dismiss="modal">Cancel</button>
                 <button type="button" class="btn btn-primary" onclick="updatePackage()">
                     <i class="fas fa-save me-1"></i>Update Package
                 </button>

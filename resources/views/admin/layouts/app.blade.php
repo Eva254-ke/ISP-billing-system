@@ -214,36 +214,150 @@
     <script>
         document.addEventListener('DOMContentLoaded', function () {
             var toggle = document.querySelector('.js-user-dropdown-toggle');
-            if (!toggle) return;
             var hasBs5 = window.bootstrap && window.bootstrap.Dropdown;
             var hasBs4 = window.jQuery && window.jQuery.fn && window.jQuery.fn.dropdown;
-            if (hasBs5 || hasBs4) return;
+            if (toggle && !(hasBs5 || hasBs4)) {
+                var menu = toggle.nextElementSibling;
+                var closeMenu = function () {
+                    if (!menu) return;
+                    menu.classList.remove('show');
+                    toggle.classList.remove('show');
+                    toggle.setAttribute('aria-expanded', 'false');
+                };
 
-            var menu = toggle.nextElementSibling;
-            var closeMenu = function () {
-                if (!menu) return;
-                menu.classList.remove('show');
-                toggle.classList.remove('show');
-                toggle.setAttribute('aria-expanded', 'false');
+                toggle.addEventListener('click', function (e) {
+                    e.preventDefault();
+                    if (!menu) return;
+                    var isOpen = menu.classList.contains('show');
+                    closeMenu();
+                    if (!isOpen) {
+                        menu.classList.add('show');
+                        toggle.classList.add('show');
+                        toggle.setAttribute('aria-expanded', 'true');
+                    }
+                });
+
+                document.addEventListener('click', function (e) {
+                    if (!menu) return;
+                    if (toggle.contains(e.target) || menu.contains(e.target)) return;
+                    closeMenu();
+                });
+            }
+
+            // Modal compatibility helper (supports Bootstrap 5, Bootstrap 4, or no Bootstrap JS)
+            var hasBs5Modal = window.bootstrap && window.bootstrap.Modal;
+            var hasBs4Modal = window.jQuery && window.jQuery.fn && window.jQuery.fn.modal;
+            var openModal = null;
+
+            function ensureBackdrop() {
+                var backdrop = document.querySelector('.modal-backdrop[data-fallback-backdrop]');
+                if (backdrop) return backdrop;
+                backdrop = document.createElement('div');
+                backdrop.className = 'modal-backdrop fade show';
+                backdrop.dataset.fallbackBackdrop = 'true';
+                document.body.appendChild(backdrop);
+                return backdrop;
+            }
+
+            function showFallback(modal) {
+                if (!modal) return;
+                if (openModal && openModal !== modal) {
+                    hideFallback(openModal);
+                }
+                modal.style.display = 'block';
+                modal.classList.add('show');
+                modal.removeAttribute('aria-hidden');
+                modal.setAttribute('aria-modal', 'true');
+                document.body.classList.add('modal-open');
+                ensureBackdrop();
+                openModal = modal;
+            }
+
+            function hideFallback(modal) {
+                if (!modal) return;
+                modal.classList.remove('show');
+                modal.style.display = 'none';
+                modal.setAttribute('aria-hidden', 'true');
+                modal.removeAttribute('aria-modal');
+                document.body.classList.remove('modal-open');
+                document.querySelectorAll('.modal-backdrop[data-fallback-backdrop]').forEach(function (el) {
+                    el.remove();
+                });
+                if (openModal === modal) {
+                    openModal = null;
+                }
+            }
+
+            function showModal(modal) {
+                if (!modal) return;
+                if (hasBs5Modal) {
+                    window.bootstrap.Modal.getOrCreateInstance(modal).show();
+                    return;
+                }
+                if (hasBs4Modal) {
+                    window.jQuery(modal).modal('show');
+                    return;
+                }
+                showFallback(modal);
+            }
+
+            function hideModal(modal) {
+                if (!modal) return;
+                if (hasBs5Modal) {
+                    window.bootstrap.Modal.getOrCreateInstance(modal).hide();
+                    return;
+                }
+                if (hasBs4Modal) {
+                    window.jQuery(modal).modal('hide');
+                    return;
+                }
+                hideFallback(modal);
+            }
+
+            window.CBModal = window.CBModal || {};
+            window.CBModal.showById = function (id) {
+                var modal = document.getElementById(id);
+                showModal(modal);
+            };
+            window.CBModal.hideById = function (id) {
+                var modal = document.getElementById(id);
+                hideModal(modal);
             };
 
-            toggle.addEventListener('click', function (e) {
-                e.preventDefault();
-                if (!menu) return;
-                var isOpen = menu.classList.contains('show');
-                closeMenu();
-                if (!isOpen) {
-                    menu.classList.add('show');
-                    toggle.classList.add('show');
-                    toggle.setAttribute('aria-expanded', 'true');
-                }
-            });
+            if (!hasBs5Modal && !hasBs4Modal) {
+                document.addEventListener('click', function (e) {
+                    var trigger = e.target.closest('[data-bs-toggle="modal"], [data-toggle="modal"]');
+                    if (trigger) {
+                        var target = trigger.getAttribute('data-bs-target') || trigger.getAttribute('data-target') || trigger.getAttribute('href');
+                        if (target && target.startsWith('#')) {
+                            var modal = document.querySelector(target);
+                            if (modal) {
+                                e.preventDefault();
+                                showFallback(modal);
+                            }
+                        }
+                    }
 
-            document.addEventListener('click', function (e) {
-                if (!menu) return;
-                if (toggle.contains(e.target) || menu.contains(e.target)) return;
-                closeMenu();
-            });
+                    var dismiss = e.target.closest('[data-bs-dismiss="modal"], [data-dismiss="modal"]');
+                    if (dismiss) {
+                        var modalToClose = dismiss.closest('.modal');
+                        if (modalToClose) {
+                            e.preventDefault();
+                            hideFallback(modalToClose);
+                        }
+                    }
+
+                    if (openModal && e.target === openModal) {
+                        hideFallback(openModal);
+                    }
+                });
+
+                document.addEventListener('keydown', function (e) {
+                    if (e.key === 'Escape' && openModal) {
+                        hideFallback(openModal);
+                    }
+                });
+            }
         });
     </script>
 
