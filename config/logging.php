@@ -3,7 +3,9 @@
 use Monolog\Handler\NullHandler;
 use Monolog\Handler\StreamHandler;
 use Monolog\Handler\SyslogUdpHandler;
+use Monolog\Handler\RotatingFileHandler;
 use Monolog\Processor\PsrLogMessageProcessor;
+use Monolog\Processor\UidProcessor;
 
 return [
 
@@ -52,33 +54,110 @@ return [
 
     'channels' => [
 
+        // ──────────────────────────────────────────────────────────────────
+        // DEFAULT STACK (Combines multiple channels)
+        // ──────────────────────────────────────────────────────────────────
         'stack' => [
             'driver' => 'stack',
-            'channels' => explode(',', (string) env('LOG_STACK', 'single')),
-            'ignore_exceptions' => false,
+            'channels' => explode(',', env('LOG_STACK', 'single,security')),
+            'ignore_exceptions' => env('LOG_STACK_IGNORE_EXCEPTIONS', false),
         ],
 
+        // ──────────────────────────────────────────────────────────────────
+        // APPLICATION LOGS (General app errors, info, debug)
+        // ──────────────────────────────────────────────────────────────────
         'single' => [
             'driver' => 'single',
             'path' => storage_path('logs/laravel.log'),
-            'level' => env('LOG_LEVEL', 'debug'),
+            'level' => env('LOG_LEVEL', 'info'), // Production: info, Dev: debug
             'replace_placeholders' => true,
+            'processors' => [PsrLogMessageProcessor::class, UidProcessor::class],
         ],
 
         'daily' => [
             'driver' => 'daily',
             'path' => storage_path('logs/laravel.log'),
-            'level' => env('LOG_LEVEL', 'debug'),
-            'days' => env('LOG_DAILY_DAYS', 14),
+            'level' => env('LOG_LEVEL', 'info'),
+            'days' => env('LOG_DAILY_DAYS', 30), // Keep 30 days of logs
             'replace_placeholders' => true,
+            'processors' => [PsrLogMessageProcessor::class, UidProcessor::class],
         ],
 
+        // ──────────────────────────────────────────────────────────────────
+        // 🔐 SECURITY LOGS (Audit trail, logins, payments, admin actions)
+        // ──────────────────────────────────────────────────────────────────
+        'security' => [
+            'driver' => 'daily',
+            'path' => storage_path('logs/security.log'),
+            'level' => env('LOG_SECURITY_LEVEL', 'info'),
+            'days' => env('LOG_SECURITY_DAYS', 90), // Keep 90 days for compliance
+            'replace_placeholders' => true,
+            'processors' => [
+                PsrLogMessageProcessor::class,
+                UidProcessor::class,
+                // Add custom processor for sensitive data masking if needed
+            ],
+            // Optional: Add JSON formatter for easier parsing by log aggregators
+            // 'formatter' => \Monolog\Formatter\JsonFormatter::class,
+        ],
+
+        // ──────────────────────────────────────────────────────────────────
+        // 💰 PAYMENT LOGS (M-Pesa transactions, reconciliation)
+        // ──────────────────────────────────────────────────────────────────
+        'payment' => [
+            'driver' => 'daily',
+            'path' => storage_path('logs/payment.log'),
+            'level' => env('LOG_PAYMENT_LEVEL', 'info'),
+            'days' => env('LOG_PAYMENT_DAYS', 365), // Keep 1 year for financial audit
+            'replace_placeholders' => true,
+            'processors' => [PsrLogMessageProcessor::class, UidProcessor::class],
+        ],
+
+        // ──────────────────────────────────────────────────────────────────
+        // 📡 MIKROTIK LOGS (Router API calls, session management)
+        // ──────────────────────────────────────────────────────────────────
+        'mikrotik' => [
+            'driver' => 'daily',
+            'path' => storage_path('logs/mikrotik.log'),
+            'level' => env('LOG_MIKROTIK_LEVEL', 'warning'), // Only log warnings+ in prod
+            'days' => env('LOG_MIKROTIK_DAYS', 14),
+            'replace_placeholders' => true,
+            'processors' => [PsrLogMessageProcessor::class, UidProcessor::class],
+        ],
+
+        // ──────────────────────────────────────────────────────────────────
+        // 🚨 ERROR LOGS (Only errors and above, separate file)
+        // ──────────────────────────────────────────────────────────────────
+        'error' => [
+            'driver' => 'daily',
+            'path' => storage_path('logs/error.log'),
+            'level' => 'error',
+            'days' => 90,
+            'replace_placeholders' => true,
+            'processors' => [PsrLogMessageProcessor::class, UidProcessor::class],
+        ],
+
+        // ──────────────────────────────────────────────────────────────────
+        // 📧 NOTIFICATION LOGS (SMS, email delivery)
+        // ──────────────────────────────────────────────────────────────────
+        'notification' => [
+            'driver' => 'daily',
+            'path' => storage_path('logs/notification.log'),
+            'level' => env('LOG_NOTIFICATION_LEVEL', 'info'),
+            'days' => 30,
+            'replace_placeholders' => true,
+            'processors' => [PsrLogMessageProcessor::class],
+        ],
+
+        // ──────────────────────────────────────────────────────────────────
+        // EXTERNAL SERVICES (Slack, Papertrail, etc.)
+        // ──────────────────────────────────────────────────────────────────
         'slack' => [
             'driver' => 'slack',
             'url' => env('LOG_SLACK_WEBHOOK_URL'),
-            'username' => env('LOG_SLACK_USERNAME', env('APP_NAME', 'Laravel')),
-            'emoji' => env('LOG_SLACK_EMOJI', ':boom:'),
-            'level' => env('LOG_LEVEL', 'critical'),
+            'username' => env('LOG_SLACK_USERNAME', 'CloudBridge Alerts'),
+            'emoji' => env('LOG_SLACK_EMOJI', ':warning:'),
+            'level' => env('LOG_SLACK_LEVEL', 'critical'), // Only critical alerts to Slack
             'replace_placeholders' => true,
         ],
 
@@ -98,10 +177,10 @@ return [
             'driver' => 'monolog',
             'level' => env('LOG_LEVEL', 'debug'),
             'handler' => StreamHandler::class,
+            'formatter' => env('LOG_STDERR_FORMATTER'),
             'handler_with' => [
                 'stream' => 'php://stderr',
             ],
-            'formatter' => env('LOG_STDERR_FORMATTER'),
             'processors' => [PsrLogMessageProcessor::class],
         ],
 
@@ -125,6 +204,7 @@ return [
 
         'emergency' => [
             'path' => storage_path('logs/laravel.log'),
+            'level' => 'emergency',
         ],
 
     ],

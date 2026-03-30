@@ -54,13 +54,13 @@ Route::prefix('portal')->name('portal.')->group(function () {
 });
 
 // ----------------------------------------------------------------------------
-// M-Pesa Webhook (Public - Called by Safaricom)
+// Legacy M-Pesa Webhook (Public - kept for older callback URLs / local testing)
 // ----------------------------------------------------------------------------
 Route::post('/api/mpesa/callback', function (Request $request) {
     // Mock webhook handler - implement real logic later
     \Log::info('M-Pesa Callback Received', $request->all());
     return response()->json(['ResultCode' => 0, 'ResultDesc' => 'Accepted']);
-})->name('api.mpesa.callback');
+})->name('api.mpesa.callback.legacy');
 
 // ============================================================================
 // ADMIN ROUTES (Protected)
