@@ -90,7 +90,9 @@ jobs:
           port: 22
           key: ${{ secrets.DO_SSH_PRIVATE_KEY }}
           source: "release.tar.gz"
-          target: "/tmp"
+          target: "/tmp/deploy"
+          rm: true
+          overwrite: true
 
       - name: Deploy on server (atomic release)
         uses: appleboy/ssh-action@v1.0.3
@@ -106,7 +108,7 @@ jobs:
             SHARED=$APP_ROOT/shared
             RELEASE=$RELEASES/${{ github.run_number }}-${{ github.sha }}
             CURRENT=$APP_ROOT/current
-            ARCHIVE=/tmp/release.tar.gz
+            ARCHIVE=/tmp/deploy/release.tar.gz
 
             echo "Starting CloudBridge deployment..."
             echo "Release: $RELEASE"
