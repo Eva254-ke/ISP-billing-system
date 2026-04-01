@@ -56,7 +56,7 @@ jobs:
       - name: Create release archive
         run: |
           set -eo pipefail
-          tar --warning=no-file-changed -czf release.tar.gz \
+          tar --warning=no-file-changed --ignore-failed-read --delay-directory-restore -czf release.tar.gz \
             --exclude='.git' \
             --exclude='node_modules' \
             --exclude='.github' \
