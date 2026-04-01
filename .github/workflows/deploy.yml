@@ -144,8 +144,6 @@ jobs:
 
             composer install --no-dev --optimize-autoloader --quiet
 
-            php artisan migrate --force --quiet
-
             php artisan optimize:clear
             php artisan config:cache
             php artisan route:cache
