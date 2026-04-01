@@ -90,7 +90,7 @@ jobs:
           port: 22
           key: ${{ secrets.DO_SSH_PRIVATE_KEY }}
           source: "release.tar.gz"
-          target: "/tmp/release.tar.gz"
+          target: "/tmp"
 
       - name: Deploy on server (atomic release)
         uses: appleboy/ssh-action@v1.0.3
@@ -106,6 +106,7 @@ jobs:
             SHARED=$APP_ROOT/shared
             RELEASE=$RELEASES/${{ github.run_number }}-${{ github.sha }}
             CURRENT=$APP_ROOT/current
+            ARCHIVE=/tmp/release.tar.gz
 
             echo "Starting CloudBridge deployment..."
             echo "Release: $RELEASE"
@@ -113,7 +114,11 @@ jobs:
             mkdir -p "$RELEASES" "$SHARED/storage/app" "$SHARED/storage/framework" "$SHARED/storage/logs" "$SHARED/bootstrap/cache"
 
             mkdir -p "$RELEASE"
-            tar -xzf /tmp/release.tar.gz -C "$RELEASE"
+            if [ ! -f "$ARCHIVE" ]; then
+              echo "Archive not found at $ARCHIVE" >&2
+              exit 1
+            fi
+            tar -xzf "$ARCHIVE" -C "$RELEASE"
 
             rm -rf "$RELEASE/storage"
             ln -sfn "$SHARED/storage" "$RELEASE/storage"
@@ -147,6 +152,6 @@ jobs:
             cd "$RELEASES"
             ls -dt */ 2>/dev/null | tail -n +6 | xargs rm -rf 2>/dev/null || true
 
-            rm -f /tmp/release.tar.gz
+            rm -f "$ARCHIVE"
 
             echo "Deployment successful."
