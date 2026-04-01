@@ -113,7 +113,15 @@ jobs:
             echo "Starting CloudBridge deployment..."
             echo "Release: $RELEASE"
 
-            mkdir -p "$RELEASES" "$SHARED/storage/app" "$SHARED/storage/framework" "$SHARED/storage/logs" "$SHARED/bootstrap/cache"
+            mkdir -p \
+              "$RELEASES" \
+              "$SHARED/storage/app" \
+              "$SHARED/storage/framework" \
+              "$SHARED/storage/framework/views" \
+              "$SHARED/storage/framework/sessions" \
+              "$SHARED/storage/framework/cache" \
+              "$SHARED/storage/logs" \
+              "$SHARED/bootstrap/cache"
 
             mkdir -p "$RELEASE"
             if [ ! -f "$ARCHIVE" ]; then
