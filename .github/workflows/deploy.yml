@@ -152,7 +152,9 @@ jobs:
             php artisan view:cache
             php artisan event:cache
 
-            chown -R www-www-data storage bootstrap/cache
+            if id -u www-data >/dev/null 2>&1; then
+              chown -R www-data:www-data storage bootstrap/cache
+            fi
             chmod -R 775 storage bootstrap/cache
 
             ln -sfn "$RELEASE" "$CURRENT"
