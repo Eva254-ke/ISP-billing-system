@@ -4,6 +4,7 @@ import './bootstrap';
 import jQuery from 'jquery';
 window.$ = window.jQuery = jQuery;
 
+import 'popper.js';
 import * as bootstrap from 'bootstrap';
 window.bootstrap = bootstrap;
 
@@ -16,7 +17,7 @@ window.ApexCharts = ApexCharts;
 import Swal from 'sweetalert2';
 window.Swal = Swal;
 
-import 'datatables.net-bs5';
+import 'datatables.net-bs4';
 import 'flatpickr';
 import '@fortawesome/fontawesome-free/js/all';
 

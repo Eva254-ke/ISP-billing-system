@@ -5,7 +5,7 @@
 @import 'flatpickr/dist/flatpickr.css';
 
 /* DataTables */
-@import 'datatables.net-bs5/css/dataTables.bootstrap5.css';
+@import 'datatables.net-bs4/css/dataTables.bootstrap4.css';
 
 /* Custom Styles */
 @import './admin-custom.css';
