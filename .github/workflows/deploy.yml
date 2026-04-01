@@ -1,0 +1,164 @@
+name:  Deploy to DigitalOcean
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📦 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🐘 Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: mbstring, intl, pdo_mysql, bcmath, xml, curl, zip
+          coverage: none
+
+      - name: 📜 Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 💾 Cache composer
+        uses: actions/cache@v4
+        with:
+          path: vendor
+          key: composer-${{ hashFiles('**/composer.lock') }}
+          restore-keys: composer-
+
+      - name: 💾 Cache npm
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: npm-
+
+      - name: 📦 Install PHP deps (prod)
+        run: composer install --no-dev --prefer-dist --no-interaction --optimize-autoloader
+
+      - name: 📦 Install JS deps + build
+        run: |
+          npm ci
+          npm run build
+
+      - name: 📦 Create release archive
+        run: |
+          tar -czf release.tar.gz \
+            --exclude='.git' \
+            --exclude='node_modules' \
+            --exclude='.github' \
+            --exclude='storage' \
+            --exclude='.env' \
+            .
+
+      - name: 📤 Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release
+          path: release.tar.gz
+          retention-days: 5
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: 📥 Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: release
+          path: .
+
+      - name: 📋 Copy to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.DO_HOST }}
+          username: root
+          port: 22
+          key: ${{ secrets.DO_SSH_PRIVATE_KEY }}
+          source: "release.tar.gz"
+          target: "/tmp/release.tar.gz"
+
+      - name:  Deploy on server (atomic release)
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DO_HOST }}
+          username: root
+          port: 22
+          key: ${{ secrets.DO_SSH_PRIVATE_KEY }}
+          script: |
+            set -e
+            APP_ROOT=/var/www/cloudbridge
+            RELEASES=$APP_ROOT/releases
+            SHARED=$APP_ROOT/shared
+            RELEASE=$RELEASES/${{ github.run_number }}-${{ github.sha }}
+            CURRENT=$APP_ROOT/current
+
+            echo "🔐 Starting CloudBridge deployment..."
+            echo "📁 Release: $RELEASE"
+
+            # Create directory structure
+            mkdir -p "$RELEASES" "$SHARED/storage/app" "$SHARED/storage/framework" "$SHARED/storage/logs" "$SHARED/bootstrap/cache"
+
+            # Create release directory
+            mkdir -p "$RELEASE"
+            tar -xzf /tmp/release.tar.gz -C "$RELEASE"
+
+            # Symlink shared storage (preserve uploads)
+            rm -rf "$RELEASE/storage"
+            ln -sfn "$SHARED/storage" "$RELEASE/storage"
+
+            # Symlink shared bootstrap cache
+            rm -rf "$RELEASE/bootstrap/cache"
+            ln -sfn "$SHARED/bootstrap/cache" "$RELEASE/bootstrap/cache"
+
+            # Copy .env from current release (preserve environment config)
+            if [ -f "$CURRENT/.env" ]; then
+                cp "$CURRENT/.env" "$RELEASE/.env"
+            fi
+
+            # Move to release directory
+            cd "$RELEASE"
+
+            # Install dependencies (in case composer.lock changed)
+            composer install --no-dev --optimize-autoloader --quiet
+
+            # Run migrations
+            php artisan migrate --force --quiet
+
+            # Clear and rebuild caches
+            php artisan optimize:clear
+            php artisan config:cache
+            php artisan route:cache
+            php artisan view:cache
+            php artisan event:cache
+
+            # Fix permissions
+            chown -R www-www-data storage bootstrap/cache
+            chmod -R 775 storage bootstrap/cache
+
+            # Update current symlink (atomic switch)
+            ln -sfn "$RELEASE" "$CURRENT"
+
+            # Restart PHP-FPM
+            systemctl reload php8.4-fpm
+
+            # Cleanup old releases (keep last 5)
+            cd "$RELEASES"
+            ls -dt */ 2>/dev/null | tail -n +6 | xargs rm -rf 2>/dev/null || true
+
+            # Remove temp release archive
+            rm -f /tmp/release.tar.gz
+
+            echo "🎉 Deployment successful!"
+            echo "✅ Released to: $RELEASE"
+            echo "✅ Current symlink: $CURRENT"
