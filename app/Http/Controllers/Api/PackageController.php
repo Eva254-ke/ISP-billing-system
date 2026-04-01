@@ -15,7 +15,15 @@ class PackageController extends Controller
      */
     public function index(Request $request): JsonResponse
     {
-        $tenant = $request->user()->tenant;
+        $user = $request->user();
+        if (!$user || !$user->tenant) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Authentication required',
+            ], 401);
+        }
+
+        $tenant = $user->tenant;
         
         $packages = $tenant->packages()
             ->active()
@@ -50,7 +58,15 @@ class PackageController extends Controller
      */
     public function show(Request $request, Package $package): JsonResponse
     {
-        $tenant = $request->user()->tenant;
+        $user = $request->user();
+        if (!$user || !$user->tenant) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Authentication required',
+            ], 401);
+        }
+
+        $tenant = $user->tenant;
         
         // Authorization check
         if ($package->tenant_id !== $tenant->id) {
@@ -81,7 +97,15 @@ class PackageController extends Controller
             'data_limit_mb' => 'nullable|integer|min:1',
         ]);
 
-        $tenant = $request->user()->tenant;
+        $user = $request->user();
+        if (!$user || !$user->tenant) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Authentication required',
+            ], 401);
+        }
+
+        $tenant = $user->tenant;
 
         $package = Package::create([
             'tenant_id' => $tenant->id,
@@ -120,7 +144,15 @@ class PackageController extends Controller
      */
     public function update(Request $request, Package $package): JsonResponse
     {
-        $tenant = $request->user()->tenant;
+        $user = $request->user();
+        if (!$user || !$user->tenant) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Authentication required',
+            ], 401);
+        }
+
+        $tenant = $user->tenant;
         
         // Authorization check
         if ($package->tenant_id !== $tenant->id) {
@@ -150,7 +182,7 @@ class PackageController extends Controller
 
         Log::channel('security')->info('Package updated', [
             'package_id' => $package->id,
-            'user_id' => $request->user()->id,
+            'user_id' => $user->id,
         ]);
 
         return response()->json([
@@ -165,7 +197,15 @@ class PackageController extends Controller
      */
     public function destroy(Request $request, Package $package): JsonResponse
     {
-        $tenant = $request->user()->tenant;
+        $user = $request->user();
+        if (!$user || !$user->tenant) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Authentication required',
+            ], 401);
+        }
+
+        $tenant = $user->tenant;
         
         // Authorization check
         if ($package->tenant_id !== $tenant->id) {
@@ -187,7 +227,7 @@ class PackageController extends Controller
 
         Log::channel('security')->info('Package deleted', [
             'package_id' => $package->id,
-            'user_id' => $request->user()->id,
+            'user_id' => $user->id,
         ]);
 
         return response()->json([
