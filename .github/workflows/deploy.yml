@@ -19,7 +19,7 @@ jobs:
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
-          php-version: '8.4'
+          php-version: '8.3'
           extensions: mbstring, intl, pdo_mysql, bcmath, xml, curl, zip
           coverage: none
 
@@ -41,6 +41,9 @@ jobs:
           path: ~/.npm
           key: npm-${{ hashFiles('**/package-lock.json') }}
           restore-keys: npm-
+
+      - name: Update Composer
+        run: composer self-update
 
       - name: Install PHP deps (prod)
         run: composer install --no-dev --prefer-dist --no-interaction --optimize-autoloader
