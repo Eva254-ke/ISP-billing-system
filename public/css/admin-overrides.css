@@ -57,3 +57,8 @@
         padding: 0.5rem 0.7rem;
     }
 }
+
+/* --- Sidebar icon cleanup & spacing overrides (no rebuild required) --- */
+.nav-sidebar .nav-icon { display: none !important; }
+.nav-sidebar > .nav-item > .nav-link { gap: 0.35rem; }
+.nav-treeview .nav-link { padding-left: 2.1rem !important; gap: 0.3rem; }

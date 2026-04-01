@@ -7,7 +7,7 @@
 <div class="row">
     <!-- Revenue Today -->
     <div class="col-lg-3 col-6">
-        <div class="small-box bg-primary">
+        <div class="small-box bg-primary position-relative">
             <div class="inner">
                 <h3>KES 12,500</h3>
                 <p>Revenue Today</p>
@@ -15,15 +15,16 @@
             <div class="icon">
                 <i class="fas fa-money-bill-wave"></i>
             </div>
-            <a href="{{ route('admin.payments.index') }}" class="small-box-footer">
+            <div class="small-box-footer">
                 View Details <i class="fas fa-arrow-circle-right"></i>
-            </a>
+            </div>
+            <a href="{{ route('admin.payments.index') }}" class="stretched-link" aria-label="View payment details"></a>
         </div>
     </div>
 
     <!-- Active Sessions -->
     <div class="col-lg-3 col-6">
-        <div class="small-box bg-success">
+        <div class="small-box bg-success position-relative">
             <div class="inner">
                 <h3>234</h3>
                 <p>Active Sessions</p>
@@ -31,15 +32,16 @@
             <div class="icon">
                 <i class="fas fa-wifi"></i>
             </div>
-            <a href="{{ route('admin.clients.hotspot') }}" class="small-box-footer">
+            <div class="small-box-footer">
                 View Clients <i class="fas fa-arrow-circle-right"></i>
-            </a>
+            </div>
+            <a href="{{ route('admin.clients.hotspot') }}" class="stretched-link" aria-label="View clients"></a>
         </div>
     </div>
 
     <!-- Total Packages -->
     <div class="col-lg-3 col-6">
-        <div class="small-box bg-warning">
+        <div class="small-box bg-warning position-relative">
             <div class="inner">
                 <h3>12</h3>
                 <p>Packages</p>
@@ -47,15 +49,16 @@
             <div class="icon">
                 <i class="fas fa-box"></i>
             </div>
-            <a href="{{ route('admin.packages.index') }}" class="small-box-footer">
+            <div class="small-box-footer">
                 Manage <i class="fas fa-arrow-circle-right"></i>
-            </a>
+            </div>
+            <a href="{{ route('admin.packages.index') }}" class="stretched-link" aria-label="Manage packages"></a>
         </div>
     </div>
 
     <!-- Routers Online -->
     <div class="col-lg-3 col-6">
-        <div class="small-box bg-danger">
+        <div class="small-box bg-danger position-relative">
             <div class="inner">
                 <h3>3/4</h3>
                 <p>Routers Online</p>
@@ -63,9 +66,10 @@
             <div class="icon">
                 <i class="fas fa-server"></i>
             </div>
-            <a href="{{ route('admin.routers.index') }}" class="small-box-footer">
+            <div class="small-box-footer">
                 Check Status <i class="fas fa-arrow-circle-right"></i>
-            </a>
+            </div>
+            <a href="{{ route('admin.routers.index') }}" class="stretched-link" aria-label="Check router status"></a>
         </div>
     </div>
 </div>
@@ -270,29 +274,63 @@
 
 @push('scripts')
 <script>
-    document.addEventListener('DOMContentLoaded', function () {
-        // Revenue Chart (Area)
-        const revenueData = [5000, 8000, 6000, 12000, 9000, 15000, 12500];
-        const revenueMax = Math.ceil((Math.max(...revenueData) + 1500) / 1000) * 1000;
-        var revenueOptions = {
+    document.addEventListener('DOMContentLoaded', async function () {
+        // Ensure stretched-link works even if AdminLTE overrides positions
+        document.querySelectorAll('.small-box').forEach(box => {
+            box.classList.add('position-relative');
+        });
+
+        // Utility: load ApexCharts from CDN if Vite bundle not ready
+        async function ensureApex() {
+            if (window.ApexCharts) return;
+            await new Promise((resolve, reject) => {
+                const s = document.createElement('script');
+                s.src = 'https://cdn.jsdelivr.net/npm/apexcharts';
+                s.onload = resolve;
+                s.onerror = reject;
+                document.head.appendChild(s);
+            });
+        }
+
+        // Utility: fetch JSON with graceful fallback
+        async function fetchJson(url, fallback) {
+            try {
+                const res = await fetch(url, { headers: { 'Accept': 'application/json' }});
+                if (!res.ok) throw new Error(res.statusText);
+                const data = await res.json();
+                return data;
+            } catch (e) {
+                return fallback;
+            }
+        }
+
+        // Build gentle-random series that sums to target
+        function distribute(total, days = 7) {
+            const base = Array.from({length: days}, () => Math.max(0, Math.round(total / days + (Math.random() - 0.5) * total * 0.08)));
+            const diff = total - base.reduce((a,b)=>a+b,0);
+            base[base.length-1] += diff;
+            return base.map(v => Math.max(0, v));
+        }
+
+        await ensureApex();
+
+        // -------- Revenue (Last 7 Days) --------
+        const revenueStats = await fetchJson('/admin/api/packages/stats', {
+            total: 12, active: 8, revenue_today: 12500, revenue_week: 45200
+        });
+        const revenueData = distribute(revenueStats.revenue_week ?? 0, 7);
+        const revenueMax = Math.max(2000, Math.ceil((Math.max(...revenueData) + 1500) / 1000) * 1000);
+        new ApexCharts(document.querySelector("#revenueChart"), {
             chart: {
                 type: 'area',
                 height: 350,
                 toolbar: { show: false },
                 animations: { enabled: true },
                 foreColor: '#E2E8F0',
-                dropShadow: {
-                    enabled: true,
-                    top: 6,
-                    left: 0,
-                    blur: 12,
-                    opacity: 0.15
-                }
+                dropShadow: { enabled: true, top: 6, left: 0, blur: 12, opacity: 0.15 }
             },
-            series: [{
-                name: 'Revenue (KES)',
-                data: revenueData
-            }],
+            noData: { text: 'No revenue yet', style: { color: '#E2E8F0' } },
+            series: [{ name: 'Revenue (KES)', data: revenueData }],
             colors: ['#7DD3FC'],
             dataLabels: { enabled: false },
             stroke: { curve: 'smooth', width: 3 },
@@ -300,58 +338,33 @@
             xaxis: {
                 categories: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
                 labels: { style: { colors: '#E2E8F0', fontSize: '12px' } },
-                axisBorder: { show: false },
-                axisTicks: { show: false },
-                tooltip: { enabled: false }
+                axisBorder: { show: false }, axisTicks: { show: false }
             },
             yaxis: {
-                min: 0,
-                max: revenueMax,
-                tickAmount: 5,
-                forceNiceScale: true,
-                labels: {
-                    formatter: function(val) { return 'KES ' + val.toLocaleString(); },
-                    style: { colors: '#E2E8F0', fontSize: '12px' }
-                }
+                min: 0, max: revenueMax, tickAmount: 5, forceNiceScale: true,
+                labels: { formatter: val => 'KES ' + val.toLocaleString(), style: { colors: '#E2E8F0', fontSize: '12px' } }
             },
             fill: {
                 type: 'gradient',
-                gradient: {
-                    shadeIntensity: 0.6,
-                    opacityFrom: 0.55,
-                    opacityTo: 0.08,
-                    stops: [0, 90, 100]
-                }
+                gradient: { shadeIntensity: 0.6, opacityFrom: 0.55, opacityTo: 0.08, stops: [0, 90, 100] }
             },
-            grid: {
-                borderColor: 'rgba(226, 232, 240, 0.2)',
-                strokeDashArray: 4,
-                padding: { left: 8, right: 8 }
-            },
-            tooltip: {
-                theme: 'dark',
-                y: { formatter: val => 'KES ' + val.toLocaleString() }
-            }
-        };
-        new ApexCharts(document.querySelector("#revenueChart"), revenueOptions).render();
+            grid: { borderColor: 'rgba(226, 232, 240, 0.2)', strokeDashArray: 4, padding: { left: 8, right: 8 } },
+            tooltip: { theme: 'dark', y: { formatter: val => 'KES ' + val.toLocaleString() } }
+        }).render();
 
-        // Package Distribution Chart (Donut)
-        var packageOptions = {
-            chart: {
-                type: 'donut',
-                height: 300,
-                toolbar: { show: false },
-                foreColor: '#E2E8F0'
-            },
-            series: [45, 25, 15, 10, 5],
-            labels: ['1 Hour', '3 Hours', '24 Hours', 'Weekly', 'Monthly'],
+        // -------- Package Sales Donut --------
+        const packageLabels = ['1 Hour', '3 Hours', '24 Hours', 'Weekly', 'Monthly'];
+        const packageData = distribute(Math.max(revenueStats.total ?? 12, 12), packageLabels.length)
+            .map(v => Math.max(1, v)); // ensure non-zero to avoid empty donut
+
+        new ApexCharts(document.querySelector("#packageChart"), {
+            chart: { type: 'donut', height: 300, toolbar: { show: false }, foreColor: '#E2E8F0' },
+            noData: { text: 'No package sales yet', style: { color: '#E2E8F0' } },
+            series: packageData,
+            labels: packageLabels,
             colors: ['#38BDF8', '#22D3EE', '#34D399', '#FBBF24', '#F87171'],
             dataLabels: { enabled: false },
-            legend: {
-                position: 'bottom',
-                labels: { colors: '#E2E8F0' },
-                markers: { width: 10, height: 10, radius: 12 }
-            },
+            legend: { position: 'bottom', labels: { colors: '#E2E8F0' }, markers: { width: 10, height: 10, radius: 12 } },
             plotOptions: {
                 pie: {
                     donut: {
@@ -359,25 +372,19 @@
                         labels: {
                             show: true,
                             name: { color: '#E2E8F0' },
-                            value: {
-                                color: '#F8FAFC',
-                                fontSize: '22px',
-                                fontWeight: 700,
-                                formatter: val => `${val}%`
-                            },
+                            value: { color: '#F8FAFC', fontSize: '22px', fontWeight: 700, formatter: val => `${val}%` },
                             total: {
                                 show: true,
                                 label: 'Total Sales',
                                 color: '#CBD5E1',
-                                formatter: function() { return '412'; }
+                                formatter: function() { return packageData.reduce((a,b)=>a+b,0); }
                             }
                         }
                     }
                 }
             },
             tooltip: { theme: 'dark' }
-        };
-        new ApexCharts(document.querySelector("#packageChart"), packageOptions).render();
+        }).render();
     });
 </script>
 @endpush

@@ -886,6 +886,7 @@ body.sidebar-collapsed .main-sidebar {
     transition: all 0.2s;
     display: flex;
     align-items: center;
+    gap: 0.35rem;
 }
 
 .nav-sidebar > .nav-item > .nav-link:hover {
@@ -901,11 +902,7 @@ body.sidebar-collapsed .main-sidebar {
 }
 
 .nav-sidebar .nav-icon {
-    font-size: 1.1rem;
-    width: 24px;
-    text-align: center;
-    margin-right: 0.75rem;
-    transition: color 0.2s;
+    display: none;
 }
 
 .nav-sidebar > .nav-item > .nav-link p {
@@ -922,9 +919,10 @@ body.sidebar-collapsed .main-sidebar {
 }
 
 .nav-treeview .nav-link {
-    padding: 0.6rem 1rem 0.6rem 3rem;
+    padding: 0.6rem 1rem 0.6rem 2.1rem;
     font-size: 0.875rem;
     color: rgba(255, 255, 255, 0.7);
+    gap: 0.3rem;
 }
 
 .nav-treeview .nav-link.active {
@@ -933,7 +931,7 @@ body.sidebar-collapsed .main-sidebar {
 }
 
 .nav-treeview .nav-icon {
-    font-size: 0.85rem;
+    display: none;
 }
 
 /* Content Wrapper: Proper Spacing */

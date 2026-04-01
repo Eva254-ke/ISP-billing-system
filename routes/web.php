@@ -66,14 +66,6 @@ Route::post('/api/mpesa/callback', function (Request $request) {
 // ADMIN ROUTES (Protected)
 // ============================================================================
 
-// Register mock auth middleware alias (Laravel 11+)
-Route::aliasMiddleware('admin.auth', function ($request, $next) {
-    if (!session('admin_logged_in')) {
-        return redirect()->route('login')->with('error', 'Please login first');
-    }
-    return $next($request);
-});
-
 // Protected admin routes group
 Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function () {
     

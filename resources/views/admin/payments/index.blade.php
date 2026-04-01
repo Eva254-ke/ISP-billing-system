@@ -684,7 +684,7 @@ document.addEventListener('DOMContentLoaded', function() {
         },
         series: [{
             name: 'Revenue (KES)',
-             [2500, 4200, 3100, 5800, 4500, 6200, 12500]
+            data: [2500, 4200, 3100, 5800, 4500, 6200, 12500]
         }],
         colors: ['#2563EB'],
         xaxis: {

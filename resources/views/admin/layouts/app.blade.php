@@ -14,6 +14,8 @@
     <!-- Vite Assets -->
     @vite(['resources/css/app.css', 'resources/js/app.js'])
     <link rel="stylesheet" href="{{ asset('css/admin-overrides.css') }}?v=20260319-2">
+    <!-- Font Awesome CDN fallback (prevents missing icons showing as squares if local build assets fail) -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" integrity="sha512-+4z5X5NQx1mENxvupwJzU3N4v2d8OmiW9zZVcGiGJkV8OjFg2p/X6s6lpxWQYa2Zs8r7K1QUqYEFIF2xqg8RFw==" crossorigin="anonymous" referrerpolicy="no-referrer">
 </head>
 <body class="hold-transition sidebar-mini layout-fixed layout-navbar-fixed">
     <div class="wrapper">
@@ -76,8 +78,7 @@
                         <li class="nav-item">
                             <a href="{{ route('admin.dashboard') }}" 
                                class="nav-link {{ request()->routeIs('admin.dashboard') ? 'active' : '' }}">
-                                <i class="nav-icon fas fa-tachometer-alt"></i>
-                                <p>Dashboard</p>
+                                <p class="mb-0">Dashboard</p>
                             </a>
                         </li>
 
@@ -85,8 +86,7 @@
                         <li class="nav-item">
                             <a href="{{ route('admin.routers.index') }}" 
                                class="nav-link {{ request()->routeIs('admin.routers.*') ? 'active' : '' }}">
-                                <i class="nav-icon fas fa-server"></i>
-                                <p>Routers</p>
+                                <p class="mb-0">Routers</p>
                             </a>
                         </li>
 
@@ -94,8 +94,7 @@
                         <li class="nav-item">
                             <a href="{{ route('admin.packages.index') }}" 
                                class="nav-link {{ request()->routeIs('admin.packages.*') ? 'active' : '' }}">
-                                <i class="nav-icon fas fa-box"></i>
-                                <p>Packages</p>
+                                <p class="mb-0">Packages</p>
                             </a>
                         </li>
 
@@ -103,8 +102,7 @@
                         <li class="nav-item">
                             <a href="{{ route('admin.vouchers.index') }}" 
                                class="nav-link {{ request()->routeIs('admin.vouchers.*') ? 'active' : '' }}">
-                                <i class="nav-icon fas fa-ticket-alt"></i>
-                                <p>Vouchers</p>
+                                <p class="mb-0">Vouchers</p>
                             </a>
                         </li>
 
@@ -112,15 +110,13 @@
                         <li class="nav-item">
                             <a href="{{ route('admin.payments.index') }}" 
                                class="nav-link {{ request()->routeIs('admin.payments.*') ? 'active' : '' }}">
-                                <i class="nav-icon fas fa-money-bill-wave"></i>
-                                <p>Payments</p>
+                                <p class="mb-0">Payments</p>
                             </a>
                         </li>
 
                         <!-- Clients Dropdown -->
                         <li class="nav-item has-treeview {{ request()->is('admin/clients*') ? 'menu-open' : '' }}">
-                            <a href="#" class="nav-link {{ request()->is('admin/clients*') ? 'active' : '' }}">
-                                <i class="nav-icon fas fa-users"></i>
+                            <a href="{{ route('admin.clients.hotspot') }}" class="nav-link {{ request()->is('admin/clients*') ? 'active' : '' }}">
                                 <p>
                                     Clients
                                     <i class="right fas fa-angle-left"></i>
@@ -130,22 +126,19 @@
                                 <li class="nav-item">
                                     <a href="{{ route('admin.clients.hotspot') }}" 
                                        class="nav-link {{ request()->routeIs('admin.clients.hotspot') ? 'active' : '' }}">
-                                        <i class="far fa-circle nav-icon"></i>
-                                        <p>Hotspot Clients</p>
+                                        <p class="mb-0">Hotspot Clients</p>
                                     </a>
                                 </li>
                                 <li class="nav-item">
                                     <a href="{{ route('admin.clients.pppoe') }}" 
                                        class="nav-link {{ request()->routeIs('admin.clients.pppoe') ? 'active' : '' }}">
-                                        <i class="far fa-circle nav-icon"></i>
-                                        <p>PPPoE Clients</p>
+                                        <p class="mb-0">PPPoE Clients</p>
                                     </a>
                                 </li>
                                 <li class="nav-item">
                                     <a href="{{ route('admin.clients.customers') }}" 
                                        class="nav-link {{ request()->routeIs('admin.clients.customers') ? 'active' : '' }}">
-                                        <i class="far fa-circle nav-icon"></i>
-                                        <p>All Customers</p>
+                                        <p class="mb-0">All Customers</p>
                                     </a>
                                 </li>
                             </ul>
@@ -155,8 +148,7 @@
                         <li class="nav-item">
                             <a href="{{ route('admin.settings') }}" 
                                class="nav-link {{ request()->routeIs('admin.settings') ? 'active' : '' }}">
-                                <i class="nav-icon fas fa-cogs"></i>
-                                <p>Settings</p>
+                                <p class="mb-0">Settings</p>
                             </a>
                         </li>
 
