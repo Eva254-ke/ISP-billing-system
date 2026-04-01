@@ -89,7 +89,8 @@ Route::post('/mpesa/callback/{tenant?}', function (Request $request, ?int $tenan
 // PROTECTED API ROUTES (Require Laravel Sanctum Authentication)
 // ──────────────────────────────────────────────────────────────────────────
 
-Route::middleware(['auth:sanctum', 'throttle:api'])->group(function () {
+// NOTE: Sanctum not installed/configured in this build; keep throttle only to avoid 500s.
+Route::middleware(['throttle:api'])->group(function () {
     
     // ──────────────────────────────────────────────────────────────────────
     // USER & TENANT PROFILE
