@@ -21,7 +21,7 @@
     <div class="col-md-3">
         <div class="small-box bg-primary">
             <div class="inner">
-                <h3>KES 45,200</h3>
+                <h3>KES {{ number_format((float) ($stats['revenue_total'] ?? 0), 0) }}</h3>
                 <p>Total Revenue</p>
             </div>
             <div class="icon"><i class="fas fa-money-bill-wave"></i></div>
@@ -31,7 +31,7 @@
     <div class="col-md-3">
         <div class="small-box bg-success">
             <div class="inner">
-                <h3>KES 12,500</h3>
+                <h3>KES {{ number_format((float) ($stats['revenue_today'] ?? 0), 0) }}</h3>
                 <p>Today</p>
             </div>
             <div class="icon"><i class="fas fa-chart-line"></i></div>
@@ -41,7 +41,7 @@
     <div class="col-md-3">
         <div class="small-box bg-warning">
             <div class="inner">
-                <h3>23</h3>
+                <h3>{{ number_format((int) ($stats['pending'] ?? 0)) }}</h3>
                 <p>Pending</p>
             </div>
             <div class="icon"><i class="fas fa-clock"></i></div>
@@ -51,7 +51,7 @@
     <div class="col-md-3">
         <div class="small-box bg-danger">
             <div class="inner">
-                <h3>8</h3>
+                <h3>{{ number_format((int) ($stats['failed'] ?? 0)) }}</h3>
                 <p>Failed</p>
             </div>
             <div class="icon"><i class="fas fa-times-circle"></i></div>
@@ -146,155 +146,45 @@
                 </tr>
             </thead>
             <tbody>
-                <!-- Payment 1: Success -->
-                <tr>
-                    <td><input type="checkbox" class="payment-checkbox" value="1"></td>
-                    <td>
-                        <div><strong>2026-03-19</strong></div>
-                        <small class="text-muted">10:45:23</small>
-                    </td>
-                    <td><code>0712***678</code></td>
-                    <td>John M.</td>
-                    <td><span class="badge bg-secondary">1 Hour Pass</span></td>
-                    <td><strong>KES 50</strong></td>
-                    <td><code class="text-primary">QKH123ABC</code></td>
-                    <td><span class="badge bg-success">Success</span></td>
-                    <td>
-                        <div class="btn-group">
-                            <button class="btn btn-sm btn-outline-primary" title="View Details" onclick="viewPaymentDetails('QKH123ABC')">
-                                <i class="fas fa-eye"></i>
-                            </button>
-                            <button class="btn btn-sm btn-outline-secondary" title="Resend SMS" onclick="resendReceipt('0712345678', 'QKH123ABC')">
-                                <i class="fas fa-sms"></i>
-                            </button>
-                        </div>
-                    </td>
-                </tr>
-
-                <!-- Payment 2: Success -->
-                <tr>
-                    <td><input type="checkbox" class="payment-checkbox" value="2"></td>
-                    <td>
-                        <div><strong>2026-03-19</strong></div>
-                        <small class="text-muted">10:32:15</small>
-                    </td>
-                    <td><code>0723***789</code></td>
-                    <td>Jane K.</td>
-                    <td><span class="badge bg-primary">24 Hours Pass</span></td>
-                    <td><strong>KES 400</strong></td>
-                    <td><code class="text-primary">QKH456DEF</code></td>
-                    <td><span class="badge bg-success">Success</span></td>
-                    <td>
-                        <div class="btn-group">
-                            <button class="btn btn-sm btn-outline-primary" title="View Details" onclick="viewPaymentDetails('QKH456DEF')">
-                                <i class="fas fa-eye"></i>
-                            </button>
-                            <button class="btn btn-sm btn-outline-secondary" title="Resend SMS" onclick="resendReceipt('0723456789', 'QKH456DEF')">
-                                <i class="fas fa-sms"></i>
-                            </button>
-                        </div>
-                    </td>
-                </tr>
-
-                <!-- Payment 3: Pending -->
-                <tr class="table-warning">
-                    <td><input type="checkbox" class="payment-checkbox" value="3"></td>
-                    <td>
-                        <div><strong>2026-03-19</strong></div>
-                        <small class="text-muted">10:15:42</small>
-                    </td>
-                    <td><code>0734***890</code></td>
-                    <td>Peter O.</td>
-                    <td><span class="badge bg-secondary">3 Hours Pass</span></td>
-                    <td><strong>KES 100</strong></td>
-                    <td><code class="text-warning">PENDING</code></td>
-                    <td><span class="badge bg-warning text-dark">Pending</span></td>
-                    <td>
-                        <div class="btn-group">
-                            <button class="btn btn-sm btn-outline-primary" title="View Details" onclick="viewPaymentDetails('PENDING-789')">
-                                <i class="fas fa-eye"></i>
-                            </button>
-                            <button class="btn btn-sm btn-outline-info" title="Check Status" onclick="checkPaymentStatus('PENDING-789')">
-                                <i class="fas fa-sync-alt"></i>
-                            </button>
-                        </div>
-                    </td>
-                </tr>
-
-                <!-- Payment 4: Failed -->
-                <tr class="table-danger">
-                    <td><input type="checkbox" class="payment-checkbox" value="4"></td>
-                    <td>
-                        <div><strong>2026-03-19</strong></div>
-                        <small class="text-muted">09:58:11</small>
-                    </td>
-                    <td><code>0745***901</code></td>
-                    <td>Mary W.</td>
-                    <td><span class="badge bg-secondary">1 Hour Pass</span></td>
-                    <td><strong>KES 50</strong></td>
-                    <td><code class="text-danger">FAILED</code></td>
-                    <td><span class="badge bg-danger">Failed</span></td>
-                    <td>
-                        <div class="btn-group">
-                            <button class="btn btn-sm btn-outline-primary" title="View Details" onclick="viewPaymentDetails('FAILED-901')">
-                                <i class="fas fa-eye"></i>
-                            </button>
-                            <button class="btn btn-sm btn-outline-danger" title="Retry Payment" onclick="retryPayment('0745901234', 'FAILED-901')">
-                                <i class="fas fa-redo"></i>
-                            </button>
-                        </div>
-                    </td>
-                </tr>
-
-                <!-- Payment 5: Success -->
-                <tr>
-                    <td><input type="checkbox" class="payment-checkbox" value="5"></td>
-                    <td>
-                        <div><strong>2026-03-19</strong></div>
-                        <small class="text-muted">09:45:33</small>
-                    </td>
-                    <td><code>0756***012</code></td>
-                    <td>David L.</td>
-                    <td><span class="badge bg-success">Weekly Pass</span></td>
-                    <td><strong>KES 2,000</strong></td>
-                    <td><code class="text-primary">QKH789GHI</code></td>
-                    <td><span class="badge bg-success">Success</span></td>
-                    <td>
-                        <div class="btn-group">
-                            <button class="btn btn-sm btn-outline-primary" title="View Details" onclick="viewPaymentDetails('QKH789GHI')">
-                                <i class="fas fa-eye"></i>
-                            </button>
-                            <button class="btn btn-sm btn-outline-secondary" title="Resend SMS" onclick="resendReceipt('0756012345', 'QKH789GHI')">
-                                <i class="fas fa-sms"></i>
-                            </button>
-                        </div>
-                    </td>
-                </tr>
-
-                <!-- Payment 6: Success -->
-                <tr>
-                    <td><input type="checkbox" class="payment-checkbox" value="6"></td>
-                    <td>
-                        <div><strong>2026-03-18</strong></div>
-                        <small class="text-muted">18:22:45</small>
-                    </td>
-                    <td><code>0767***123</code></td>
-                    <td>Sarah N.</td>
-                    <td><span class="badge bg-info">Monthly Pass</span></td>
-                    <td><strong>KES 5,000</strong></td>
-                    <td><code class="text-primary">QKH012JKL</code></td>
-                    <td><span class="badge bg-success">Success</span></td>
-                    <td>
-                        <div class="btn-group">
-                            <button class="btn btn-sm btn-outline-primary" title="View Details" onclick="viewPaymentDetails('QKH012JKL')">
-                                <i class="fas fa-eye"></i>
-                            </button>
-                            <button class="btn btn-sm btn-outline-secondary" title="Resend SMS" onclick="resendReceipt('0767123456', 'QKH012JKL')">
-                                <i class="fas fa-sms"></i>
-                            </button>
-                        </div>
-                    </td>
-                </tr>
+                @forelse(($payments ?? []) as $payment)
+                    @php
+                        $status = strtolower((string) ($payment->status ?? 'unknown'));
+                        $reference = $payment->mpesa_receipt_number ?: ($payment->mpesa_checkout_request_id ?: ($payment->reference ?: 'N/A'));
+                        $statusBadge = match ($status) {
+                            'completed', 'confirmed', 'activated' => 'bg-success',
+                            'pending' => 'bg-warning text-dark',
+                            'failed' => 'bg-danger',
+                            default => 'bg-secondary',
+                        };
+                    @endphp
+                    <tr>
+                        <td><input type="checkbox" class="payment-checkbox" value="{{ $payment->id }}"></td>
+                        <td>
+                            <div><strong>{{ optional($payment->created_at)->format('Y-m-d') }}</strong></div>
+                            <small class="text-muted">{{ optional($payment->created_at)->format('H:i:s') }}</small>
+                        </td>
+                        <td><code>{{ $payment->phone ?? '-' }}</code></td>
+                        <td>{{ $payment->customer_name ?? '-' }}</td>
+                        <td><span class="badge bg-secondary">{{ $payment->package_name ?? optional($payment->package)->name ?? '-' }}</span></td>
+                        <td><strong>KES {{ number_format((float) ($payment->amount ?? 0), 0) }}</strong></td>
+                        <td><code class="text-primary">{{ $reference }}</code></td>
+                        <td><span class="badge {{ $statusBadge }}">{{ ucfirst($status) }}</span></td>
+                        <td>
+                            <div class="btn-group">
+                                <button class="btn btn-sm btn-outline-primary" title="View Details" onclick="viewPaymentDetails('{{ $reference }}')">
+                                    <i class="fas fa-eye"></i>
+                                </button>
+                                <button class="btn btn-sm btn-outline-secondary" title="Resend SMS" onclick="resendReceipt('{{ $payment->phone ?? '' }}', '{{ $reference }}')">
+                                    <i class="fas fa-sms"></i>
+                                </button>
+                            </div>
+                        </td>
+                    </tr>
+                @empty
+                    <tr>
+                        <td colspan="9" class="text-center text-muted py-4">No payments available.</td>
+                    </tr>
+                @endforelse
             </tbody>
         </table>
     </div>
@@ -308,7 +198,7 @@
             </button>
         </div>
         <div class="float-end">
-            Showing 1-6 of 412 payments
+            Showing {{ number_format((int) (($payments ?? collect())->count())) }} payments
         </div>
     </div>
 </div>
@@ -721,6 +611,159 @@ $(document).ready(function() {
         searching: true,
         order: [[0, 'desc']]
     });
+});
+</script>
+@endpush
+
+@push('scripts')
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const tableEl = $('.data-table');
+    const tbody = document.querySelector('.data-table tbody');
+    const statsBoxes = document.querySelectorAll('.row.mb-4 .small-box .inner h3');
+
+    function money(value) {
+        return `KES ${Number(value || 0).toLocaleString()}`;
+    }
+
+    async function getJson(url) {
+        const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
+        if (!res.ok) {
+            throw new Error(`Request failed: ${res.status}`);
+        }
+        return res.json();
+    }
+
+    function mapStatus(raw) {
+        const normalized = String(raw || '').toLowerCase();
+        if (normalized === 'success') return 'completed';
+        if (normalized === 'all') return '';
+        return normalized;
+    }
+
+    function statusBadge(status) {
+        const normalized = String(status || '').toLowerCase();
+        if (normalized === 'completed' || normalized === 'confirmed') {
+            return '<span class="badge bg-success">Success</span>';
+        }
+        if (normalized === 'pending') {
+            return '<span class="badge bg-warning text-dark">Pending</span>';
+        }
+        if (normalized === 'failed') {
+            return '<span class="badge bg-danger">Failed</span>';
+        }
+        return `<span class="badge bg-secondary">${normalized || 'unknown'}</span>`;
+    }
+
+    function renderRows(rows) {
+        if (!tbody) return;
+
+        if (!rows.length) {
+            tbody.innerHTML = '<tr><td colspan="9" class="text-center text-muted py-4">No payments found</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = rows.map((row, i) => {
+            const dt = row.created_at ? new Date(row.created_at) : null;
+            const date = dt ? dt.toLocaleDateString('en-CA') : '-';
+            const time = dt ? dt.toLocaleTimeString('en-GB') : '-';
+            const phone = row.phone || '-';
+            const packageName = row.package_name || 'Package';
+            const amount = Number(row.amount || 0);
+            const reference = row.reference || `PAY-${row.id}`;
+
+            return `
+                <tr>
+                    <td><input type="checkbox" class="payment-checkbox" value="${row.id || i + 1}"></td>
+                    <td><div><strong>${date}</strong></div><small class="text-muted">${time}</small></td>
+                    <td><code>${phone}</code></td>
+                    <td>-</td>
+                    <td><span class="badge bg-secondary">${packageName}</span></td>
+                    <td><strong>${money(amount)}</strong></td>
+                    <td><code class="text-primary">${reference}</code></td>
+                    <td>${statusBadge(row.status)}</td>
+                    <td>
+                        <div class="btn-group">
+                            <button class="btn btn-sm btn-outline-primary" title="View Details" onclick="viewPaymentDetails('${reference}')"><i class="fas fa-eye"></i></button>
+                            <button class="btn btn-sm btn-outline-secondary" title="Resend SMS" onclick="resendReceipt('${phone}', '${reference}')"><i class="fas fa-sms"></i></button>
+                        </div>
+                    </td>
+                </tr>
+            `;
+        }).join('');
+    }
+
+    function renderStats(stats) {
+        if (statsBoxes.length >= 4) {
+            statsBoxes[0].textContent = money(stats.revenue_total);
+            statsBoxes[1].textContent = money(stats.revenue_today);
+            statsBoxes[2].textContent = Number(stats.pending || 0).toLocaleString();
+            statsBoxes[3].textContent = Number(stats.failed || 0).toLocaleString();
+        }
+
+        if (window.ApexCharts && document.querySelector('#revenueChart')) {
+            const data = (stats.daily_revenue || []).map(d => Number(d.amount || 0));
+            const labels = (stats.daily_revenue || []).map(d => d.label || '');
+            const host = document.querySelector('#revenueChart');
+            host.innerHTML = '';
+
+            new ApexCharts(host, {
+                chart: { type: 'bar', height: 300, toolbar: { show: false } },
+                series: [{ name: 'Revenue (KES)', data: data.length ? data : [0, 0, 0, 0, 0, 0, 0] }],
+                colors: ['#2563EB'],
+                xaxis: { categories: labels.length ? labels : ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] },
+                yaxis: { labels: { formatter: val => 'KES ' + Number(val).toLocaleString() } },
+                plotOptions: { bar: { borderRadius: 4, columnWidth: '60%' } },
+                grid: { borderColor: '#e2e8f0', strokeDashArray: 3 },
+                tooltip: { theme: 'light', y: { formatter: val => 'KES ' + Number(val).toLocaleString() } }
+            }).render();
+        }
+    }
+
+    async function loadPayments() {
+        try {
+            const status = mapStatus(document.getElementById('statusFilter')?.value || '');
+            const search = document.getElementById('paymentSearch')?.value?.trim() || '';
+
+            const paymentsUrl = `/admin/api/payments?limit=200${status ? `&status=${encodeURIComponent(status)}` : ''}`;
+            const [paymentsPayload, statsPayload] = await Promise.all([
+                getJson(paymentsUrl),
+                getJson('/admin/api/payments/stats')
+            ]);
+
+            let rows = Array.isArray(paymentsPayload?.data) ? paymentsPayload.data : [];
+            if (search) {
+                const q = search.toLowerCase();
+                rows = rows.filter(row =>
+                    String(row.phone || '').toLowerCase().includes(q)
+                    || String(row.reference || '').toLowerCase().includes(q)
+                    || String(row.package_name || '').toLowerCase().includes(q)
+                );
+            }
+
+            renderRows(rows);
+            renderStats(statsPayload?.data || {});
+
+            if ($.fn.DataTable.isDataTable(tableEl)) {
+                tableEl.DataTable().destroy();
+            }
+            tableEl.DataTable({ responsive: true, autoWidth: false, paging: true, searching: false, order: [[0, 'desc']] });
+        } catch (error) {
+            console.error('Failed to load payments:', error);
+        }
+    }
+
+    window.applyFilters = loadPayments;
+    window.searchPayments = loadPayments;
+    window.exportPayments = function(format) {
+        if (format === 'csv') {
+            window.location.href = '/admin/payments/export';
+            return;
+        }
+        Swal.fire('Unavailable', 'PDF export is not configured yet. Use CSV export.', 'info');
+    };
+
+    loadPayments();
 });
 </script>
 @endpush

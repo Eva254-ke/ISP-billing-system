@@ -7,6 +7,7 @@ use App\Models\Package;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 
 class PackageController extends Controller
 {
@@ -107,7 +108,7 @@ class PackageController extends Controller
 
         $tenant = $user->tenant;
 
-        $package = Package::create([
+        $payload = [
             'tenant_id' => $tenant->id,
             'name' => $request->name,
             'description' => $request->description,
@@ -122,8 +123,18 @@ class PackageController extends Controller
             'mikrotik_profile_name' => 'profile-' . strtolower(str_replace(' ', '-', $request->name)),
             'is_active' => $request->boolean('is_active', true),
             'is_featured' => $request->boolean('is_featured', false),
-            'sort_order' => Package::max('sort_order') + 1,
-        ]);
+            'sort_order' => ((int) Package::where('tenant_id', $tenant->id)->max('sort_order')) + 1,
+        ];
+
+        if (Schema::hasColumn('packages', 'captive_portal_visible')) {
+            $payload['captive_portal_visible'] = $request->boolean('captive_portal_visible', true);
+        }
+
+        if (Schema::hasColumn('packages', 'captive_portal_priority')) {
+            $payload['captive_portal_priority'] = (int) $request->input('captive_portal_priority', $payload['sort_order']);
+        }
+
+        $package = Package::create($payload);
 
         Log::channel('security')->info('Package created', [
             'package_id' => $package->id,

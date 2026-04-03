@@ -309,3 +309,86 @@
 </script>
 @include('admin.routers.modals.add')
 @endpush
+
+@push('scripts')
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const tableEl = $('.data-table');
+    const tbody = document.querySelector('.data-table tbody');
+    const statsBoxes = document.querySelectorAll('.row .small-box .inner h3');
+
+    async function getJson(url) {
+        const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
+        if (!res.ok) {
+            throw new Error(`Request failed: ${res.status}`);
+        }
+        return res.json();
+    }
+
+    function statusBadge(status) {
+        const normalized = String(status || '').toLowerCase();
+        if (normalized === 'online') return '<span class="badge bg-success">Online</span>';
+        if (normalized === 'offline') return '<span class="badge bg-danger">Offline</span>';
+        return `<span class="badge bg-warning text-dark">${normalized || 'unknown'}</span>`;
+    }
+
+    function renderRows(rows) {
+        if (!tbody) return;
+
+        if (!rows.length) {
+            tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted py-4">No routers found</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = rows.map((row, i) => `
+            <tr>
+                <td><input type="checkbox" class="router-checkbox" value="${row.id || i + 1}"></td>
+                <td><strong>${row.name || 'Router'}</strong></td>
+                <td><code>${row.ip || '-'}</code></td>
+                <td>${statusBadge(row.status)}</td>
+                <td>${Number(row.users || 0).toLocaleString()}</td>
+                <td>${row.cpu ?? '-'}%</td>
+                <td>${row.memory ?? '-'}%</td>
+                <td>
+                    <div class="btn-group">
+                        <button class="btn btn-sm btn-outline-primary" title="Test" onclick="testConnection(${row.id || 0})"><i class="fas fa-plug"></i></button>
+                        <button class="btn btn-sm btn-outline-secondary" title="View" onclick="viewRouter(${row.id || 0})"><i class="fas fa-eye"></i></button>
+                    </div>
+                </td>
+            </tr>
+        `).join('');
+    }
+
+    function renderStats(rows) {
+        const online = rows.filter(r => String(r.status || '').toLowerCase() === 'online').length;
+        const offline = rows.filter(r => String(r.status || '').toLowerCase() !== 'online').length;
+        const users = rows.reduce((sum, r) => sum + Number(r.users || 0), 0);
+        if (statsBoxes.length >= 4) {
+            statsBoxes[0].textContent = online.toLocaleString();
+            statsBoxes[1].textContent = offline.toLocaleString();
+            statsBoxes[2].textContent = users.toLocaleString();
+            statsBoxes[3].textContent = rows.length.toLocaleString();
+        }
+    }
+
+    async function loadRouters() {
+        try {
+            const payload = await getJson('/admin/api/routers/status');
+            const rows = Array.isArray(payload?.data) ? payload.data : [];
+            renderRows(rows);
+            renderStats(rows);
+
+            if ($.fn.DataTable.isDataTable(tableEl)) {
+                tableEl.DataTable().destroy();
+            }
+            tableEl.DataTable({ responsive: true, autoWidth: false, paging: false, searching: true, order: [[1, 'asc']] });
+        } catch (error) {
+            console.error('Failed to load routers:', error);
+        }
+    }
+
+    window.refreshRouters = loadRouters;
+    loadRouters();
+});
+</script>
+@endpush

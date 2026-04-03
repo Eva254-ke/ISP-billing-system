@@ -6,6 +6,9 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Route;
 
 class Tenant extends Model
 {
@@ -26,6 +29,9 @@ class Tenant extends Model
         'timezone',
         'currency',
         'status',
+        'logo_url',
+        'brand_color_primary',
+        'brand_color_secondary',
         
         // ──────────────────────────────────────────────────────────────────
         // BILLING & PLAN
@@ -40,27 +46,49 @@ class Tenant extends Model
         // ──────────────────────────────────────────────────────────────────
         // PAYMENT CONFIGURATION (Multi-Method Support)
         // ──────────────────────────────────────────────────────────────────
-        'payment_method',           // paybill, till, personal, bank_eazzy
-        'payment_shortcode',        // Paybill number (e.g., "247247")
-        'till_number',              // Till number (if method = 'till')
-        'payment_account_name',     // Account name for Paybill transactions
-        'bank_account',             // Bank account (for Equity EazzyPay)
-        'bank_code',                // Bank code (e.g., "EQTY")
-        'personal_phone',           // Personal M-Pesa number (if method = 'personal')
+        'payment_method',
+        'payment_shortcode',
+        'till_number',
+        'payment_account_name',
+        'bank_account',
+        'bank_code',
+        'personal_phone',
+        'intasend_public_key',
+        'intasend_secret_key',
+        'intasend_mode',
         
         // ──────────────────────────────────────────────────────────────────
         // COMMISSION SETTINGS
         // ──────────────────────────────────────────────────────────────────
-        'commission_type',          // percentage, fixed
-        'commission_rate',          // 5.00 = 5% or KES 5.00
-        'minimum_commission',       // Minimum commission amount
-        'commission_frequency',     // monthly, weekly, per_transaction
-        'next_commission_date',     // Next commission billing date
+        'commission_type',
+        'commission_rate',
+        'minimum_commission',
+        'commission_frequency',
+        'next_commission_date',
         
         // ──────────────────────────────────────────────────────────────────
         // CALLBACK & INTEGRATION
         // ──────────────────────────────────────────────────────────────────
-        'custom_callback_url',      // Override default callback URL
+        'custom_callback_url',
+        
+        // ──────────────────────────────────────────────────────────────────
+        // CAPTIVE PORTAL SETTINGS
+        // ──────────────────────────────────────────────────────────────────
+        'captive_portal_enabled',
+        'captive_portal_title',
+        'captive_portal_welcome_message',
+        'captive_portal_terms_url',
+        'captive_portal_support_phone',
+        'captive_portal_support_email',
+        'captive_portal_custom_css',
+        'captive_portal_redirect_url',
+        'captive_portal_session_timeout_minutes',
+        'captive_portal_grace_period_minutes',
+        'captive_portal_allow_voucher_redemption',
+        'captive_portal_allow_mpese_code_reconnect',
+        'captive_portal_show_package_descriptions',
+        'captive_portal_default_language',
+        'captive_portal_analytics_enabled',
         
         // ──────────────────────────────────────────────────────────────────
         // METADATA & SETTINGS
@@ -68,6 +96,7 @@ class Tenant extends Model
         'settings',
         'trial_ends_at',
         'last_active_at',
+        'metadata',
     ];
 
     /**
@@ -75,6 +104,7 @@ class Tenant extends Model
      */
     protected $casts = [
         'settings' => 'array',
+        'metadata' => 'array',
         'monthly_fee' => 'decimal:2',
         'billing_cycle_start' => 'date',
         'next_billing_date' => 'date',
@@ -85,6 +115,15 @@ class Tenant extends Model
         'commission_rate' => 'decimal:2',
         'minimum_commission' => 'decimal:2',
         'next_commission_date' => 'date',
+        
+        // Captive portal casts
+        'captive_portal_enabled' => 'boolean',
+        'captive_portal_session_timeout_minutes' => 'integer',
+        'captive_portal_grace_period_minutes' => 'integer',
+        'captive_portal_allow_voucher_redemption' => 'boolean',
+        'captive_portal_allow_mpese_code_reconnect' => 'boolean',
+        'captive_portal_show_package_descriptions' => 'boolean',
+        'captive_portal_analytics_enabled' => 'boolean',
     ];
 
     /**
@@ -93,8 +132,45 @@ class Tenant extends Model
     protected $hidden = [
         'bank_account',
         'personal_phone',
+        'intasend_secret_key',
         'settings',
+        'metadata',
     ];
+
+    /**
+     * The attributes that should be appended to arrays.
+     */
+    protected $appends = [
+        'full_domain',
+        'is_on_trial',
+        'payment_config',
+        'commission_config',
+        'callback_url',
+        'has_payment_method',
+        'payment_method_label',
+        'captive_portal_config',
+        'captive_portal_url',
+        'brand_colors',
+    ];
+
+    // ──────────────────────────────────────────────────────────────────────
+    // CONSTANTS
+    // ──────────────────────────────────────────────────────────────────────
+
+    const STATUS_ACTIVE = 'active';
+    const STATUS_SUSPENDED = 'suspended';
+    const STATUS_TRIAL = 'trial';
+    const STATUS_EXPIRED = 'expired';
+
+    const PLAN_FREE = 'free';
+    const PLAN_BASIC = 'basic';
+    const PLAN_PRO = 'pro';
+    const PLAN_ENTERPRISE = 'enterprise';
+
+    const PAYMENT_METHOD_PAYBILL = 'paybill';
+    const PAYMENT_METHOD_TILL = 'till';
+    const PAYMENT_METHOD_BANK_EAZZY = 'bank_eazzy';
+    const PAYMENT_METHOD_PERSONAL = 'personal';
 
     // ──────────────────────────────────────────────────────────────────────
     // RELATIONSHIPS
@@ -146,7 +222,7 @@ class Tenant extends Model
 
     public function scopeActive($query)
     {
-        return $query->where('status', 'active');
+        return $query->where('status', self::STATUS_ACTIVE);
     }
 
     public function scopeOnTrial($query)
@@ -185,6 +261,25 @@ class Tenant extends Model
             ->where('status', 'active');
     }
 
+    public function scopeWithCaptivePortal($query)
+    {
+        return $query->active()
+            ->where('captive_portal_enabled', true);
+    }
+
+    public function scopeBySubdomain($query, $subdomain)
+    {
+        return $query->where('subdomain', $subdomain);
+    }
+
+    public function scopeByDomain($query, $domain)
+    {
+        return $query->where(function($q) use ($domain) {
+            $q->where('domain', $domain)
+              ->orWhere('subdomain', $domain);
+        });
+    }
+
     // ──────────────────────────────────────────────────────────────────────
     // ACCESSORS & ATTRIBUTES
     // ──────────────────────────────────────────────────────────────────────
@@ -199,9 +294,6 @@ class Tenant extends Model
         return $this->trial_ends_at && $this->trial_ends_at->isFuture();
     }
 
-    /**
-     * Get complete payment configuration as array
-     */
     public function getPaymentConfigAttribute(): array
     {
         return [
@@ -212,13 +304,12 @@ class Tenant extends Model
             'bank_account' => $this->bank_account,
             'bank_code' => $this->bank_code,
             'personal_phone' => $this->personal_phone,
+            'intasend_public_key' => $this->intasend_public_key,
+            'intasend_mode' => $this->intasend_mode,
             'is_configured' => $this->payment_shortcode || $this->till_number || $this->bank_account || $this->personal_phone,
         ];
     }
 
-    /**
-     * Get commission configuration as array
-     */
     public function getCommissionConfigAttribute(): array
     {
         return [
@@ -230,22 +321,23 @@ class Tenant extends Model
         ];
     }
 
-    /**
-     * Get the callback URL for this tenant (custom or default)
-     */
     public function getCallbackUrlAttribute(): string
     {
         if ($this->custom_callback_url) {
             return $this->custom_callback_url;
         }
-        
-        // Default: route to our controller with tenant ID
-        return route('api.mpesa.callback', ['tenant' => $this->id], false);
+
+        if (Route::has('api.mpesa.callback')) {
+            return route('api.mpesa.callback', ['tenant' => $this->id], false);
+        }
+
+        if (Route::has('api.mpesa.callback.legacy')) {
+            return route('api.mpesa.callback.legacy', [], false);
+        }
+
+        return '/api/mpesa/callback/' . $this->id;
     }
 
-    /**
-     * Check if tenant has payment method configured
-     */
     public function getHasPaymentMethodAttribute(): bool
     {
         return !empty($this->payment_shortcode) 
@@ -254,46 +346,85 @@ class Tenant extends Model
             || !empty($this->personal_phone);
     }
 
-    /**
-     * Get payment method label for display
-     */
     public function getPaymentMethodLabelAttribute(): string
     {
         return match($this->payment_method) {
-            'paybill' => 'Paybill',
-            'till' => 'Till Number',
-            'bank_eazzy' => 'Equity EazzyPay',
-            'personal' => 'Personal M-Pesa',
+            self::PAYMENT_METHOD_PAYBILL => 'Paybill',
+            self::PAYMENT_METHOD_TILL => 'Till Number',
+            self::PAYMENT_METHOD_BANK_EAZZY => 'Equity EazzyPay',
+            self::PAYMENT_METHOD_PERSONAL => 'Personal M-Pesa',
             default => 'Not Configured',
         };
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // CAPTIVE PORTAL ACCESSORS
+    // ──────────────────────────────────────────────────────────────────────
+
+    public function getCaptivePortalConfigAttribute(): array
+    {
+        return [
+            'enabled' => $this->captive_portal_enabled,
+            'title' => $this->captive_portal_title ?? $this->name . ' WiFi',
+            'welcome_message' => $this->captive_portal_welcome_message,
+            'terms_url' => $this->captive_portal_terms_url,
+            'support_phone' => $this->captive_portal_support_phone,
+            'support_email' => $this->captive_portal_support_email,
+            'custom_css' => $this->captive_portal_custom_css,
+            'redirect_url' => $this->captive_portal_redirect_url ?? 'http://google.com',
+            'session_timeout_minutes' => $this->captive_portal_session_timeout_minutes ?? 60,
+            'grace_period_minutes' => $this->captive_portal_grace_period_minutes ?? 5,
+            'allow_voucher_redemption' => $this->captive_portal_allow_voucher_redemption ?? true,
+            'allow_mpese_code_reconnect' => $this->captive_portal_allow_mpese_code_reconnect ?? true,
+            'show_package_descriptions' => $this->captive_portal_show_package_descriptions ?? true,
+            'default_language' => $this->captive_portal_default_language ?? 'en',
+            'analytics_enabled' => $this->captive_portal_analytics_enabled ?? false,
+            'brand_colors' => $this->brand_colors,
+        ];
+    }
+
+    public function getCaptivePortalUrlAttribute(): string
+    {
+        if ($this->domain) {
+            return "https://{$this->domain}/wifi";
+        }
+        return "https://{$this->subdomain}.cloudbridge.network/wifi";
+    }
+
+    public function getBrandColorsAttribute(): array
+    {
+        return [
+            'primary' => $this->brand_color_primary ?? '#7C3AED',
+            'secondary' => $this->brand_color_secondary ?? '#06B6D4',
+        ];
+    }
+
+    public function getCaptivePortalThemeAttribute(): array
+    {
+        return [
+            'colors' => $this->brand_colors,
+            'custom_css' => $this->captive_portal_custom_css,
+            'logo_url' => $this->logo_url,
+            'title' => $this->captive_portal_title ?? $this->name . ' WiFi',
+            'welcome_message' => $this->captive_portal_welcome_message,
+        ];
     }
 
     // ──────────────────────────────────────────────────────────────────────
     // COMMISSION CALCULATION
     // ──────────────────────────────────────────────────────────────────────
 
-    /**
-     * Calculate commission for a given transaction amount
-     */
     public function calculateCommission(float $amount): float
     {
         if ($this->commission_type === 'fixed') {
-            return min($this->commission_rate, $amount); // Don't charge more than transaction
+            return min($this->commission_rate, $amount);
         }
-        
-        // Percentage-based
         $percentage = ($amount * $this->commission_rate) / 100;
-        
-        // Apply minimum
-        return max($percentage, $this->minimum_commission);
+        return max($percentage, $this->minimum_commission ?? 0);
     }
 
-    /**
-     * Get total commission owed by this tenant
-     */
     public function getCommissionOwedAttribute(): float
     {
-        // Sum of all completed payments since last commission billing
         $cutoff = $this->next_commission_date ? 
             \Carbon\Carbon::parse($this->next_commission_date) : 
             now()->subMonth();
@@ -305,9 +436,6 @@ class Tenant extends Model
             ->sum(fn($payment) => $this->calculateCommission($payment->amount));
     }
 
-    /**
-     * Get commission summary for display
-     */
     public function getCommissionSummaryAttribute(): array
     {
         $owed = $this->commission_owed;
@@ -332,44 +460,195 @@ class Tenant extends Model
     // PAYMENT METHOD HELPERS
     // ──────────────────────────────────────────────────────────────────────
 
-    /**
-     * Check if tenant uses Safaricom Daraja API (Paybill/Till)
-     */
     public function usesDaraja(): bool
     {
-        return in_array($this->payment_method, ['paybill', 'till']);
+        return in_array($this->payment_method, [self::PAYMENT_METHOD_PAYBILL, self::PAYMENT_METHOD_TILL]);
     }
 
-    /**
-     * Check if tenant uses Equity EazzyPay
-     */
     public function usesEquityEazzy(): bool
     {
-        return $this->payment_method === 'bank_eazzy';
+        return $this->payment_method === self::PAYMENT_METHOD_BANK_EAZZY;
     }
 
-    /**
-     * Check if tenant uses Personal M-Pesa (SMS instructions only)
-     */
     public function usesPersonalMpesa(): bool
     {
-        return $this->payment_method === 'personal';
+        return $this->payment_method === self::PAYMENT_METHOD_PERSONAL;
     }
 
-    /**
-     * Get the shortcode/till for API calls
-     */
+    public function usesIntaSend(): bool
+    {
+        return !empty($this->intasend_public_key) && !empty($this->intasend_secret_key);
+    }
+
     public function getApiShortcodeAttribute(): ?string
     {
         return $this->payment_shortcode ?? $this->till_number;
     }
 
-    /**
-     * Get the account reference for STK Push
-     */
     public function getApiAccountReferenceAttribute(): string
     {
         return $this->payment_account_name ?? $this->name ?? 'WiFi Payment';
+    }
+
+    public function getIntaSendConfigAttribute(): ?array
+    {
+        if (!$this->usesIntaSend()) {
+            return null;
+        }
+        
+        return [
+            'public_key' => $this->intasend_public_key,
+            'secret_key' => $this->intasend_secret_key,
+            'mode' => $this->intasend_mode ?? 'sandbox',
+            'callback_url' => $this->callback_url,
+        ];
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // CAPTIVE PORTAL METHODS
+    // ──────────────────────────────────────────────────────────────────────
+
+    public function isCaptivePortalEnabled(): bool
+    {
+        return $this->captive_portal_enabled && $this->status === self::STATUS_ACTIVE;
+    }
+
+    public function getActivePackagesForCaptivePortal()
+    {
+        return $this->packages()
+            ->active()
+            ->forCaptivePortal()
+            ->get();
+    }
+
+    public function getValidVouchersForCaptivePortal()
+    {
+        if (!$this->captive_portal_allow_voucher_redemption) {
+            return collect();
+        }
+        
+        return $this->vouchers()
+            ->forCaptivePortal()
+            ->get();
+    }
+
+    public function findRouterForCaptivePortal(?string $phone = null, ?string $mac = null): ?Router
+    {
+        $query = $this->routers()
+            ->withCaptivePortal()
+            ->healthy();
+        
+        if ($mac) {
+            $query->whereHas('userSessions', function($q) use ($mac) {
+                $q->where('mac_address', $mac);
+            });
+        }
+        
+        return $query->orderBy('active_sessions', 'asc')->first();
+    }
+
+    public function getCaptivePortalAnalytics(): array
+    {
+        if (!$this->captive_portal_analytics_enabled) {
+            return [];
+        }
+        
+        $today = now()->startOfDay();
+        
+        return [
+            'sessions_today' => $this->userSessions()
+                ->where('created_at', '>=', $today)
+                ->count(),
+            'revenue_today' => $this->payments()
+                ->captivePortal()
+                ->successful()
+                ->where('created_at', '>=', $today)
+                ->sum('amount'),
+            'active_sessions' => $this->userSessions()
+                ->active()
+                ->count(),
+            'vouchers_redeemed_today' => $this->vouchers()
+                ->used()
+                ->where('redeemed_via', 'captive_portal')
+                ->whereDate('used_at', today())
+                ->count(),
+            'top_package' => $this->payments()
+                ->captivePortal()
+                ->successful()
+                ->where('created_at', '>=', $today)
+                ->selectRaw('package_id, COUNT(*) as count')
+                ->groupBy('package_id')
+                ->orderByDesc('count')
+                ->first()?->package?->name,
+        ];
+    }
+
+    public function validateCaptivePortalConfig(): array
+    {
+        $errors = [];
+        
+        if ($this->captive_portal_enabled) {
+            if (!$this->has_payment_method) {
+                $errors[] = 'Payment method must be configured for captive portal';
+            }
+            
+            if (!$this->packages()->active()->forCaptivePortal()->exists()) {
+                $errors[] = 'At least one active package must be visible in captive portal';
+            }
+            
+            if ($this->captive_portal_allow_voucher_redemption) {
+                if (!$this->vouchers()->valid()->exists()) {
+                    Log::warning('Voucher redemption enabled but no valid vouchers exist', [
+                        'tenant_id' => $this->id,
+                    ]);
+                }
+            }
+        }
+        
+        return [
+            'valid' => empty($errors),
+            'errors' => $errors,
+            'warnings' => $this->captive_portal_enabled ? $this->getCaptivePortalWarnings() : [],
+        ];
+    }
+
+    protected function getCaptivePortalWarnings(): array
+    {
+        $warnings = [];
+        
+        if (!$this->captive_portal_support_phone && !$this->captive_portal_support_email) {
+            $warnings[] = 'No support contact configured for captive portal';
+        }
+        
+        if (!$this->captive_portal_terms_url) {
+            $warnings[] = 'Terms of service URL not configured';
+        }
+        
+        if ($this->captive_portal_session_timeout_minutes < 5) {
+            $warnings[] = 'Session timeout is very short (< 5 minutes)';
+        }
+        
+        return $warnings;
+    }
+
+    public function syncCaptivePortalSettingsToRouters(): int
+    {
+        $count = 0;
+        
+        $this->routers()->withCaptivePortal()->chunk(10, function($routers) use (&$count) {
+            foreach ($routers as $router) {
+                if ($router->syncWalledGarden()) {
+                    $count++;
+                }
+            }
+        });
+        
+        Log::info('Captive portal settings synced to routers', [
+            'tenant_id' => $this->id,
+            'routers_updated' => $count,
+        ]);
+        
+        return $count;
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -394,9 +673,6 @@ class Tenant extends Model
             ->sum('amount');
     }
 
-    /**
-     * Get total revenue for date range
-     */
     public function getRevenueForPeriod(\Carbon\Carbon $start, \Carbon\Carbon $end): float
     {
         return $this->payments()
@@ -405,9 +681,6 @@ class Tenant extends Model
             ->sum('amount');
     }
 
-    /**
-     * Get active session count across all routers
-     */
     public function getActiveSessionCountAttribute(): int
     {
         return $this->userSessions()
@@ -415,9 +688,6 @@ class Tenant extends Model
             ->count();
     }
 
-    /**
-     * Get online router count
-     */
     public function getOnlineRouterCountAttribute(): int
     {
         return $this->routers()
@@ -425,36 +695,29 @@ class Tenant extends Model
             ->count();
     }
 
-    /**
-     * Update next commission billing date
-     */
     public function scheduleNextCommission(): void
     {
         $this->update([
             'next_commission_date' => match($this->commission_frequency) {
                 'weekly' => now()->addWeek(),
-                'per_transaction' => null, // Bill immediately after each transaction
+                'per_transaction' => null,
                 'monthly' => now()->addMonth(),
                 default => now()->addMonth(),
             },
         ]);
     }
 
-    /**
-     * Mark commission as billed
-     */
-    public function markCommissionBilled(float $amount, string $reference = null): void
+    public function markCommissionBilled(float $amount, ?string $reference = null): void
     {
         $this->update([
             'next_commission_date' => match($this->commission_frequency) {
                 'weekly' => now()->addWeek(),
-                'per_transaction' => now()->addDay(), // Next transaction
+                'per_transaction' => now()->addDay(),
                 'monthly' => now()->addMonth(),
                 default => now()->addMonth(),
             },
         ]);
 
-        // Log the billing event
         $this->auditLogs()->create([
             'event' => 'commission.billed',
             'entity_type' => self::class,
@@ -469,9 +732,6 @@ class Tenant extends Model
         ]);
     }
 
-    /**
-     * Validate payment configuration before going live
-     */
     public function validatePaymentConfig(): array
     {
         $errors = [];
@@ -507,6 +767,92 @@ class Tenant extends Model
         return [
             'valid' => empty($errors),
             'errors' => $errors,
+        ];
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // STATIC HELPERS
+    // ──────────────────────────────────────────────────────────────────────
+
+    public static function findBySubdomainOrDomain(string $identifier): ?self
+    {
+        return Cache::remember("tenant_by_{$identifier}", 300, function () use ($identifier) {
+            return static::query()
+                ->where('subdomain', $identifier)
+                ->orWhere('domain', $identifier)
+                ->active()
+                ->first();
+        });
+    }
+
+    public static function findWithCaptivePortalById(int $id): ?self
+    {
+        return static::withCaptivePortal()->find($id);
+    }
+
+    public static function getStatsForDashboard(): array
+    {
+        return [
+            'total_tenants' => static::count(),
+            'active_tenants' => static::active()->count(),
+            'on_trial' => static::onTrial()->count(),
+            'with_captive_portal' => static::withCaptivePortal()->count(),
+            'revenue_this_month' => static::active()
+                ->with('payments')
+                ->get()
+                ->sum(fn($t) => $t->getRevenueThisMonth()),
+        ];
+    }
+
+    public static function cleanupExpiredTrials(): int
+    {
+        $count = 0;
+        
+        static::query()
+            ->onTrial()
+            ->where('trial_ends_at', '<', now())
+            ->chunkById(100, function ($tenants) use (&$count) {
+                foreach ($tenants as $tenant) {
+                    $tenant->update([
+                        'status' => self::STATUS_EXPIRED,
+                        'captive_portal_enabled' => false,
+                        'metadata' => array_merge(
+                            $tenant->metadata ?? [],
+                            ['trial_expired_at' => now()->toIso8601String()]
+                        ),
+                    ]);
+                    $count++;
+                }
+            });
+        
+        Log::info('Expired trials cleaned up', ['count' => $count]);
+        return $count;
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // OUTPUT FOR CAPTIVE PORTAL
+    // ──────────────────────────────────────────────────────────────────────
+
+    public function toArrayForCaptivePortal(): array
+    {
+        return [
+            'id' => $this->id,
+            'name' => $this->name,
+            'currency' => $this->currency ?? 'KES',
+            'timezone' => $this->timezone ?? 'Africa/Nairobi',
+            'captive_portal' => $this->captive_portal_config,
+            'theme' => $this->captive_portal_theme,
+            'support' => [
+                'phone' => $this->captive_portal_support_phone,
+                'email' => $this->captive_portal_support_email,
+                'terms_url' => $this->captive_portal_terms_url,
+            ],
+            'payment' => [
+                'method' => $this->payment_method_label,
+                'shortcode' => $this->api_shortcode,
+                'account_name' => $this->api_account_reference,
+            ],
+            'analytics' => $this->captive_portal_analytics_enabled ? $this->getCaptivePortalAnalytics() : null,
         ];
     }
 }

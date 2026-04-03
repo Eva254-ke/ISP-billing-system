@@ -19,7 +19,7 @@
     <div class="col-md-3">
         <div class="small-box bg-primary">
             <div class="inner">
-                <h3>312</h3>
+                <h3>{{ number_format((int) ($stats['total'] ?? 0)) }}</h3>
                 <p>Total Customers</p>
             </div>
             <div class="icon"><i class="fas fa-users"></i></div>
@@ -28,7 +28,7 @@
     <div class="col-md-3">
         <div class="small-box bg-success">
             <div class="inner">
-                <h3>218</h3>
+                <h3>{{ number_format((int) ($stats['active'] ?? 0)) }}</h3>
                 <p>Active</p>
             </div>
             <div class="icon"><i class="fas fa-signal"></i></div>
@@ -37,7 +37,7 @@
     <div class="col-md-3">
         <div class="small-box bg-warning">
             <div class="inner">
-                <h3>24</h3>
+                <h3>{{ number_format((int) ($stats['suspended'] ?? 0)) }}</h3>
                 <p>Suspended</p>
             </div>
             <div class="icon"><i class="fas fa-user-slash"></i></div>
@@ -46,7 +46,7 @@
     <div class="col-md-3">
         <div class="small-box bg-info">
             <div class="inner">
-                <h3>34</h3>
+                <h3>{{ number_format((int) ($stats['new_month'] ?? 0)) }}</h3>
                 <p>New This Month</p>
             </div>
             <div class="icon"><i class="fas fa-user-check"></i></div>
@@ -123,194 +123,70 @@
                 </tr>
             </thead>
             <tbody>
-                <tr>
-                    <td><input type="checkbox" class="customer-checkbox" value="1"></td>
-                    <td class="action-col">
-                        <strong>Jane W.</strong>
-                        <div class="text-muted small">0712***678 - janew</div>
-                    </td>
-                    <td><span class="badge bg-secondary">Hotspot</span></td>
-                    <td>Weekly Hotspot</td>
-                    <td><span class="badge bg-success">Active</span></td>
-                    <td class="action-col">
-                        <div class="fw-semibold text-success">Online</div>
-                        <div class="text-muted small">Just now</div>
-                    </td>
-                    <td class="action-col">
-                        <div class="fw-semibold">2026-03-25</div>
-                        <span class="badge bg-success">7 days left</span>
-                    </td>
-                    <td>2026-03-18 10:22</td>
-                    <td class="action-col">
-                        <span class="status-dot online"></span>
-                        <span class="text-success">Online</span>
-                    </td>
-                    <td>
-                        <div class="btn-group">
-                            <button class="btn btn-sm btn-outline-primary"
-                                    onclick="viewCustomerDetails(this)"
-                                    data-name="Jane W."
-                                    data-phone="0712***678"
-                                    data-username="janew"
-                                    data-type="Hotspot"
-                                    data-package="Weekly Hotspot"
-                                    data-status="Active"
-                                    data-last-online="Just now"
-                                    data-expiry="2026-03-25"
-                                    data-last-payment="2026-03-18 10:22"
-                                    data-router="Main Hotspot (192.168.88.1)">
-                                <i class="fas fa-eye"></i>
-                            </button>
-                            <button class="btn btn-sm btn-outline-warning" onclick="toggleCustomerStatus('Jane W.', 'suspend')">
-                                <i class="fas fa-user-slash"></i>
-                            </button>
-                            <button class="btn btn-sm btn-outline-secondary" onclick="resetCustomerPassword('Jane W.')">
-                                <i class="fas fa-key"></i>
-                            </button>
-                        </div>
-                    </td>
-                </tr>
-                <tr>
-                    <td><input type="checkbox" class="customer-checkbox" value="2"></td>
-                    <td>
-                        <strong>Michael K.</strong>
-                        <div class="text-muted small">0745***901 - mikek</div>
-                    </td>
-                    <td><span class="badge bg-info">PPPoE</span></td>
-                    <td>Monthly 10Mbps</td>
-                    <td><span class="badge bg-success">Active</span></td>
-                    <td>
-                        <div class="fw-semibold text-success">Online</div>
-                        <div class="text-muted small">2 min ago</div>
-                    </td>
-                    <td>
-                        <div class="fw-semibold">2026-04-17</div>
-                        <span class="badge bg-info">29 days left</span>
-                    </td>
-                    <td>2026-03-17 09:05</td>
-                    <td>
-                        <span class="status-dot online"></span>
-                        <span class="text-success">Online</span>
-                    </td>
-                    <td>
-                        <div class="btn-group">
-                            <button class="btn btn-sm btn-outline-primary"
-                                    onclick="viewCustomerDetails(this)"
-                                    data-name="Michael K."
-                                    data-phone="0745***901"
-                                    data-username="mikek"
-                                    data-type="PPPoE"
-                                    data-package="Monthly 10Mbps"
-                                    data-status="Active"
-                                    data-last-online="2 min ago"
-                                    data-expiry="2026-04-17"
-                                    data-last-payment="2026-03-17 09:05"
-                                    data-router="PPPoE Server (192.168.88.2)">
-                                <i class="fas fa-eye"></i>
-                            </button>
-                            <button class="btn btn-sm btn-outline-warning" onclick="toggleCustomerStatus('Michael K.', 'suspend')">
-                                <i class="fas fa-user-slash"></i>
-                            </button>
-                            <button class="btn btn-sm btn-outline-secondary" onclick="resetCustomerPassword('Michael K.')">
-                                <i class="fas fa-key"></i>
-                            </button>
-                        </div>
-                    </td>
-                </tr>
-                <tr class="text-muted">
-                    <td><input type="checkbox" class="customer-checkbox" value="3"></td>
-                    <td>
-                        <strong>Agnes M.</strong>
-                        <div class="text-muted small">0723***789 - agnesm</div>
-                    </td>
-                    <td><span class="badge bg-secondary">Hotspot</span></td>
-                    <td>1 Hour Pass</td>
-                    <td><span class="badge bg-warning">Suspended</span></td>
-                    <td>
-                        <div class="fw-semibold text-muted">Offline</div>
-                        <div class="text-muted small">3 days ago</div>
-                    </td>
-                    <td>
-                        <div class="fw-semibold">2026-03-10</div>
-                        <span class="badge bg-danger">Expired</span>
-                    </td>
-                    <td>2026-03-10 16:40</td>
-                    <td>
-                        <span class="status-dot offline"></span>
-                        <span class="text-muted">Offline</span>
-                    </td>
-                    <td>
-                        <div class="btn-group">
-                            <button class="btn btn-sm btn-outline-primary"
-                                    onclick="viewCustomerDetails(this)"
-                                    data-name="Agnes M."
-                                    data-phone="0723***789"
-                                    data-username="agnesm"
-                                    data-type="Hotspot"
-                                    data-package="1 Hour Pass"
-                                    data-status="Suspended"
-                                    data-last-online="3 days ago"
-                                    data-expiry="2026-03-10"
-                                    data-last-payment="2026-03-10 16:40"
-                                    data-router="Main Hotspot (192.168.88.1)">
-                                <i class="fas fa-eye"></i>
-                            </button>
-                            <button class="btn btn-sm btn-outline-success" onclick="toggleCustomerStatus('Agnes M.', 'activate')">
-                                <i class="fas fa-user-check"></i>
-                            </button>
-                            <button class="btn btn-sm btn-outline-secondary" onclick="resetCustomerPassword('Agnes M.')">
-                                <i class="fas fa-key"></i>
-                            </button>
-                        </div>
-                    </td>
-                </tr>
-                <tr class="text-muted">
-                    <td><input type="checkbox" class="customer-checkbox" value="4"></td>
-                    <td>
-                        <strong>Rashid A.</strong>
-                        <div class="text-muted small">0701***224 - rashida</div>
-                    </td>
-                    <td><span class="badge bg-info">PPPoE</span></td>
-                    <td>Business 20Mbps</td>
-                    <td><span class="badge bg-danger">Expired</span></td>
-                    <td>
-                        <div class="fw-semibold text-muted">Offline</div>
-                        <div class="text-muted small">12 days ago</div>
-                    </td>
-                    <td>
-                        <div class="fw-semibold">2026-02-28</div>
-                        <span class="badge bg-danger">Expired</span>
-                    </td>
-                    <td>2026-02-28 08:15</td>
-                    <td>
-                        <span class="status-dot offline"></span>
-                        <span class="text-muted">Offline</span>
-                    </td>
-                    <td>
-                        <div class="btn-group">
-                            <button class="btn btn-sm btn-outline-primary"
-                                    onclick="viewCustomerDetails(this)"
-                                    data-name="Rashid A."
-                                    data-phone="0701***224"
-                                    data-username="rashida"
-                                    data-type="PPPoE"
-                                    data-package="Business 20Mbps"
-                                    data-status="Expired"
-                                    data-last-online="12 days ago"
-                                    data-expiry="2026-02-28"
-                                    data-last-payment="2026-02-28 08:15"
-                                    data-router="PPPoE Server (192.168.88.2)">
-                                <i class="fas fa-eye"></i>
-                            </button>
-                            <button class="btn btn-sm btn-outline-success" onclick="toggleCustomerStatus('Rashid A.', 'activate')">
-                                <i class="fas fa-user-check"></i>
-                            </button>
-                            <button class="btn btn-sm btn-outline-secondary" onclick="resetCustomerPassword('Rashid A.')">
-                                <i class="fas fa-key"></i>
-                            </button>
-                        </div>
-                    </td>
-                </tr>
+                @forelse(($sessions ?? []) as $session)
+                    @php
+                        $username = $session->username ?: ($session->phone ?: 'guest');
+                        $type = str_starts_with(strtolower((string) $username), 'pppoe') ? 'PPPoE' : 'Hotspot';
+                        $status = strtolower((string) ($session->status ?? 'unknown'));
+                        $statusBadge = match ($status) {
+                            'active' => 'bg-success',
+                            'suspended' => 'bg-warning',
+                            'expired', 'terminated' => 'bg-danger',
+                            default => 'bg-secondary',
+                        };
+                        $isOnline = $status === 'active';
+                    @endphp
+                    <tr class="{{ $isOnline ? '' : 'text-muted' }}">
+                        <td><input type="checkbox" class="customer-checkbox" value="{{ $session->id }}"></td>
+                        <td class="action-col">
+                            <strong>{{ $username }}</strong>
+                            <div class="text-muted small">{{ $session->phone ?? '-' }} - {{ $username }}</div>
+                        </td>
+                        <td><span class="badge {{ $type === 'PPPoE' ? 'bg-info' : 'bg-secondary' }}">{{ $type }}</span></td>
+                        <td>{{ optional($session->package)->name ?? '-' }}</td>
+                        <td><span class="badge {{ $statusBadge }}">{{ ucfirst($status) }}</span></td>
+                        <td>
+                            <div class="fw-semibold {{ $isOnline ? 'text-success' : 'text-muted' }}">{{ $isOnline ? 'Online' : 'Offline' }}</div>
+                            <div class="text-muted small">{{ optional($session->last_activity_at ?? $session->started_at)->diffForHumans() ?? '-' }}</div>
+                        </td>
+                        <td>
+                            <div class="fw-semibold">{{ optional($session->expires_at)->format('Y-m-d H:i') ?? '-' }}</div>
+                        </td>
+                        <td>{{ optional($session->created_at)->format('Y-m-d H:i') ?? '-' }}</td>
+                        <td>
+                            <span class="status-dot {{ $isOnline ? 'online' : 'offline' }}"></span>
+                            <span class="{{ $isOnline ? 'text-success' : 'text-muted' }}">{{ $isOnline ? 'Online' : 'Offline' }}</span>
+                        </td>
+                        <td>
+                            <div class="btn-group">
+                                <button class="btn btn-sm btn-outline-primary"
+                                        onclick="viewCustomerDetails(this)"
+                                        data-name="{{ $username }}"
+                                        data-phone="{{ $session->phone ?? '-' }}"
+                                        data-username="{{ $username }}"
+                                        data-type="{{ $type }}"
+                                        data-package="{{ optional($session->package)->name ?? '-' }}"
+                                        data-status="{{ ucfirst($status) }}"
+                                        data-last-online="{{ optional($session->last_activity_at ?? $session->started_at)->diffForHumans() ?? '-' }}"
+                                        data-expiry="{{ optional($session->expires_at)->format('Y-m-d H:i') ?? '-' }}"
+                                        data-last-payment="{{ optional($session->created_at)->format('Y-m-d H:i') ?? '-' }}"
+                                        data-router="{{ optional($session->router)->name ?? '-' }}">
+                                    <i class="fas fa-eye"></i>
+                                </button>
+                                <button class="btn btn-sm btn-outline-warning" onclick="toggleCustomerStatus('{{ $username }}', 'suspend')">
+                                    <i class="fas fa-user-slash"></i>
+                                </button>
+                                <button class="btn btn-sm btn-outline-secondary" onclick="resetCustomerPassword('{{ $username }}')">
+                                    <i class="fas fa-key"></i>
+                                </button>
+                            </div>
+                        </td>
+                    </tr>
+                @empty
+                    <tr>
+                        <td colspan="10" class="text-center text-muted py-4">No customers available.</td>
+                    </tr>
+                @endforelse
             </tbody>
         </table>
     </div>
@@ -597,6 +473,96 @@ $(document).ready(function() {
     }
 
     $('#customerStatus, #customerType, #customerPackage').on('change', applyCustomerFilters);
+});
+</script>
+@endpush
+
+@push('scripts')
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const tbody = document.querySelector('.data-table tbody');
+    const tableEl = $('.data-table');
+
+    async function getJson(url) {
+        const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
+        if (!res.ok) {
+            throw new Error(`Request failed: ${res.status}`);
+        }
+        return res.json();
+    }
+
+    function badgeForStatus(status) {
+        const normalized = String(status || '').toLowerCase();
+        if (normalized === 'active') return '<span class="badge bg-success">Active</span>';
+        if (normalized === 'suspended') return '<span class="badge bg-warning">Suspended</span>';
+        if (normalized === 'terminated') return '<span class="badge bg-danger">Terminated</span>';
+        return `<span class="badge bg-secondary">${normalized || 'unknown'}</span>`;
+    }
+
+    function renderRows(rows) {
+        if (!tbody) return;
+
+        if (!rows.length) {
+            tbody.innerHTML = '<tr><td colspan="10" class="text-center text-muted py-4">No customers found</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = rows.map((row, index) => {
+            const username = row.username || row.phone || `customer-${row.id || index + 1}`;
+            const type = username.toLowerCase().startsWith('pppoe') ? 'PPPoE' : 'Hotspot';
+            const packageName = row.package || '-';
+            const status = row.status || '-';
+            const online = String(status).toLowerCase() === 'active';
+            const lastOnline = row.started_at ? new Date(row.started_at).toLocaleString('en-KE') : '-';
+            const expiry = row.expires_at ? new Date(row.expires_at).toLocaleString('en-KE') : '-';
+
+            return `
+                <tr>
+                    <td><input type="checkbox" class="customer-checkbox" value="${row.id || index + 1}"></td>
+                    <td><strong>${username}</strong><div class="text-muted small">${row.phone || '-'} - ${username}</div></td>
+                    <td><span class="badge ${type === 'PPPoE' ? 'bg-info' : 'bg-secondary'}">${type}</span></td>
+                    <td>${packageName}</td>
+                    <td>${badgeForStatus(status)}</td>
+                    <td><div class="fw-semibold ${online ? 'text-success' : 'text-muted'}">${online ? 'Online' : 'Offline'}</div><div class="text-muted small">${lastOnline}</div></td>
+                    <td><div class="fw-semibold">${expiry}</div></td>
+                    <td>${lastOnline}</td>
+                    <td><span class="status-dot ${online ? 'online' : 'offline'}"></span><span class="${online ? 'text-success' : 'text-muted'}">${online ? 'Online' : 'Offline'}</span></td>
+                    <td>
+                        <div class="btn-group">
+                            <button class="btn btn-sm btn-outline-primary" onclick="viewCustomerDetails(this)" data-name="${username}" data-phone="${row.phone || '-'}" data-username="${username}" data-type="${type}" data-package="${packageName}" data-status="${status}" data-last-online="${lastOnline}" data-expiry="${expiry}" data-last-payment="${lastOnline}" data-router="${row.router || '-'}"><i class="fas fa-eye"></i></button>
+                            <button class="btn btn-sm btn-outline-warning" onclick="toggleCustomerStatus('${username}', 'suspend')"><i class="fas fa-user-slash"></i></button>
+                            <button class="btn btn-sm btn-outline-secondary" onclick="resetCustomerPassword('${username}')"><i class="fas fa-key"></i></button>
+                        </div>
+                    </td>
+                </tr>
+            `;
+        }).join('');
+    }
+
+    async function loadCustomers() {
+        try {
+            const search = document.getElementById('customerSearch')?.value?.trim() || '';
+            const status = document.getElementById('customerStatus')?.value || '';
+
+            const url = `/admin/api/clients/sessions?limit=300${status && status !== 'all' ? `&status=${encodeURIComponent(status)}` : ''}${search ? `&search=${encodeURIComponent(search)}` : ''}`;
+            const payload = await getJson(url);
+            renderRows(Array.isArray(payload?.data) ? payload.data : []);
+
+            if ($.fn.DataTable.isDataTable(tableEl)) {
+                tableEl.DataTable().destroy();
+            }
+            tableEl.DataTable({ responsive: false, scrollX: true, scrollCollapse: true, autoWidth: false, paging: true, searching: false, order: [[7, 'desc']], columnDefs: [{ targets: [0, -1], orderable: false, searchable: false }] });
+        } catch (error) {
+            console.error('Failed to load customers:', error);
+        }
+    }
+
+    document.getElementById('customerSearch')?.addEventListener('input', loadCustomers);
+    document.getElementById('customerStatus')?.addEventListener('change', loadCustomers);
+    document.getElementById('customerType')?.addEventListener('change', loadCustomers);
+    document.getElementById('customerPackage')?.addEventListener('change', loadCustomers);
+
+    loadCustomers();
 });
 </script>
 @endpush

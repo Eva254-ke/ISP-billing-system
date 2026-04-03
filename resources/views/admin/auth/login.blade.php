@@ -31,13 +31,13 @@
                 <form action="{{ route('login') }}" method="POST">
                     @csrf
                     <div class="input-group mb-3">
-                        <input type="email" name="email" class="form-control" placeholder="Email" value="admin@cloudbridge.network" required>
+                        <input type="email" name="email" class="form-control" placeholder="Email" value="{{ old('email') }}" required>
                         <div class="input-group-text">
                             <span class="fas fa-envelope"></span>
                         </div>
                     </div>
                     <div class="input-group mb-3">
-                        <input type="password" name="password" class="form-control" placeholder="Password" value="password" required>
+                        <input type="password" name="password" class="form-control" placeholder="Password" required>
                         <div class="input-group-text">
                             <span class="fas fa-lock"></span>
                         </div>
@@ -45,7 +45,7 @@
                     <div class="row">
                         <div class="col-8">
                             <div class="icheck-primary">
-                                <input type="checkbox" id="remember">
+                                <input type="checkbox" id="remember" name="remember" value="1" {{ old('remember') ? 'checked' : '' }}>
                                 <label for="remember">Remember Me</label>
                             </div>
                         </div>

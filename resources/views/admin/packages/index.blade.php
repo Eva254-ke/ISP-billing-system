@@ -537,3 +537,84 @@ $(document).ready(function() {
 });
 </script>
 @endpush
+
+@push('scripts')
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const tableEl = $('.data-table');
+    const tbody = document.querySelector('.data-table tbody');
+    const statsBoxes = document.querySelectorAll('.row.mb-4 .small-box .inner h3');
+
+    async function getJson(url) {
+        const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
+        if (!res.ok) {
+            throw new Error(`Request failed: ${res.status}`);
+        }
+        return res.json();
+    }
+
+    function formatDuration(row) {
+        if (row.duration_value && row.duration_unit) {
+            return `${row.duration_value} ${row.duration_unit}`;
+        }
+        return '-';
+    }
+
+    function renderRows(rows) {
+        if (!tbody) return;
+        if (!rows.length) {
+            tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted py-4">No packages found</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = rows.map((row, index) => `
+            <tr>
+                <td><input type="checkbox" class="package-checkbox" value="${row.id || index + 1}"></td>
+                <td><strong>${row.name || '-'}</strong></td>
+                <td>${formatDuration(row)}</td>
+                <td><strong>KES ${Number(row.price || 0).toLocaleString()}</strong></td>
+                <td><span class="badge ${row.is_active ? 'bg-success' : 'bg-secondary'}">${row.is_active ? 'Active' : 'Inactive'}</span></td>
+                <td>${Number(row.sort_order || 0)}</td>
+                <td>-</td>
+                <td>
+                    <div class="btn-group">
+                        <button class="btn btn-sm btn-outline-primary" onclick="editPackage(${row.id || 0}, '${(row.name || '').replace(/'/g, "\\'")}')"><i class="fas fa-edit"></i></button>
+                        <button class="btn btn-sm btn-outline-danger" onclick="deletePackage(${row.id || 0}, '${(row.name || '').replace(/'/g, "\\'")}')"><i class="fas fa-trash"></i></button>
+                    </div>
+                </td>
+            </tr>
+        `).join('');
+    }
+
+    function renderStats(stats) {
+        if (statsBoxes.length >= 4) {
+            statsBoxes[0].textContent = Number(stats.total || 0).toLocaleString();
+            statsBoxes[1].textContent = Number(stats.active || 0).toLocaleString();
+            statsBoxes[2].textContent = Number((stats.total || 0) - (stats.active || 0)).toLocaleString();
+            statsBoxes[3].textContent = `KES ${Number(stats.revenue_week || 0).toLocaleString()}`;
+        }
+    }
+
+    async function loadPackages() {
+        try {
+            const [rowsPayload, statsPayload] = await Promise.all([
+                getJson('/admin/api/packages'),
+                getJson('/admin/api/packages/stats')
+            ]);
+
+            renderRows(Array.isArray(rowsPayload?.data) ? rowsPayload.data : []);
+            renderStats(statsPayload || {});
+
+            if ($.fn.DataTable.isDataTable(tableEl)) {
+                tableEl.DataTable().destroy();
+            }
+            tableEl.DataTable({ responsive: true, autoWidth: false, paging: true, searching: true, order: [[2, 'asc']] });
+        } catch (error) {
+            console.error('Failed to load packages:', error);
+        }
+    }
+
+    loadPackages();
+});
+</script>
+@endpush

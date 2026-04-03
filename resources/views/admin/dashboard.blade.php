@@ -304,22 +304,53 @@
             }
         }
 
-        // Build gentle-random series that sums to target
-        function distribute(total, days = 7) {
-            const base = Array.from({length: days}, () => Math.max(0, Math.round(total / days + (Math.random() - 0.5) * total * 0.08)));
-            const diff = total - base.reduce((a,b)=>a+b,0);
-            base[base.length-1] += diff;
-            return base.map(v => Math.max(0, v));
-        }
-
         await ensureApex();
 
         // -------- Revenue (Last 7 Days) --------
-        const revenueStats = await fetchJson('/admin/api/packages/stats', {
-            total: 12, active: 8, revenue_today: 12500, revenue_week: 45200
+        const summaryPayload = await fetchJson('/admin/api/dashboard/summary', {
+            success: false,
+            data: {
+                revenue_today: 0,
+                revenue_week: 0,
+                active_sessions: 0,
+                packages_total: 0,
+                routers_online: 0,
+                routers_total: 0,
+                transactions_week: 0,
+                success_rate_week: 0,
+                weekly_revenue: [
+                    { label: 'Mon', amount: 0 },
+                    { label: 'Tue', amount: 0 },
+                    { label: 'Wed', amount: 0 },
+                    { label: 'Thu', amount: 0 },
+                    { label: 'Fri', amount: 0 },
+                    { label: 'Sat', amount: 0 },
+                    { label: 'Sun', amount: 0 }
+                ]
+            }
         });
-        const revenueData = distribute(revenueStats.revenue_week ?? 0, 7);
-        const revenueMax = Math.max(2000, Math.ceil((Math.max(...revenueData) + 1500) / 1000) * 1000);
+        const summary = summaryPayload?.data ?? {};
+        const revenueData = (summary.weekly_revenue ?? []).map(day => Number(day.amount || 0));
+        const revenueLabels = (summary.weekly_revenue ?? []).map(day => day.label || '');
+        const resolvedRevenueData = revenueData.length ? revenueData : [0, 0, 0, 0, 0, 0, 0];
+        const resolvedRevenueLabels = revenueLabels.length ? revenueLabels : ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+        const cards = document.querySelectorAll('.small-box .inner h3');
+        if (cards.length >= 4) {
+            cards[0].textContent = `KES ${Number(summary.revenue_today || 0).toLocaleString()}`;
+            cards[1].textContent = Number(summary.active_sessions || 0).toLocaleString();
+            cards[2].textContent = Number(summary.packages_total || 0).toLocaleString();
+            cards[3].textContent = `${Number(summary.routers_online || 0)}/${Number(summary.routers_total || 0)}`;
+        }
+
+        const footerBlocks = document.querySelectorAll('.description-block .description-header');
+        if (footerBlocks.length >= 4) {
+            footerBlocks[0].textContent = `KES ${Number(summary.revenue_week || 0).toLocaleString()}`;
+            footerBlocks[2].textContent = Number(summary.transactions_week || 0).toLocaleString();
+            footerBlocks[3].textContent = `${Number(summary.success_rate_week || 0)}%`;
+        }
+
+        const revenueMax = Math.max(2000, Math.ceil((Math.max(...resolvedRevenueData) + 1500) / 1000) * 1000);
         new ApexCharts(document.querySelector("#revenueChart"), {
             chart: {
                 type: 'area',
@@ -330,13 +361,13 @@
                 dropShadow: { enabled: true, top: 6, left: 0, blur: 12, opacity: 0.15 }
             },
             noData: { text: 'No revenue yet', style: { color: '#E2E8F0' } },
-            series: [{ name: 'Revenue (KES)', data: revenueData }],
+            series: [{ name: 'Revenue (KES)', data: resolvedRevenueData }],
             colors: ['#7DD3FC'],
             dataLabels: { enabled: false },
             stroke: { curve: 'smooth', width: 3 },
             markers: { size: 4, strokeWidth: 0, hover: { size: 6 } },
             xaxis: {
-                categories: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
+                categories: resolvedRevenueLabels,
                 labels: { style: { colors: '#E2E8F0', fontSize: '12px' } },
                 axisBorder: { show: false }, axisTicks: { show: false }
             },
@@ -353,9 +384,14 @@
         }).render();
 
         // -------- Package Sales Donut --------
-        const packageLabels = ['1 Hour', '3 Hours', '24 Hours', 'Weekly', 'Monthly'];
-        const packageData = distribute(Math.max(revenueStats.total ?? 12, 12), packageLabels.length)
-            .map(v => Math.max(1, v)); // ensure non-zero to avoid empty donut
+        const packageStatsPayload = await fetchJson('/admin/api/packages/stats', {
+            total: Number(summary.packages_total || 0),
+            active: Number(summary.packages_total || 0),
+        });
+        const packageLabels = ['Active Packages', 'Inactive Packages'];
+        const activePackages = Number(packageStatsPayload.active || 0);
+        const inactivePackages = Math.max(0, Number(packageStatsPayload.total || 0) - activePackages);
+        const packageData = [Math.max(activePackages, 0), Math.max(inactivePackages, 0)].map(v => Math.max(1, v));
 
         new ApexCharts(document.querySelector("#packageChart"), {
             chart: { type: 'donut', height: 300, toolbar: { show: false }, foreColor: '#E2E8F0' },

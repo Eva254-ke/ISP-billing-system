@@ -851,3 +851,103 @@ window.onafterprint = function() {
 };
 </script>
 @endpush
+
+@push('scripts')
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const tableEl = $('.data-table');
+    const tbody = document.querySelector('.data-table tbody');
+    const statsBoxes = document.querySelectorAll('.row.mb-4 .small-box .inner h3');
+
+    async function getJson(url) {
+        const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
+        if (!res.ok) {
+            throw new Error(`Request failed: ${res.status}`);
+        }
+        return res.json();
+    }
+
+    function statusBadge(status) {
+        const normalized = String(status || '').toLowerCase();
+        if (normalized === 'unused') return '<span class="badge bg-success">Unused</span>';
+        if (normalized === 'used') return '<span class="badge bg-warning text-dark">Used</span>';
+        if (normalized === 'expired') return '<span class="badge bg-danger">Expired</span>';
+        return `<span class="badge bg-secondary">${normalized || 'unknown'}</span>`;
+    }
+
+    function renderRows(rows) {
+        if (!tbody) return;
+        if (!rows.length) {
+            tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted py-4">No vouchers found</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = rows.map((row, index) => {
+            const created = row.created_at ? new Date(row.created_at).toLocaleString('en-KE') : '-';
+            const expiry = row.valid_until ? new Date(row.valid_until).toLocaleString('en-KE') : '-';
+
+            return `
+                <tr>
+                    <td><input type="checkbox" class="voucher-checkbox" value="${row.id || index + 1}"></td>
+                    <td><code>${row.code_display || row.code || '-'}</code></td>
+                    <td>${row.package_name || '-'}</td>
+                    <td>${created}</td>
+                    <td>${statusBadge(row.status)}</td>
+                    <td>${expiry}</td>
+                    <td>${row.used_at ? new Date(row.used_at).toLocaleString('en-KE') : '-'}</td>
+                    <td>
+                        <div class="btn-group">
+                            <button class="btn btn-sm btn-outline-primary" onclick="viewVoucherDetails('${row.code_display || row.code || ''}')"><i class="fas fa-eye"></i></button>
+                            <button class="btn btn-sm btn-outline-secondary" onclick="copyVoucherCode('${row.code || ''}')"><i class="fas fa-copy"></i></button>
+                        </div>
+                    </td>
+                </tr>
+            `;
+        }).join('');
+    }
+
+    function renderStats(rows) {
+        const total = rows.length;
+        const unused = rows.filter(r => String(r.status).toLowerCase() === 'unused').length;
+        const used = rows.filter(r => String(r.status).toLowerCase() === 'used').length;
+        const expired = rows.filter(r => String(r.status).toLowerCase() === 'expired').length;
+
+        if (statsBoxes.length >= 4) {
+            statsBoxes[0].textContent = total.toLocaleString();
+            statsBoxes[1].textContent = unused.toLocaleString();
+            statsBoxes[2].textContent = used.toLocaleString();
+            statsBoxes[3].textContent = expired.toLocaleString();
+        }
+    }
+
+    async function loadVouchers() {
+        try {
+            const status = document.getElementById('statusFilter')?.value || '';
+            const search = document.getElementById('voucherSearch')?.value?.trim() || '';
+            const packageIdRaw = document.getElementById('packageFilter')?.value || '';
+            const packageId = /^\d+$/.test(packageIdRaw) ? packageIdRaw : '';
+
+            const url = `/admin/api/vouchers?limit=300${status && status !== 'all' ? `&status=${encodeURIComponent(status)}` : ''}${packageId ? `&package_id=${encodeURIComponent(packageId)}` : ''}${search ? `&search=${encodeURIComponent(search)}` : ''}`;
+            const payload = await getJson(url);
+            const rows = Array.isArray(payload?.data) ? payload.data : [];
+
+            renderRows(rows);
+            renderStats(rows);
+
+            if ($.fn.DataTable.isDataTable(tableEl)) {
+                tableEl.DataTable().destroy();
+            }
+            tableEl.DataTable({ responsive: true, autoWidth: false, paging: true, searching: false, order: [[3, 'desc']] });
+        } catch (error) {
+            console.error('Failed to load vouchers:', error);
+        }
+    }
+
+    window.searchVouchers = loadVouchers;
+    document.getElementById('statusFilter')?.addEventListener('change', loadVouchers);
+    document.getElementById('packageFilter')?.addEventListener('change', loadVouchers);
+
+    loadVouchers();
+});
+</script>
+@endpush
