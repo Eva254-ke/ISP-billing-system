@@ -52,7 +52,7 @@
 
             <div class="inner">
 
-                <h3>54</h3>
+                <h3>{{ number_format((int) ($stats['active_sessions'] ?? 0)) }}</h3>
 
                 <p>Active Sessions</p>
 
@@ -72,7 +72,7 @@
 
             <div class="inner">
 
-                <h3>850 MB/s</h3>
+                <h3>{{ number_format((float) ($stats['total_bandwidth'] ?? 0), 2) }} GB</h3>
 
                 <p>Total Bandwidth</p>
 
@@ -92,7 +92,7 @@
 
             <div class="inner">
 
-                <h3>12</h3>
+                <h3>{{ number_format((int) ($stats['new_last_hour'] ?? 0)) }}</h3>
 
                 <p>New (Last Hour)</p>
 
@@ -112,7 +112,7 @@
 
             <div class="inner">
 
-                <h3>2</h3>
+                <h3>{{ number_format((int) ($stats['routers_online'] ?? 0)) }}</h3>
 
                 <p>PPPoE Servers</p>
 
@@ -193,11 +193,8 @@
                 <select class="form-select" id="statusFilter">
 
                     <option value="all">All</option>
-
                     <option value="active">Active</option>
-
                     <option value="idle">Idle</option>
-
                     <option value="blocked">Blocked</option>
 
                 </select>
@@ -276,386 +273,81 @@
             </thead>
 
             <tbody>
-
-                <!-- Client 1: Active -->
-
-                <tr>
-
-                    <td><input type="checkbox" class="client-checkbox" value="1"></td>
-
-                    <td class="action-col">
-                        <strong>pppoe001</strong>
-
-                        <div class="text-muted small">Home User</div>
-
-                    </td>
-
-                    <td><span class="badge bg-primary">PPPoE</span></td>
-
-                    <td><code>192.168.100.1</code></td>
-
-                    <td><code class="bg-light px-1">AA:BB:CC:11:22:33</code></td>
-
-                    <td>PPPoE Server 1</td>
-
-                    <td><span class="badge bg-success">Monthly 20Mbps</span></td>
-
-                                        <td>
-                        <div class="fw-semibold">2026-04-18</div>
-                        <span class="badge bg-success">30 days left</span>
-                    </td>
-                    <td class="action-col">
-                        <div class="fw-semibold text-success">24:15:45</div>
-                        <div class="text-muted small">Last online: just now</div>
-                    </td>
-
-                    <td class="action-col">
-                        <div class="progress" style="height: 6px; width: 120px;">
-
-                            <div class="progress-bar bg-success" style="width: 45%"></div>
-
-                        </div>
-
-                        <small>12.5 GB / 50 GB</small>
-
-                    </td>
-
-                    <td><span class="badge bg-success">Active</span></td>
-
-                    <td class="action-col">
-                        <div class="btn-group">
-
-                            <button class="btn btn-sm btn-outline-primary" title="View Details" onclick="viewClientDetails('pppoe001')">
-
-                                <i class="fas fa-eye"></i>
-
-                            </button>
-
-                            <button class="btn btn-sm btn-outline-warning" title="Limit Speed" onclick="limitSpeed('pppoe001')">
-
-                                <i class="fas fa-tachometer-alt"></i>
-
-                            </button>
-
-                            <button class="btn btn-sm btn-outline-danger" title="Disconnect" onclick="confirmDisconnect('pppoe001', 'AA:BB:CC:11:22:33')">
-
-                                <i class="fas fa-plug"></i>
-
-                            </button>
-
-                        </div>
-
-                    </td>
-
-                </tr>
-
-
-
-                <!-- Client 2: Active -->
-
-                <tr>
-
-                    <td><input type="checkbox" class="client-checkbox" value="2"></td>
-
-                    <td class="action-col">
-                        <strong>pppoe002</strong>
-
-                        <div class="text-muted small">Business Line</div>
-
-                    </td>
-
-                    <td><span class="badge bg-primary">PPPoE</span></td>
-
-                    <td><code>192.168.100.2</code></td>
-
-                    <td><code class="bg-light px-1">AA:BB:CC:44:55:66</code></td>
-
-                    <td>PPPoE Server 1</td>
-
-                    <td><span class="badge bg-info">Weekly 15Mbps</span></td>
-
-                                        <td>
-                        <div class="fw-semibold">2026-03-25</div>
-                        <span class="badge bg-info">6 days left</span>
-                    </td>
-                    <td>
-                        <div class="fw-semibold text-success">05:30:22</div>
-                        <div class="text-muted small">Last online: 2 min ago</div>
-                    </td>
-
-                    <td>
-
-                        <div class="progress" style="height: 6px; width: 120px;">
-
-                            <div class="progress-bar bg-warning" style="width: 68%"></div>
-
-                        </div>
-
-                        <small>34 GB / 50 GB</small>
-
-                    </td>
-
-                    <td><span class="badge bg-success">Active</span></td>
-
-                    <td>
-
-                        <div class="btn-group">
-
-                            <button class="btn btn-sm btn-outline-primary" title="View Details" onclick="viewClientDetails('pppoe002')">
-
-                                <i class="fas fa-eye"></i>
-
-                            </button>
-
-                            <button class="btn btn-sm btn-outline-warning" title="Limit Speed" onclick="limitSpeed('pppoe002')">
-
-                                <i class="fas fa-tachometer-alt"></i>
-
-                            </button>
-
-                            <button class="btn btn-sm btn-outline-danger" title="Disconnect" onclick="confirmDisconnect('pppoe002', 'AA:BB:CC:44:55:66')">
-
-                                <i class="fas fa-plug"></i>
-
-                            </button>
-
-                        </div>
-
-                    </td>
-
-                </tr>
-
-
-
-                <!-- Client 3: Idle -->
-
-                <tr class="table-warning">
-
-                    <td><input type="checkbox" class="client-checkbox" value="3"></td>
-
-                    <td>
-
-                        <strong>pppoe003</strong>
-
-                        <div class="text-muted small">Residential</div>
-
-                    </td>
-
-                    <td><span class="badge bg-primary">PPPoE</span></td>
-
-                    <td><code>192.168.100.3</code></td>
-
-                    <td><code class="bg-light px-1">AA:BB:CC:77:88:99</code></td>
-
-                    <td>PPPoE Server 2</td>
-
-                    <td><span class="badge bg-secondary">Daily 10Mbps</span></td>
-
-                                        <td>
-                        <div class="fw-semibold">2026-03-19 18:00</div>
-                        <span class="badge bg-warning text-dark">6 hrs left</span>
-                    </td>
-                    <td>
-                        <div class="fw-semibold text-warning">02:45:18</div>
-                        <div class="text-muted small">Last online: 7 min ago</div>
-                    </td>
-
-                    <td>
-
-                        <div class="progress" style="height: 6px; width: 120px;">
-
-                            <div class="progress-bar bg-info" style="width: 22%"></div>
-
-                        </div>
-
-                        <small>5.5 GB / 25 GB</small>
-
-                    </td>
-
-                    <td><span class="badge bg-warning text-dark">Idle</span></td>
-
-                    <td>
-
-                        <div class="btn-group">
-
-                            <button class="btn btn-sm btn-outline-primary" title="View Details" onclick="viewClientDetails('pppoe003')">
-
-                                <i class="fas fa-eye"></i>
-
-                            </button>
-
-                            <button class="btn btn-sm btn-outline-secondary" title="Send Message" onclick="sendClientMessage('pppoe003')">
-
-                                <i class="fas fa-comment"></i>
-
-                            </button>
-
-                            <button class="btn btn-sm btn-outline-danger" title="Disconnect" onclick="confirmDisconnect('pppoe003', 'AA:BB:CC:77:88:99')">
-
-                                <i class="fas fa-plug"></i>
-
-                            </button>
-
-                        </div>
-
-                    </td>
-
-                </tr>
-
-
-
-                <!-- Client 4: Heavy User -->
-
-                <tr>
-
-                    <td><input type="checkbox" class="client-checkbox" value="4"></td>
-
-                    <td>
-
-                        <strong>pppoe004</strong>
-
-                        <div class="text-muted small">Enterprise</div>
-
-                    </td>
-
-                    <td><span class="badge bg-primary">PPPoE</span></td>
-
-                    <td><code>192.168.100.4</code></td>
-
-                    <td><code class="bg-light px-1">AA:BB:CC:00:11:22</code></td>
-
-                    <td>PPPoE Server 1</td>
-
-                    <td><span class="badge bg-success">Monthly 50Mbps</span></td>
-
-                                        <td>
-                        <div class="fw-semibold">2026-04-10</div>
-                        <span class="badge bg-success">22 days left</span>
-                    </td>
-                    <td>
-                        <div class="fw-semibold text-success">72:10:33</div>
-                        <div class="text-muted small">Last online: just now</div>
-                    </td>
-
-                    <td>
-
-                        <div class="progress" style="height: 6px; width: 120px;">
-
-                            <div class="progress-bar bg-danger" style="width: 92%"></div>
-
-                        </div>
-
-                        <small>184 GB / 200 GB</small>
-
-                    </td>
-
-                    <td><span class="badge bg-success">Active</span></td>
-
-                    <td>
-
-                        <div class="btn-group">
-
-                            <button class="btn btn-sm btn-outline-primary" title="View Details" onclick="viewClientDetails('pppoe004')">
-
-                                <i class="fas fa-eye"></i>
-
-                            </button>
-
-                            <button class="btn btn-sm btn-outline-warning" title="Limit Speed" onclick="limitSpeed('pppoe004')">
-
-                                <i class="fas fa-tachometer-alt"></i>
-
-                            </button>
-
-                            <button class="btn btn-sm btn-outline-danger" title="Disconnect" onclick="confirmDisconnect('pppoe004', 'AA:BB:CC:00:11:22')">
-
-                                <i class="fas fa-plug"></i>
-
-                            </button>
-
-                        </div>
-
-                    </td>
-
-                </tr>
-
-
-
-                <!-- Client 5: L2TP -->
-
-                <tr>
-
-                    <td><input type="checkbox" class="client-checkbox" value="5"></td>
-
-                    <td>
-
-                        <strong>l2tp001</strong>
-
-                        <div class="text-muted small">Remote Worker</div>
-
-                    </td>
-
-                    <td><span class="badge bg-info">L2TP</span></td>
-
-                    <td><code>192.168.100.5</code></td>
-
-                    <td><code class="bg-light px-1">AA:BB:CC:33:44:55</code></td>
-
-                    <td>PPPoE Server 2</td>
-
-                    <td><span class="badge bg-secondary">Daily 10Mbps</span></td>
-
-                                        <td>
-                        <div class="fw-semibold">2026-03-19 23:59</div>
-                        <span class="badge bg-warning text-dark">Today</span>
-                    </td>
-                    <td>
-                        <div class="fw-semibold text-success">00:45:12</div>
-                        <div class="text-muted small">Last online: 1 min ago</div>
-                    </td>
-
-                    <td>
-
-                        <div class="progress" style="height: 6px; width: 120px;">
-
-                            <div class="progress-bar bg-success" style="width: 8%"></div>
-
-                        </div>
-
-                        <small>2 GB / 25 GB</small>
-
-                    </td>
-
-                    <td><span class="badge bg-success">Active</span></td>
-
-                    <td>
-
-                        <div class="btn-group">
-
-                            <button class="btn btn-sm btn-outline-primary" title="View Details" onclick="viewClientDetails('l2tp001')">
-
-                                <i class="fas fa-eye"></i>
-
-                            </button>
-
-                            <button class="btn btn-sm btn-outline-warning" title="Limit Speed" onclick="limitSpeed('l2tp001')">
-
-                                <i class="fas fa-tachometer-alt"></i>
-
-                            </button>
-
-                            <button class="btn btn-sm btn-outline-danger" title="Disconnect" onclick="confirmDisconnect('l2tp001', 'AA:BB:CC:33:44:55')">
-
-                                <i class="fas fa-plug"></i>
-
-                            </button>
-
-                        </div>
-
-                    </td>
-
-                </tr>
-
+                @forelse(($sessions ?? collect()) as $session)
+                    @php
+                        $username = $session->username ?: ($session->phone ?: 'pppoe-user');
+                        $service = str_starts_with(strtolower((string) $username), 'l2tp')
+                            ? 'L2TP'
+                            : (str_starts_with(strtolower((string) $username), 'pptp') ? 'PPTP' : 'PPPoE');
+                        $bytesTotal = (int) ($session->bytes_total ?? 0);
+                        $dataMb = $bytesTotal / 1024 / 1024;
+                        $displayUsage = $dataMb >= 1024
+                            ? number_format($dataMb / 1024, 2) . ' GB'
+                            : number_format($dataMb, 0) . ' MB';
+                        $status = strtolower((string) ($session->status ?? 'unknown'));
+                        $statusClass = match ($status) {
+                            'active' => 'bg-success',
+                            'pending' => 'bg-warning text-dark',
+                            'terminated' => 'bg-danger',
+                            default => 'bg-secondary',
+                        };
+                    @endphp
+                    <tr>
+                        <td><input type="checkbox" class="client-checkbox" value="{{ $session->id }}"></td>
+                        <td class="action-col">
+                            <strong>{{ $username }}</strong>
+                            <div class="text-muted small">{{ $session->phone ?? 'N/A' }}</div>
+                        </td>
+                        <td><span class="badge {{ $service === 'L2TP' ? 'bg-info' : 'bg-primary' }}">{{ $service }}</span></td>
+                        <td><code>{{ $session->ip_address ?? '-' }}</code></td>
+                        <td><code class="bg-light px-1">{{ $session->mac_address ?? '-' }}</code></td>
+                        <td>{{ optional($session->router)->name ?? '-' }}</td>
+                        <td><span class="badge bg-secondary">{{ optional($session->package)->name ?? '-' }}</span></td>
+                        <td>
+                            <div class="fw-semibold">{{ optional($session->expires_at)->format('Y-m-d H:i') ?? '-' }}</div>
+                            <span class="badge bg-warning text-dark">{{ optional($session->expires_at)->diffForHumans() ?? '-' }}</span>
+                        </td>
+                        <td class="action-col">
+                            <div class="fw-semibold text-success">{{ optional($session->started_at)->diffForHumans(null, true) ?? '-' }}</div>
+                            <div class="text-muted small">Last online: {{ optional($session->last_activity_at ?? $session->started_at)->diffForHumans() ?? '-' }}</div>
+                        </td>
+                        <td class="action-col">
+                            <div class="progress" style="height: 6px; width: 120px;">
+                                <div class="progress-bar bg-success" style="width: {{ min(100, (int) ($session->progress_percentage ?? 0)) }}%"></div>
+                            </div>
+                            <small>{{ $displayUsage }}</small>
+                        </td>
+                        <td><span class="badge {{ $statusClass }}">{{ ucfirst($status) }}</span></td>
+                        <td class="action-col">
+                            <div class="btn-group">
+                                <button class="btn btn-sm btn-outline-primary" title="View Details" onclick="viewClientDetails('{{ $username }}')">
+                                    <i class="fas fa-eye"></i>
+                                </button>
+                                <button class="btn btn-sm btn-outline-warning" title="Limit Speed" onclick="limitSpeed('{{ $username }}')">
+                                    <i class="fas fa-tachometer-alt"></i>
+                                </button>
+                                <button class="btn btn-sm btn-outline-danger" title="Disconnect" onclick="confirmDisconnect('{{ $username }}', '{{ $session->mac_address ?? '' }}')">
+                                    <i class="fas fa-plug"></i>
+                                </button>
+                            </div>
+                        </td>
+                    </tr>
+                @empty
+                    <tr>
+                        <td class="text-center text-muted py-4">No PPPoE sessions found</td>
+                        <td></td>
+                        <td></td>
+                        <td></td>
+                        <td></td>
+                        <td></td>
+                        <td></td>
+                        <td></td>
+                        <td></td>
+                        <td></td>
+                        <td></td>
+                        <td></td>
+                    </tr>
+                @endforelse
             </tbody>
 
         </table>
@@ -668,7 +360,7 @@
             <small class="text-muted">Last updated: <span id="lastUpdate">Just now</span></small>
         </div>
         <div class="float-end">
-            Showing 1-5 of 54 active PPPoE clients
+            Showing {{ number_format((int) (($sessions ?? collect())->count())) }} active PPPoE clients
         </div>
     </div>
 
@@ -1005,40 +697,43 @@ function viewClientDetails(username) {
 
     document.getElementById('detailUsername').textContent = username;
 
-    
+    const rows = Array.from(document.querySelectorAll('.data-table tbody tr'));
+    const targetRow = rows.find((row) => {
+        const rowUsername = row.cells?.[1]?.querySelector('strong')?.textContent?.trim();
+        return rowUsername === username;
+    });
 
-    // Mock data based on username
+    if (targetRow && targetRow.cells.length >= 11) {
+        const service = targetRow.cells[2].textContent.trim();
+        const ip = targetRow.cells[3].textContent.trim();
+        const mac = targetRow.cells[4].textContent.trim();
+        const server = targetRow.cells[5].textContent.trim();
+        const packageName = targetRow.cells[6].textContent.trim();
+        const expiry = targetRow.cells[7].querySelector('.fw-semibold')?.textContent?.trim() || targetRow.cells[7].textContent.trim();
+        const uptime = targetRow.cells[8].querySelector('.fw-semibold')?.textContent?.trim() || '-';
+        const lastOnlineText = targetRow.cells[8].querySelector('.text-muted')?.textContent?.replace('Last online:', '').trim() || '-';
+        const usageText = targetRow.cells[9].querySelector('small')?.textContent?.trim() || '-';
+        const progressWidth = targetRow.cells[9].querySelector('.progress-bar')?.style?.width || '0%';
+        const status = targetRow.cells[10].textContent.trim();
 
-    if (username === 'pppoe001') {
-
-        document.getElementById('detailStatus').className = 'badge bg-success fs-6';
-
-        document.getElementById('detailStatus').textContent = 'Active';
-
-        document.getElementById('detailService').className = 'badge bg-primary';
-
-        document.getElementById('detailService').textContent = 'PPPoE';
-
-        document.getElementById('detailAcName').textContent = 'CloudBridge-AC1';
-
-        document.getElementById('detailMac').textContent = 'AA:BB:CC:11:22:33';
-
-        document.getElementById('detailIp').textContent = '192.168.100.1';
-
-        document.getElementById('detailServer').textContent = 'PPPoE Server 1 (192.168.88.2)';
-
-        document.getElementById('detailPackage').className = 'badge bg-success';
-        document.getElementById('detailPackage').textContent = 'Monthly 20Mbps';
-        document.getElementById('detailUptime').textContent = '24:15:45';
-        document.getElementById('detailExpiry').textContent = '2026-04-18';
-        document.getElementById('detailLastOnline').textContent = 'Just now';
-        document.getElementById('detailDownload').textContent = '10.2 GB';
-        document.getElementById('detailUpload').textContent = '2.3 GB';
-        document.getElementById('detailProgress').style.width = '45%';
-        document.getElementById('detailRateLimit').textContent = '20M/10M Mbps';
-
-        document.getElementById('detailLastActivity').textContent = '1 minute ago - TCP connection to 8.8.8.8:53';
-
+        document.getElementById('detailStatus').className = `badge ${status.toLowerCase() === 'active' ? 'bg-success' : 'bg-secondary'} fs-6`;
+        document.getElementById('detailStatus').textContent = status || 'Unknown';
+        document.getElementById('detailService').className = `badge ${service === 'L2TP' ? 'bg-info' : 'bg-primary'}`;
+        document.getElementById('detailService').textContent = service || '-';
+        document.getElementById('detailAcName').textContent = server || '-';
+        document.getElementById('detailMac').textContent = mac || '-';
+        document.getElementById('detailIp').textContent = ip || '-';
+        document.getElementById('detailServer').textContent = server || '-';
+        document.getElementById('detailPackage').className = 'badge bg-secondary';
+        document.getElementById('detailPackage').textContent = packageName || '-';
+        document.getElementById('detailUptime').textContent = uptime || '-';
+        document.getElementById('detailExpiry').textContent = expiry || '-';
+        document.getElementById('detailLastOnline').textContent = lastOnlineText || '-';
+        document.getElementById('detailDownload').textContent = usageText;
+        document.getElementById('detailUpload').textContent = '-';
+        document.getElementById('detailProgress').style.width = progressWidth;
+        document.getElementById('detailRateLimit').textContent = '-';
+        document.getElementById('detailLastActivity').textContent = `${lastOnlineText || '-'} - session activity`;
     }
 
     
@@ -1513,7 +1208,22 @@ document.addEventListener('DOMContentLoaded', function() {
     function renderRows(rows) {
         if (!tbody) return;
         if (!rows.length) {
-            tbody.innerHTML = '<tr><td colspan="12" class="text-center text-muted py-4">No PPPoE sessions found</td></tr>';
+            tbody.innerHTML = `
+                <tr>
+                    <td class="text-center text-muted py-4">No PPPoE sessions found</td>
+                    <td></td>
+                    <td></td>
+                    <td></td>
+                    <td></td>
+                    <td></td>
+                    <td></td>
+                    <td></td>
+                    <td></td>
+                    <td></td>
+                    <td></td>
+                    <td></td>
+                </tr>
+            `;
             return;
         }
 

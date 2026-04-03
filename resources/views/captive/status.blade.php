@@ -204,7 +204,7 @@
 <body>
     <div class="container">
         <div class="status-card">
-            @if($payment->status === 'pending')
+            @if($statusView === 'pending')
                 <div class="spinner"></div>
                 <h1>Payment Pending</h1>
                 <p>Complete the STK Push on your phone<br><span class="phone-masked">{{ $phone }}</span></p>
@@ -227,7 +227,7 @@
                     Back to Packages
                 </a>
             
-            @elseif($payment->status === 'paid')
+            @elseif($statusView === 'paid')
                 <div class="spinner"></div>
                 <h1>Payment Received</h1>
                 <p>Activating your session on the router...</p>
@@ -244,12 +244,21 @@
                     We are configuring your access on the router.<br>
                     This takes about 10-30 seconds.
                 </div>
+
+                @if(!empty($radiusFallback))
+                <div class="info" style="border-color: var(--warning);">
+                    <strong>Connection taking longer?</strong><br>
+                    Use this only if auto-connect fails after 30 seconds:<br>
+                    Username: <strong>{{ $radiusFallback['username'] }}</strong><br>
+                    Password: {{ $radiusFallback['password_hint'] }}
+                </div>
+                @endif
                 
                 <a href="{{ url()->current() }}" class="btn btn-outline">
                     Refresh Status
                 </a>
             
-            @elseif($payment->status === 'activated')
+            @elseif($statusView === 'activated')
                 <div class="icon">✓</div>
                 <h1 style="color: var(--success);">You are Connected</h1>
                 <p>Enjoy your internet access</p>
@@ -279,7 +288,7 @@
                     Buy More Time
                 </a>
             
-            @elseif($payment->status === 'failed')
+            @elseif($statusView === 'failed')
                 <div class="icon">!</div>
                 <h1 style="color: var(--error);">Payment Failed</h1>
                 <p>{{ $payment->callback_payload['reason'] ?? 'Payment was not completed' }}</p>
@@ -320,8 +329,26 @@
     </div>
     
     <script>
-        @if($payment->status === 'activated' && $payment->package)
-        const expiresAt = new Date('{{ $payment->created_at->addMinutes($payment->package->duration_minutes) }}').getTime();
+        @if(in_array($statusView, ['pending', 'paid']))
+        setInterval(async () => {
+            try {
+                const response = await fetch('{{ route('wifi.status.check', ['phone' => $phone]) }}', {
+                    headers: { 'Accept': 'application/json' }
+                });
+                if (!response.ok) return;
+
+                const payload = await response.json();
+                if (payload && payload.session_active) {
+                    window.location.reload();
+                }
+            } catch (e) {
+                // Keep silent; page still has periodic meta refresh fallback.
+            }
+        }, 5000);
+        @endif
+
+        @if($statusView === 'activated' && !empty($activeSession?->expires_at))
+        const expiresAt = new Date('{{ $activeSession->expires_at->toIso8601String() }}').getTime();
         
         function updateCountdown() {
             const now = new Date().getTime();

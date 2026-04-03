@@ -16,7 +16,7 @@
     <div class="col-md-3">
         <div class="small-box bg-success">
             <div class="inner">
-                <h3>3</h3>
+                <h3>{{ number_format((int) ($stats['online'] ?? 0)) }}</h3>
                 <p>Online</p>
             </div>
             <div class="icon"><i class="fas fa-check-circle"></i></div>
@@ -25,7 +25,7 @@
     <div class="col-md-3">
         <div class="small-box bg-danger">
             <div class="inner">
-                <h3>1</h3>
+                <h3>{{ number_format((int) ($stats['offline'] ?? 0)) }}</h3>
                 <p>Offline</p>
             </div>
             <div class="icon"><i class="fas fa-times-circle"></i></div>
@@ -34,7 +34,7 @@
     <div class="col-md-3">
         <div class="small-box bg-primary">
             <div class="inner">
-                <h3>234</h3>
+                <h3>{{ number_format((int) ($stats['total_users'] ?? 0)) }}</h3>
                 <p>Total Users</p>
             </div>
             <div class="icon"><i class="fas fa-users"></i></div>
@@ -43,7 +43,7 @@
     <div class="col-md-3">
         <div class="small-box bg-warning">
             <div class="inner">
-                <h3>4</h3>
+                <h3>{{ number_format((int) ($stats['total'] ?? 0)) }}</h3>
                 <p>Total Routers</p>
             </div>
             <div class="icon"><i class="fas fa-server"></i></div>
@@ -59,7 +59,7 @@
             <button type="button" class="btn btn-tool" data-card-widget="collapse">
                 <i class="fas fa-minus"></i>
             </button>
-            <button type="button" class="btn btn-tool" onclick="loadRouters()">
+            <button type="button" class="btn btn-tool" onclick="refreshRouters()">
                 <i class="fas fa-sync-alt"></i> Refresh
             </button>
         </div>
@@ -81,162 +81,64 @@
                 </tr>
             </thead>
             <tbody>
-                <!-- Router 1: Main Hotspot -->
-                <tr>
-                    <td><input type="checkbox" class="router-checkbox" value="1"></td>
-                    <td>
-                        <strong>Main Hotspot</strong>
-                        <div class="text-muted small">Nairobi Office</div>
-                    </td>
-                    <td><code>192.168.88.1</code></td>
-                    <td><span class="badge bg-primary">Hotspot</span></td>
-                    <td>Nairobi HQ</td>
-                    <td>
-                        <span class="status-dot online"></span>
-                        <span class="text-success">Online</span>
-                    </td>
-                    <td>180</td>
-                    <td>
-                        <div class="progress progress-xs" style="height: 6px;">
-                            <div class="progress-bar bg-success" style="width: 45%"></div>
-                        </div>
-                        <small class="text-muted">45% / 62%</small>
-                    </td>
-                    <td>2 min ago</td>
-                    <td>
-                        <div class="btn-group">
-                            <button class="btn btn-sm btn-outline-primary" title="View">
-                                <i class="fas fa-eye"></i>
-                            </button>
-                            <button class="btn btn-sm btn-outline-secondary" title="Edit">
-                                <i class="fas fa-edit"></i>
-                            </button>
-                            <button class="btn btn-sm btn-outline-success" title="Test">
-                                <i class="fas fa-plug"></i>
-                            </button>
-                            <button class="btn btn-sm btn-outline-danger" title="Delete">
-                                <i class="fas fa-trash"></i>
-                            </button>
-                        </div>
-                    </td>
-                </tr>
-
-                <!-- Router 2: PPPoE Server -->
-                <tr>
-                    <td><input type="checkbox" class="router-checkbox" value="2"></td>
-                    <td>
-                        <strong>PPPoE Server</strong>
-                        <div class="text-muted small">Westlands Branch</div>
-                    </td>
-                    <td><code>192.168.88.2</code></td>
-                    <td><span class="badge bg-info">PPPoE</span></td>
-                    <td>Westlands</td>
-                    <td>
-                        <span class="status-dot online"></span>
-                        <span class="text-success">Online</span>
-                    </td>
-                    <td>54</td>
-                    <td>
-                        <div class="progress progress-xs" style="height: 6px;">
-                            <div class="progress-bar bg-success" style="width: 32%"></div>
-                        </div>
-                        <small class="text-muted">32% / 48%</small>
-                    </td>
-                    <td>1 min ago</td>
-                    <td>
-                        <div class="btn-group">
-                            <button class="btn btn-sm btn-outline-primary" title="View">
-                                <i class="fas fa-eye"></i>
-                            </button>
-                            <button class="btn btn-sm btn-outline-secondary" title="Edit">
-                                <i class="fas fa-edit"></i>
-                            </button>
-                            <button class="btn btn-sm btn-outline-success" title="Test">
-                                <i class="fas fa-plug"></i>
-                            </button>
-                            <button class="btn btn-sm btn-outline-danger" title="Delete">
-                                <i class="fas fa-trash"></i>
-                            </button>
-                        </div>
-                    </td>
-                </tr>
-
-                <!-- Router 3: Backup (Offline) -->
-                <tr>
-                    <td><input type="checkbox" class="router-checkbox" value="3"></td>
-                    <td>
-                        <strong>Backup Router</strong>
-                        <div class="text-muted small">Karen Branch</div>
-                    </td>
-                    <td><code>192.168.88.3</code></td>
-                    <td><span class="badge bg-primary">Hotspot</span></td>
-                    <td>Karen</td>
-                    <td>
-                        <span class="status-dot offline"></span>
-                        <span class="text-danger">Offline</span>
-                    </td>
-                    <td>0</td>
-                    <td>
-                        <span class="text-muted">-- / --</span>
-                    </td>
-                    <td>2 hours ago</td>
-                    <td>
-                        <div class="btn-group">
-                            <button class="btn btn-sm btn-outline-primary" title="View">
-                                <i class="fas fa-eye"></i>
-                            </button>
-                            <button class="btn btn-sm btn-outline-secondary" title="Edit">
-                                <i class="fas fa-edit"></i>
-                            </button>
-                            <button class="btn btn-sm btn-outline-warning" title="Reconnect">
-                                <i class="fas fa-sync"></i>
-                            </button>
-                            <button class="btn btn-sm btn-outline-danger" title="Delete">
-                                <i class="fas fa-trash"></i>
-                            </button>
-                        </div>
-                    </td>
-                </tr>
-
-                <!-- Router 4: Karen Branch -->
-                <tr>
-                    <td><input type="checkbox" class="router-checkbox" value="4"></td>
-                    <td>
-                        <strong>Karen Branch</strong>
-                        <div class="text-muted small">Karen Office</div>
-                    </td>
-                    <td><code>192.168.88.4</code></td>
-                    <td><span class="badge bg-primary">Hotspot</span></td>
-                    <td>Karen</td>
-                    <td>
-                        <span class="status-dot online"></span>
-                        <span class="text-success">Online</span>
-                    </td>
-                    <td>45</td>
-                    <td>
-                        <div class="progress progress-xs" style="height: 6px;">
-                            <div class="progress-bar bg-success" style="width: 28%"></div>
-                        </div>
-                        <small class="text-muted">28% / 41%</small>
-                    </td>
-                    <td>3 min ago</td>
-                    <td>
-                        <div class="btn-group">
-                            <button class="btn btn-sm btn-outline-primary" title="View">
-                                <i class="fas fa-eye"></i>
-                            </button>
-                            <button class="btn btn-sm btn-outline-secondary" title="Edit">
-                                <i class="fas fa-edit"></i>
-                            </button>
-                            <button class="btn btn-sm btn-outline-success" title="Test">
-                                <i class="fas fa-plug"></i>
-                            </button>
-                            <button class="btn btn-sm btn-outline-danger" title="Delete">
-                                <i class="fas fa-trash"></i>
-                            </button>
-                        </div>
-                    </td>
-                </tr>
+                @forelse(($routers ?? collect()) as $router)
+                    @php
+                        $status = strtolower((string) ($router->status ?? 'offline'));
+                        $isOnline = in_array($status, ['online', 'warning'], true);
+                        $cpu = is_null($router->cpu_usage) ? null : (int) $router->cpu_usage;
+                        $memory = is_null($router->memory_usage) ? null : (int) $router->memory_usage;
+                        $progressWidth = max((int) ($cpu ?? 0), (int) ($memory ?? 0));
+                    @endphp
+                    <tr>
+                        <td><input type="checkbox" class="router-checkbox" value="{{ $router->id }}"></td>
+                        <td>
+                            <strong>{{ $router->name }}</strong>
+                            <div class="text-muted small">{{ $router->location ?? 'N/A' }}</div>
+                        </td>
+                        <td><code>{{ $router->ip_address }}</code></td>
+                        <td><span class="badge {{ str_contains(strtolower((string) $router->name), 'pppoe') ? 'bg-info' : 'bg-primary' }}">{{ str_contains(strtolower((string) $router->name), 'pppoe') ? 'PPPoE' : 'Hotspot' }}</span></td>
+                        <td>{{ $router->location ?? 'N/A' }}</td>
+                        <td>
+                            <span class="status-dot {{ $isOnline ? 'online' : 'offline' }}"></span>
+                            <span class="{{ $isOnline ? 'text-success' : 'text-danger' }}">{{ ucfirst($status) }}</span>
+                        </td>
+                        <td>{{ number_format((int) ($router->active_sessions ?? 0)) }}</td>
+                        <td>
+                            @if(is_null($cpu) && is_null($memory))
+                                <span class="text-muted">-- / --</span>
+                            @else
+                                <div class="progress progress-xs" style="height: 6px;">
+                                    <div class="progress-bar {{ $progressWidth >= 80 ? 'bg-danger' : 'bg-success' }}" style="width: {{ $progressWidth }}%"></div>
+                                </div>
+                                <small class="text-muted">{{ $cpu ?? '--' }}% / {{ $memory ?? '--' }}%</small>
+                            @endif
+                        </td>
+                        <td>{{ optional($router->last_seen_at)->diffForHumans() ?? '-' }}</td>
+                        <td>
+                            <div class="btn-group">
+                                <button class="btn btn-sm btn-outline-primary" title="View" onclick="viewRouter({{ $router->id }})">
+                                    <i class="fas fa-eye"></i>
+                                </button>
+                                <button class="btn btn-sm btn-outline-success" title="Test" onclick="testConnection({{ $router->id }})">
+                                    <i class="fas fa-plug"></i>
+                                </button>
+                            </div>
+                        </td>
+                    </tr>
+                @empty
+                    <tr>
+                        <td class="text-center text-muted py-4">No routers available.</td>
+                        <td></td>
+                        <td></td>
+                        <td></td>
+                        <td></td>
+                        <td></td>
+                        <td></td>
+                        <td></td>
+                        <td></td>
+                        <td></td>
+                    </tr>
+                @endforelse
             </tbody>
         </table>
     </div>
@@ -247,7 +149,7 @@
             </button>
         </div>
         <div class="float-end">
-            Showing 1-4 of 4 routers
+            Showing {{ number_format((int) (($routers ?? collect())->count())) }} routers
         </div>
     </div>
 </div>
@@ -283,29 +185,21 @@
         });
     });
 
-    // Refresh Routers (Mock)
+    // Refresh Routers
     function loadRouters() {
+        if (typeof window.refreshRouters === 'function') {
+            window.refreshRouters();
+            return;
+        }
+
         Swal.fire({
             title: 'Refreshing...',
             text: 'Checking router connections',
-            allowOutsideClick: false,
-            didOpen: () => { Swal.showLoading(); }
+            timer: 1000,
+            showConfirmButton: false,
         });
-        setTimeout(() => {
-            Swal.fire('Success', 'Router status updated', 'success');
-        }, 1500);
     }
 
-    // Initialize DataTable
-    $(document).ready(function() {
-        $('.data-table').DataTable({
-            responsive: true,
-            autoWidth: false,
-            paging: false,
-            searching: true,
-            order: [[1, 'asc']]
-        });
-    });
 </script>
 @include('admin.routers.modals.add')
 @endpush
@@ -327,32 +221,52 @@ document.addEventListener('DOMContentLoaded', function() {
 
     function statusBadge(status) {
         const normalized = String(status || '').toLowerCase();
-        if (normalized === 'online') return '<span class="badge bg-success">Online</span>';
-        if (normalized === 'offline') return '<span class="badge bg-danger">Offline</span>';
-        return `<span class="badge bg-warning text-dark">${normalized || 'unknown'}</span>`;
+        const isOnline = normalized === 'online' || normalized === 'warning';
+        const colorClass = isOnline ? 'text-success' : 'text-danger';
+        const dotClass = isOnline ? 'online' : 'offline';
+        return `<span class="status-dot ${dotClass}"></span><span class="${colorClass}">${normalized || 'unknown'}</span>`;
     }
 
     function renderRows(rows) {
         if (!tbody) return;
 
         if (!rows.length) {
-            tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted py-4">No routers found</td></tr>';
+            tbody.innerHTML = `
+                <tr>
+                    <td class="text-center text-muted py-4">No routers found</td>
+                    <td></td>
+                    <td></td>
+                    <td></td>
+                    <td></td>
+                    <td></td>
+                    <td></td>
+                    <td></td>
+                    <td></td>
+                    <td></td>
+                </tr>
+            `;
             return;
         }
 
         tbody.innerHTML = rows.map((row, i) => `
             <tr>
                 <td><input type="checkbox" class="router-checkbox" value="${row.id || i + 1}"></td>
-                <td><strong>${row.name || 'Router'}</strong></td>
+                <td><strong>${row.name || 'Router'}</strong><div class="text-muted small">${row.location || 'N/A'}</div></td>
                 <td><code>${row.ip || '-'}</code></td>
+                <td><span class="badge ${(String(row.name || '').toLowerCase().includes('pppoe')) ? 'bg-info' : 'bg-primary'}">${(String(row.name || '').toLowerCase().includes('pppoe')) ? 'PPPoE' : 'Hotspot'}</span></td>
+                <td>${row.location || 'N/A'}</td>
                 <td>${statusBadge(row.status)}</td>
                 <td>${Number(row.users || 0).toLocaleString()}</td>
-                <td>${row.cpu ?? '-'}%</td>
-                <td>${row.memory ?? '-'}%</td>
+                <td>
+                    ${(row.cpu == null && row.memory == null)
+                        ? '<span class="text-muted">-- / --</span>'
+                        : `<div class="progress progress-xs" style="height: 6px;"><div class="progress-bar ${Math.max(Number(row.cpu || 0), Number(row.memory || 0)) >= 80 ? 'bg-danger' : 'bg-success'}" style="width: ${Math.max(Number(row.cpu || 0), Number(row.memory || 0))}%"></div></div><small class="text-muted">${row.cpu ?? '--'}% / ${row.memory ?? '--'}%</small>`}
+                </td>
+                <td>${row.last_seen_at ? new Date(row.last_seen_at).toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit' }) : '-'}</td>
                 <td>
                     <div class="btn-group">
-                        <button class="btn btn-sm btn-outline-primary" title="Test" onclick="testConnection(${row.id || 0})"><i class="fas fa-plug"></i></button>
-                        <button class="btn btn-sm btn-outline-secondary" title="View" onclick="viewRouter(${row.id || 0})"><i class="fas fa-eye"></i></button>
+                        <button class="btn btn-sm btn-outline-primary" title="View" onclick="viewRouter(${row.id || 0})"><i class="fas fa-eye"></i></button>
+                        <button class="btn btn-sm btn-outline-success" title="Test" onclick="testConnection(${row.id || 0})"><i class="fas fa-plug"></i></button>
                     </div>
                 </td>
             </tr>
@@ -360,8 +274,8 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     function renderStats(rows) {
-        const online = rows.filter(r => String(r.status || '').toLowerCase() === 'online').length;
-        const offline = rows.filter(r => String(r.status || '').toLowerCase() !== 'online').length;
+        const online = rows.filter(r => ['online', 'warning'].includes(String(r.status || '').toLowerCase())).length;
+        const offline = rows.filter(r => !['online', 'warning'].includes(String(r.status || '').toLowerCase())).length;
         const users = rows.reduce((sum, r) => sum + Number(r.users || 0), 0);
         if (statsBoxes.length >= 4) {
             statsBoxes[0].textContent = online.toLocaleString();
@@ -369,11 +283,16 @@ document.addEventListener('DOMContentLoaded', function() {
             statsBoxes[2].textContent = users.toLocaleString();
             statsBoxes[3].textContent = rows.length.toLocaleString();
         }
+
+        const footerCount = document.querySelector('.card-footer .float-end');
+        if (footerCount) {
+            footerCount.textContent = `Showing ${rows.length.toLocaleString()} routers`;
+        }
     }
 
     async function loadRouters() {
         try {
-            const payload = await getJson('/admin/api/routers/status');
+            const payload = await getJson('/admin/api/routers/status?live=1');
             const rows = Array.isArray(payload?.data) ? payload.data : [];
             renderRows(rows);
             renderStats(rows);

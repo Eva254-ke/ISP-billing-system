@@ -649,6 +649,16 @@ Thank you for choosing CloudBridge Networks.</textarea>
                     <small class="text-muted">Variables: {name}, {download}, {upload}, {timeout}</small>
                 </div>
 
+                <div class="form-group mb-3">
+                    <label class="form-label">RouterOS Connection Commands</label>
+                    <textarea class="form-control font-monospace" id="mikrotik_connect_commands" rows="7" readonly></textarea>
+                    <small class="text-muted">Use these commands on MikroTik terminal to connect it to FreeRADIUS.</small>
+                </div>
+
+                <button class="btn btn-outline-secondary mb-3" onclick="copyMikrotikCommands()">
+                    <i class="fas fa-copy me-1"></i>Copy Commands
+                </button>
+
                 <button class="btn btn-primary" onclick="testMikrotikConnection()">
                     <i class="fas fa-plug me-1"></i>Test MikroTik Connection
                 </button>
@@ -903,6 +913,131 @@ document.addEventListener('DOMContentLoaded', function () {
     });
 });
 
+const SETTINGS_API_BASE = '/admin/api/settings';
+let lastMikrotikCommands = [];
+
+function getCsrfToken() {
+    return document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
+}
+
+async function apiRequest(url, method = 'GET', body = null) {
+    const options = {
+        method,
+        headers: {
+            'Accept': 'application/json',
+            'X-CSRF-TOKEN': getCsrfToken(),
+        },
+    };
+
+    if (body !== null) {
+        options.headers['Content-Type'] = 'application/json';
+        options.body = JSON.stringify(body);
+    }
+
+    const response = await fetch(url, options);
+    const payload = await response.json().catch(() => ({}));
+
+    if (!response.ok || payload?.success === false) {
+        throw new Error(payload?.message || 'Request failed');
+    }
+
+    return payload;
+}
+
+function collectSettings() {
+    const settings = {};
+
+    document.querySelectorAll('.tab-content input[id], .tab-content select[id], .tab-content textarea[id]').forEach((el) => {
+        if (['backup_file', 'mikrotik_connect_commands'].includes(el.id)) {
+            return;
+        }
+
+        if (el.type === 'checkbox') {
+            settings[el.id] = !!el.checked;
+            return;
+        }
+
+        settings[el.id] = el.value;
+    });
+
+    return settings;
+}
+
+function applySettings(settings) {
+    Object.entries(settings || {}).forEach(([key, value]) => {
+        const el = document.getElementById(key);
+        if (!el) {
+            return;
+        }
+
+        if (el.type === 'checkbox') {
+            el.checked = !!value;
+            return;
+        }
+
+        el.value = value ?? '';
+    });
+}
+
+function setMikrotikCommands(commands) {
+    lastMikrotikCommands = Array.isArray(commands) ? commands : [];
+    const area = document.getElementById('mikrotik_connect_commands');
+    if (!area) {
+        return;
+    }
+
+    area.value = lastMikrotikCommands.join('\n');
+}
+
+function buildMikrotikCommandsFromInputs() {
+    const radiusServer = document.getElementById('radius_server')?.value?.trim() || 'YOUR_RADIUS_SERVER_IP';
+    const radiusPort = Number(document.getElementById('radius_port')?.value || 1812);
+    const radiusAcctPort = Number(document.getElementById('radius_acct_port')?.value || 1813);
+    const radiusSecret = document.getElementById('radius_secret')?.value?.trim() || 'YOUR_SHARED_SECRET';
+
+    return [
+        `/radius add service=hotspot,ppp address=${radiusServer} protocol=udp authentication-port=${radiusPort} accounting-port=${radiusAcctPort} secret=${radiusSecret} timeout=300ms`,
+        '/ip hotspot profile set [find] use-radius=yes',
+        '/ppp aaa set use-radius=yes accounting=yes interim-update=1m',
+        '/radius incoming set accept=yes port=3799',
+        '/radius monitor 0 once',
+    ];
+}
+
+function bindMikrotikCommandRefresh() {
+    ['radius_server', 'radius_port', 'radius_acct_port', 'radius_secret'].forEach((id) => {
+        const el = document.getElementById(id);
+        if (!el) {
+            return;
+        }
+
+        el.addEventListener('input', () => {
+            setMikrotikCommands(buildMikrotikCommandsFromInputs());
+        });
+    });
+}
+
+async function loadSettingsFromServer() {
+    try {
+        const payload = await apiRequest(SETTINGS_API_BASE, 'GET');
+        const savedSettings = payload?.data?.settings || {};
+        applySettings(savedSettings);
+
+        const commands = payload?.data?.mikrotik_commands;
+        if (Array.isArray(commands) && commands.length > 0) {
+            setMikrotikCommands(commands);
+        } else {
+            setMikrotikCommands(buildMikrotikCommandsFromInputs());
+        }
+    } catch (error) {
+        setMikrotikCommands(buildMikrotikCommandsFromInputs());
+        console.error('Failed to load settings:', error);
+    }
+}
+
+bindMikrotikCommandRefresh();
+loadSettingsFromServer();
+
 // Test M-Pesa Connection
 function testMpesaConnection() {
     Swal.fire({
@@ -966,21 +1101,61 @@ function testEmailConnection() {
 }
 
 // Test MikroTik Connection
-function testMikrotikConnection() {
+async function testMikrotikConnection() {
     Swal.fire({
         title: 'Testing MikroTik Connection...',
-        text: 'Attempting API connection to router',
+        text: 'Attempting live API connection to tenant router',
         allowOutsideClick: false,
         didOpen: () => { Swal.showLoading(); }
     });
-    setTimeout(() => {
+
+    try {
+        const payload = await apiRequest(`${SETTINGS_API_BASE}/mikrotik/test`, 'POST', {
+            settings: collectSettings(),
+        });
+
+        if (Array.isArray(payload?.commands)) {
+            setMikrotikCommands(payload.commands);
+        }
+
+        const router = payload?.router || {};
+        const data = payload?.data || {};
+
         Swal.fire({
             icon: 'success',
             title: 'Connection Successful!',
-            text: 'MikroTik API is reachable and credentials are valid.',
-            footer: 'RouterOS v7.12 • Response: 45ms'
+            html: `
+                <div class="text-start">
+                    <div><strong>Router:</strong> ${router.name || 'Unknown'} (${router.ip_address || '-'})</div>
+                    <div><strong>Status:</strong> ${router.status || 'online'}</div>
+                    <div><strong>Version:</strong> ${data.version || '-'}</div>
+                    <div><strong>CPU:</strong> ${data.cpu ?? '-'}%</div>
+                    <div><strong>Memory:</strong> ${data.memory ?? '-'}%</div>
+                    <div><strong>Uptime:</strong> ${data.uptime || '-'}</div>
+                </div>
+            `,
         });
-    }, 2000);
+    } catch (error) {
+        Swal.fire({
+            icon: 'error',
+            title: 'Connection Failed',
+            text: error.message || 'Unable to reach tenant router',
+        });
+    }
+}
+
+function copyMikrotikCommands() {
+    const area = document.getElementById('mikrotik_connect_commands');
+    const content = area?.value?.trim() || '';
+
+    if (!content) {
+        Swal.fire('Info', 'No commands to copy yet.', 'info');
+        return;
+    }
+
+    navigator.clipboard.writeText(content)
+        .then(() => Swal.fire('Copied', 'MikroTik commands copied to clipboard.', 'success'))
+        .catch(() => Swal.fire('Error', 'Unable to copy commands. Copy manually.', 'error'));
 }
 
 // Preview Portal
@@ -1159,14 +1334,23 @@ function checkUpdates() {
 }
 
 // Save All Settings
-function saveAllSettings() {
+async function saveAllSettings() {
     Swal.fire({
         title: 'Saving Settings...',
         text: 'Please wait while we save all configurations',
         allowOutsideClick: false,
         didOpen: () => { Swal.showLoading(); }
     });
-    setTimeout(() => {
+
+    try {
+        const payload = await apiRequest(SETTINGS_API_BASE, 'POST', {
+            settings: collectSettings(),
+        });
+
+        if (Array.isArray(payload?.data?.mikrotik_commands)) {
+            setMikrotikCommands(payload.data.mikrotik_commands);
+        }
+
         Swal.fire({
             icon: 'success',
             title: 'Settings Saved!',
@@ -1174,7 +1358,9 @@ function saveAllSettings() {
             timer: 2000,
             showConfirmButton: false
         });
-    }, 2000);
+    } catch (error) {
+        Swal.fire('Error', error.message || 'Failed to save settings', 'error');
+    }
 }
 
 // Reset Settings

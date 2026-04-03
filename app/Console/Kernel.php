@@ -19,6 +19,8 @@ class Kernel extends ConsoleKernel
         Commands\CheckExpiringSessions::class,
         Commands\DailyReconciliation::class,
         Commands\RouterHealthCheck::class,
+        Commands\RadiusProvisionTest::class,
+        Commands\RadiusHealthCheck::class,
     ];
 
     /**

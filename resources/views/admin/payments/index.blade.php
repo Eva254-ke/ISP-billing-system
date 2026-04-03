@@ -182,7 +182,15 @@
                     </tr>
                 @empty
                     <tr>
-                        <td colspan="9" class="text-center text-muted py-4">No payments available.</td>
+                        <td class="text-center text-muted py-4">No payments available.</td>
+                        <td></td>
+                        <td></td>
+                        <td></td>
+                        <td></td>
+                        <td></td>
+                        <td></td>
+                        <td></td>
+                        <td></td>
                     </tr>
                 @endforelse
             </tbody>
@@ -659,7 +667,19 @@ document.addEventListener('DOMContentLoaded', function() {
         if (!tbody) return;
 
         if (!rows.length) {
-            tbody.innerHTML = '<tr><td colspan="9" class="text-center text-muted py-4">No payments found</td></tr>';
+            tbody.innerHTML = `
+                <tr>
+                    <td class="text-center text-muted py-4">No payments found</td>
+                    <td></td>
+                    <td></td>
+                    <td></td>
+                    <td></td>
+                    <td></td>
+                    <td></td>
+                    <td></td>
+                    <td></td>
+                </tr>
+            `;
             return;
         }
 

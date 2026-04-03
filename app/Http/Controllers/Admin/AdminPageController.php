@@ -223,8 +223,15 @@ class AdminPageController extends Controller
 
     public function packagesCreate(): View
     {
+        $user = Auth::user();
+        $isSuperAdmin = (($user?->role ?? null) === 'super_admin');
+
         return view('admin.packages.create', [
             'tenant' => $this->resolveTenant(),
+            'isSuperAdmin' => $isSuperAdmin,
+            'tenants' => $isSuperAdmin
+                ? Tenant::query()->active()->orderBy('name')->get(['id', 'name'])
+                : collect(),
         ]);
     }
 
@@ -265,6 +272,12 @@ class AdminPageController extends Controller
     {
         $tenant = $this->resolveTenant();
 
+        $packages = Package::query()
+            ->when($tenant, fn ($query) => $query->where('tenant_id', $tenant->id))
+            ->where('is_active', true)
+            ->orderBy('name')
+            ->get(['id', 'name', 'price']);
+
         $baseVouchers = Voucher::query()
             ->when($tenant, fn ($query) => $query->where('tenant_id', $tenant->id))
             ->with('package');
@@ -291,6 +304,7 @@ class AdminPageController extends Controller
             'tenant' => $tenant,
             'vouchers' => $vouchers,
             'stats' => $stats,
+            'packages' => $packages,
         ]);
     }
 

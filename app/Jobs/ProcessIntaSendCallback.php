@@ -6,6 +6,7 @@ use App\Models\Payment;
 use App\Models\UserSession;
 use App\Services\IntaSend\IntaSendService;
 use App\Services\MikroTik\SessionManager;
+use App\Services\Radius\FreeRadiusProvisioningService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -27,11 +28,12 @@ class ProcessIntaSendCallback implements ShouldQueue
 
     public function handle(
         IntaSendService $intasend,
-        SessionManager $sessionManager
+        SessionManager $sessionManager,
+        FreeRadiusProvisioningService $radiusProvisioningService
     ): void {
         $data = $this->callbackData;
         $reference = $data['reference'] ?? null;
-        $status = $data['status'] ?? null;
+        $status = strtolower((string) ($data['status'] ?? ''));
         $amount = $data['amount'] ?? 0;
 
         Log::channel('payment')->info('Processing IntaSend callback', [
@@ -47,6 +49,7 @@ class ProcessIntaSendCallback implements ShouldQueue
         // Find payment (idempotent)
         $payment = Payment::where('intasend_reference', $reference)
             ->orWhere('reference', $reference)
+            ->orWhere('mpesa_checkout_request_id', $reference)
             ->lockForUpdate()
             ->first();
 
@@ -61,9 +64,9 @@ class ProcessIntaSendCallback implements ShouldQueue
             return;
         }
 
-        DB::transaction(function () use ($payment, $status, $amount, $intasend, $sessionManager) {
+        DB::transaction(function () use ($payment, $status, $amount, $intasend, $sessionManager, $radiusProvisioningService) {
             
-            if ($status === 'completed') {
+            if (in_array($status, ['completed', 'success', 'succeeded'], true)) {
                 // Calculate amounts
                 $fee = $amount * 0.01; // 1% IntaSend fee
                 $netAmount = $amount - $fee;
@@ -82,11 +85,45 @@ class ProcessIntaSendCallback implements ShouldQueue
                     'response_data' => json_encode($this->callbackData),
                 ]);
 
+                if ($payment->package && (bool) config('radius.enabled', false)) {
+                    [$radiusUsername, $radiusPassword] = $this->resolveRadiusCredentials($payment);
+                    $radiusExpiry = now()->addMinutes((int) $payment->package->duration_in_minutes);
+
+                    $radiusProvisioningService->provisionUser(
+                        username: $radiusUsername,
+                        password: $radiusPassword,
+                        package: $payment->package,
+                        expiresAt: $radiusExpiry,
+                    );
+
+                    $payment->update([
+                        'metadata' => array_merge($payment->metadata ?? [], [
+                            'radius' => [
+                                'provisioned' => true,
+                                'username' => $radiusUsername,
+                                'provisioned_at' => now()->toIso8601String(),
+                                'expires_at' => $radiusExpiry->toIso8601String(),
+                                'auth_hint' => 'password_equals_username',
+                            ],
+                        ]),
+                    ]);
+
+                    Log::channel('payment')->info('FreeRADIUS credentials provisioned', [
+                        'payment_id' => $payment->id,
+                        'username' => $radiusUsername,
+                    ]);
+                }
+
                 // Activate WiFi session
                 $session = $payment->session;
-                if ($session && $session->status === 'pending') {
+                if ($session && $session->status === 'pending' && $payment->package) {
                     $session->update(['status' => 'paid', 'paid_at' => now()]);
-                    $sessionManager->activateSession($session);
+                    $sessionManager->activateSession($session, $payment->package);
+                } elseif ($session && !$payment->package) {
+                    Log::channel('payment')->warning('Cannot activate session: package missing on payment', [
+                        'payment_id' => $payment->id,
+                        'session_id' => $session->id,
+                    ]);
                 }
 
                 Log::channel('payment')->info('Payment completed & WiFi activated', [
@@ -127,7 +164,7 @@ class ProcessIntaSendCallback implements ShouldQueue
                     }
                 }
 
-            } elseif ($status === 'failed' || $status === 'cancelled') {
+            } elseif (in_array($status, ['failed', 'cancelled', 'canceled'], true)) {
                 $payment->update([
                     'status' => 'failed',
                     'failed_at' => now(),
@@ -149,5 +186,20 @@ class ProcessIntaSendCallback implements ShouldQueue
             'error' => $exception->getMessage(),
             'trace' => $exception->getTraceAsString(),
         ]);
+    }
+
+    private function resolveRadiusCredentials(Payment $payment): array
+    {
+        $session = $payment->session;
+        if ($session && !empty($session->username)) {
+            return [$session->username, $session->username];
+        }
+
+        $phoneDigits = preg_replace('/\D+/', '', (string) ($payment->phone ?? ''));
+        if ($phoneDigits !== '') {
+            return ['cb' . $phoneDigits, 'cb' . $phoneDigits];
+        }
+
+        return ['cbu' . $payment->id, 'cbu' . $payment->id];
     }
 }

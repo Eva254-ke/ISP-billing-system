@@ -7,11 +7,11 @@ use App\Models\Package;
 use App\Models\Payment;
 use App\Models\Tenant;
 use App\Models\UserSession;
+use App\Models\Voucher;
 use App\Services\MikroTik\MikroTikService;
 use App\Services\IntaSend\IntaSendService;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Schema;
 
 class CaptivePortalController extends Controller
 {
@@ -21,14 +21,19 @@ class CaptivePortalController extends Controller
     public function packages(Request $request)
     {
         $tenant = $this->resolveTenant($request);
+        $phone = session('captive_phone') ?? $request->query('phone');
 
         if (!$tenant) {
-            return back()->withErrors(['No active tenant was found for this portal request.']);
+            return response()->view('captive.packages', [
+                'packages' => collect(),
+                'activeSession' => null,
+                'phone' => $phone,
+                'tenant' => null,
+                'tenantResolutionError' => 'Tenant portal not resolved. Use your tenant domain (e.g. https://your-subdomain.cloudbridge.network/wifi) or include tenant_id in the URL.',
+            ], 400);
         }
 
         session(['captive_tenant_id' => $tenant->id]);
-
-        $phone = session('captive_phone') ?? $request->query('phone');
         
         $activeSession = null;
         if ($phone) {
@@ -42,12 +47,8 @@ class CaptivePortalController extends Controller
             ->where('tenant_id', $tenant->id)
             ->where('is_active', true);
 
-        if (Schema::hasColumn('packages', 'captive_portal_visible')) {
-            $packagesQuery->where('captive_portal_visible', true)
-                ->orderBy('captive_portal_priority');
-        }
-
         $packages = $packagesQuery
+            ->orderByRaw('COALESCE(sort_order, 999999) asc')
             ->orderBy('sort_order')
             ->orderBy('price')
             ->get();
@@ -71,6 +72,10 @@ class CaptivePortalController extends Controller
             ->when($tenantId > 0, fn ($query) => $query->where('tenant_id', $tenantId))
             ->where('is_active', true)
             ->findOrFail($request->package_id);
+
+        if (!$this->isIntaSendConfigured()) {
+            return back()->withErrors(['Payment gateway is not configured. Please contact support.']);
+        }
         
         $payment = DB::transaction(function () use ($request, $package) {
             return Payment::create([
@@ -98,10 +103,12 @@ class CaptivePortalController extends Controller
         
         try {
             $intasend = app(IntaSendService::class);
-            $response = $intasend->sendStk(
-                $request->phone,
-                $package->price,
-                $payment->mpesa_checkout_request_id
+            $response = $intasend->stkPush(
+                phone: $this->normalizePhoneForStk($request->phone),
+                amount: (float) $package->price,
+                accountRef: $payment->mpesa_checkout_request_id,
+                narration: 'CloudBridge WiFi - ' . $package->name,
+                callbackUrl: (string) (config('services.intasend.callback_url') ?: route('api.payment.callback'))
             );
             
             if ($response['success']) {
@@ -123,11 +130,13 @@ class CaptivePortalController extends Controller
 
     private function resolveTenant(Request $request): ?Tenant
     {
-        $tenantId = (int) ($request->query('tenant_id') ?? session('captive_tenant_id'));
-        if ($tenantId > 0) {
-            return Tenant::active()->find($tenantId);
+        // 1) Explicit tenant_id from query has highest priority.
+        $queryTenantId = (int) $request->query('tenant_id', 0);
+        if ($queryTenantId > 0) {
+            return Tenant::active()->find($queryTenantId);
         }
 
+        // 2) Tenant domain/subdomain mapping for public captive traffic.
         $host = strtolower((string) $request->getHost());
         if ($host && !in_array($host, ['localhost', '127.0.0.1'], true)) {
             $identifier = preg_replace('/:\d+$/', '', $host);
@@ -146,7 +155,8 @@ class CaptivePortalController extends Controller
             }
         }
 
-        return Tenant::active()->orderBy('id')->first();
+        // Production safety: never fall back to session/arbitrary tenant/admin auth user.
+        return null;
     }
     
     /**
@@ -158,7 +168,7 @@ class CaptivePortalController extends Controller
 
         $payment = Payment::where('phone', $phone)
             ->when($tenantId > 0, fn ($query) => $query->where('tenant_id', $tenantId))
-            ->where('payment_channel', 'captive_portal')
+            ->whereIn('payment_channel', ['captive_portal', 'voucher'])
             ->orderBy('created_at', 'desc')
             ->first();
         
@@ -182,7 +192,7 @@ class CaptivePortalController extends Controller
                             'tenant_id' => $payment->tenant_id,
                             'router_id' => $routerId,
                             'package_id' => $payment->package_id,
-                            'username' => $this->generateUsername($payment->phone),
+                            'username' => $this->resolveRadiusUsernameFromPhone($payment->phone, $payment->id),
                             'phone' => $payment->phone,
                             'status' => 'active',
                             'started_at' => now(),
@@ -206,8 +216,27 @@ class CaptivePortalController extends Controller
                 ]);
             }
         }
+
+        $activeSession = UserSession::where('payment_id', $payment->id)
+            ->active()
+            ->first();
+
+        $statusView = (string) $payment->status;
+        if ($activeSession && in_array($statusView, ['completed', 'confirmed', 'paid', 'activated'], true)) {
+            $statusView = 'activated';
+        } elseif (in_array($statusView, ['completed', 'confirmed'], true) && !$activeSession) {
+            $statusView = 'paid';
+        }
+
+        $radiusFallback = null;
+        if ($statusView === 'paid' && !$activeSession && (bool) config('radius.enabled', false)) {
+            $radiusFallback = [
+                'username' => $this->resolveRadiusUsernameFromPhone($payment->phone, $payment->id),
+                'password_hint' => 'Use the same value as username',
+            ];
+        }
         
-        return view('captive.status', compact('payment', 'phone'));
+        return view('captive.status', compact('payment', 'phone', 'activeSession', 'statusView', 'radiusFallback'));
     }
     
     /**
@@ -215,6 +244,119 @@ class CaptivePortalController extends Controller
      */
     public function reconnect(Request $request)
     {
+        $tenantId = (int) session('captive_tenant_id');
+
+        if ($request->filled('voucher_code')) {
+            $request->validate([
+                'voucher_code' => 'required|string|max:64',
+                'phone' => 'required|regex:/^0[17]\d{8}$/',
+            ]);
+
+            $phone = trim($request->phone);
+            $voucherInput = strtoupper(trim((string) $request->voucher_code));
+            $codeCandidate = strtoupper(substr($voucherInput, strrpos('-' . $voucherInput, '-') + 1));
+
+            $voucher = Voucher::query()
+                ->when($tenantId > 0, fn ($query) => $query->where('tenant_id', $tenantId))
+                ->where('status', Voucher::STATUS_UNUSED)
+                ->where(function ($query) {
+                    $query->whereNull('valid_from')
+                        ->orWhere('valid_from', '<=', now());
+                })
+                ->where(function ($query) {
+                    $query->whereNull('valid_until')
+                        ->orWhere('valid_until', '>', now());
+                })
+                ->where(function ($query) use ($voucherInput, $codeCandidate) {
+                    $query->whereRaw('UPPER(code) = ?', [$voucherInput])
+                        ->orWhereRaw('UPPER(code) = ?', [$codeCandidate]);
+                })
+                ->with('package')
+                ->first();
+
+            if (!$voucher || !$voucher->package || !$voucher->package->is_active) {
+                return redirect()->back()
+                    ->withErrors(['Invalid or expired voucher code.'])
+                    ->withInput();
+            }
+
+            $activeSession = UserSession::where('phone', $phone)->active()->first();
+            if ($activeSession) {
+                return redirect()->route('wifi.status', ['phone' => $phone])
+                    ->with('success', 'Session already active. You are connected.');
+            }
+
+            $routerId = (int) (\App\Models\Router::query()
+                ->where('tenant_id', $voucher->tenant_id)
+                ->orderByDesc('status')
+                ->orderBy('id')
+                ->value('id') ?? 0);
+
+            if ($routerId <= 0) {
+                return redirect()->back()->withErrors(['No active router is configured for this tenant.']);
+            }
+
+            try {
+                DB::transaction(function () use ($voucher, $phone, $routerId) {
+                    $payment = Payment::create([
+                        'tenant_id' => $voucher->tenant_id,
+                        'phone' => $phone,
+                        'package_id' => $voucher->package_id,
+                        'package_name' => $voucher->package?->name,
+                        'amount' => 0,
+                        'currency' => 'KES',
+                        'mpesa_checkout_request_id' => 'VCH-' . strtoupper(uniqid()),
+                        'status' => Payment::STATUS_COMPLETED,
+                        'initiated_at' => now(),
+                        'confirmed_at' => now(),
+                        'completed_at' => now(),
+                        'payment_channel' => 'voucher',
+                        'metadata' => [
+                            'voucher_id' => $voucher->id,
+                            'voucher_code' => $voucher->code_display,
+                            'redeemed_via' => 'captive_portal',
+                        ],
+                    ]);
+
+                    UserSession::create([
+                        'tenant_id' => $voucher->tenant_id,
+                        'router_id' => $routerId,
+                        'package_id' => $voucher->package_id,
+                        'username' => $this->generateUsername($phone),
+                        'phone' => $phone,
+                        'status' => 'active',
+                        'started_at' => now(),
+                        'expires_at' => now()->copy()->addMinutes($voucher->package->duration_in_minutes ?? 60),
+                        'payment_id' => $payment->id,
+                        'voucher_id' => $voucher->id,
+                    ]);
+
+                    $voucher->update([
+                        'status' => Voucher::STATUS_USED,
+                        'used_at' => now(),
+                        'used_by_phone' => $phone,
+                        'router_id' => $routerId,
+                        'redeemed_via' => Voucher::REDEEMED_VIA_CAPTIVE_PORTAL,
+                        'redeemed_at' => now(),
+                        'redemption_count' => (int) ($voucher->redemption_count ?? 0) + 1,
+                    ]);
+                });
+
+                session(['captive_phone' => $phone]);
+
+                return redirect()->route('wifi.status', ['phone' => $phone])
+                    ->with('success', 'Voucher redeemed successfully!');
+            } catch (\Throwable $e) {
+                Log::error('Voucher redemption failed', [
+                    'voucher_id' => $voucher->id,
+                    'phone' => $phone,
+                    'error' => $e->getMessage(),
+                ]);
+
+                return redirect()->back()->withErrors(['Voucher redemption failed. Please try again.'])->withInput();
+            }
+        }
+
         $request->validate([
             'mpesa_code' => 'required|string|max:32',
             'phone' => 'required|regex:/^0[17]\d{8}$/'
@@ -227,6 +369,7 @@ class CaptivePortalController extends Controller
                 $query->where('mpesa_transaction_id', $mpesaCode)
                     ->orWhere('mpesa_receipt_number', $mpesaCode);
             })
+            ->when($tenantId > 0, fn ($query) => $query->where('tenant_id', $tenantId))
             ->where('phone', $phone)
             ->whereIn('status', ['completed', 'confirmed'])
             ->first();
@@ -301,6 +444,10 @@ class CaptivePortalController extends Controller
         
         $phone = trim($request->phone);
         $package = Package::findOrFail($request->package_id);
+
+        if (!$this->isIntaSendConfigured()) {
+            return back()->withErrors(['Payment gateway is not configured. Please contact support.']);
+        }
         
         $activeSession = UserSession::where('phone', $phone)
             ->active()
@@ -331,7 +478,13 @@ class CaptivePortalController extends Controller
         
         try {
             $intasend = app(IntaSendService::class);
-            $response = $intasend->sendStk($phone, $package->price, $payment->mpesa_checkout_request_id);
+            $response = $intasend->stkPush(
+                phone: $this->normalizePhoneForStk($phone),
+                amount: (float) $package->price,
+                accountRef: $payment->mpesa_checkout_request_id,
+                narration: 'CloudBridge Session Extension - ' . $package->name,
+                callbackUrl: (string) (config('services.intasend.callback_url') ?: route('api.payment.callback'))
+            );
             
             if ($response['success']) {
                 Log::info('Extension STK sent', [
@@ -459,5 +612,49 @@ class CaptivePortalController extends Controller
     private function generateUsername(string $phone): string
     {
         return 'u' . preg_replace('/\D+/', '', $phone) . substr((string) microtime(true), -4);
+    }
+
+    private function normalizePhoneForStk(string $phone): string
+    {
+        $digits = preg_replace('/\D+/', '', $phone);
+
+        if (str_starts_with($digits, '0')) {
+            return '254' . substr($digits, 1);
+        }
+
+        if (str_starts_with($digits, '254')) {
+            return $digits;
+        }
+
+        return $digits;
+    }
+
+    private function resolveRadiusUsernameFromPhone(string $phone, ?int $paymentId = null): string
+    {
+        $digits = preg_replace('/\D+/', '', $phone);
+        if ($digits !== '') {
+            return 'cb' . $digits;
+        }
+
+        return 'cbu' . (int) $paymentId;
+    }
+
+    private function isIntaSendConfigured(): bool
+    {
+        $publicKey = (string) config('services.intasend.public_key', '');
+        $secretKey = (string) config('services.intasend.secret_key', '');
+
+        if (trim($publicKey) === '' || trim($secretKey) === '') {
+            return false;
+        }
+
+        $placeholders = [
+            'your_public_key_here',
+            'your_secret_key_here',
+            'changeme',
+        ];
+
+        return !in_array(strtolower(trim($publicKey)), $placeholders, true)
+            && !in_array(strtolower(trim($secretKey)), $placeholders, true);
     }
 }

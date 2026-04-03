@@ -16,7 +16,7 @@
     <div class="col-md-3">
         <div class="small-box bg-primary">
             <div class="inner">
-                <h3>500</h3>
+                <h3>{{ number_format((int) ($stats['total'] ?? 0)) }}</h3>
                 <p>Total Vouchers</p>
             </div>
             <div class="icon"><i class="fas fa-ticket-alt"></i></div>
@@ -25,7 +25,7 @@
     <div class="col-md-3">
         <div class="small-box bg-success">
             <div class="inner">
-                <h3>312</h3>
+                <h3>{{ number_format((int) ($stats['unused'] ?? 0)) }}</h3>
                 <p>Unused</p>
             </div>
             <div class="icon"><i class="fas fa-check-circle"></i></div>
@@ -34,7 +34,7 @@
     <div class="col-md-3">
         <div class="small-box bg-warning">
             <div class="inner">
-                <h3>188</h3>
+                <h3>{{ number_format((int) ($stats['used'] ?? 0)) }}</h3>
                 <p>Used</p>
             </div>
             <div class="icon"><i class="fas fa-usage"></i></div>
@@ -43,7 +43,7 @@
     <div class="col-md-3">
         <div class="small-box bg-danger">
             <div class="inner">
-                <h3>24</h3>
+                <h3>{{ number_format((int) ($stats['expired'] ?? 0)) }}</h3>
                 <p>Expired</p>
             </div>
             <div class="icon"><i class="fas fa-clock"></i></div>
@@ -68,11 +68,9 @@
                 <label class="form-label">Package</label>
                 <select class="form-select" id="packageFilter">
                     <option value="all">All Packages</option>
-                    <option value="1hour">1 Hour Pass</option>
-                    <option value="3hours">3 Hours Pass</option>
-                    <option value="24hours">24 Hours Pass</option>
-                    <option value="weekly">Weekly Pass</option>
-                    <option value="monthly">Monthly Pass</option>
+                    @foreach(($packages ?? collect()) as $package)
+                        <option value="{{ $package->id }}">{{ $package->name }}</option>
+                    @endforeach
                 </select>
             </div>
         </div>
@@ -108,141 +106,56 @@
                 </tr>
             </thead>
             <tbody>
-                <!-- Voucher 1: Unused -->
-                <tr>
-                    <td><input type="checkbox" class="voucher-checkbox" value="1"></td>
-                    <td>
-                        <code class="bg-light px-2 py-1 rounded">CB-WIFI-A1B2C3</code>
-                        <button class="btn btn-sm btn-outline-secondary ms-1" onclick="copyCode('CB-WIFI-A1B2C3')" title="Copy">
-                            <i class="fas fa-copy"></i>
-                        </button>
-                    </td>
-                    <td>
-                        <span class="badge bg-secondary">1 Hour Pass</span>
-                    </td>
-                    <td>2026-03-19 10:30</td>
-                    <td class="text-muted">—</td>
-                    <td class="text-muted">—</td>
-                    <td>2026-03-20 10:30</td>
-                    <td><span class="badge bg-success">Unused</span></td>
-                    <td>
-                        <div class="btn-group">
-                            <button class="btn btn-sm btn-outline-danger" title="Delete" onclick="confirmDelete('CB-WIFI-A1B2C3')">
-                                <i class="fas fa-trash"></i>
+                @forelse(($vouchers ?? collect()) as $voucher)
+                    @php
+                        $status = strtolower((string) ($voucher->status ?? 'unused'));
+                        $statusClass = match ($status) {
+                            'unused' => 'bg-success',
+                            'used' => 'bg-info',
+                            'expired' => 'bg-danger',
+                            default => 'bg-secondary',
+                        };
+                    @endphp
+                    <tr class="{{ $status === 'expired' ? 'text-muted' : '' }}">
+                        <td><input type="checkbox" class="voucher-checkbox" value="{{ $voucher->id }}"></td>
+                        <td>
+                            <code class="bg-light px-2 py-1 rounded">{{ $voucher->code_display ?? $voucher->code }}</code>
+                            <button class="btn btn-sm btn-outline-secondary ms-1" onclick="copyCode('{{ $voucher->code ?? '' }}')" title="Copy">
+                                <i class="fas fa-copy"></i>
                             </button>
-                        </div>
-                    </td>
-                </tr>
-
-                <!-- Voucher 2: Used -->
-                <tr>
-                    <td><input type="checkbox" class="voucher-checkbox" value="2"></td>
-                    <td>
-                        <code class="bg-light px-2 py-1 rounded">CB-WIFI-D4E5F6</code>
-                        <button class="btn btn-sm btn-outline-secondary ms-1" onclick="copyCode('CB-WIFI-D4E5F6')" title="Copy">
-                            <i class="fas fa-copy"></i>
-                        </button>
-                    </td>
-                    <td>
-                        <span class="badge bg-primary">24 Hours Pass</span>
-                    </td>
-                    <td>2026-03-18 14:20</td>
-                    <td>0712***678</td>
-                    <td>2026-03-18 15:45</td>
-                    <td>2026-03-19 14:20</td>
-                    <td><span class="badge bg-info">Used</span></td>
-                    <td>
-                        <div class="btn-group">
-                            <button class="btn btn-sm btn-outline-primary" title="View Details" onclick="viewVoucherDetails('CB-WIFI-D4E5F6')">
-                                <i class="fas fa-eye"></i>
-                            </button>
-                            <button class="btn btn-sm btn-outline-danger" title="Delete" onclick="confirmDelete('CB-WIFI-D4E5F6')">
-                                <i class="fas fa-trash"></i>
-                            </button>
-                        </div>
-                    </td>
-                </tr>
-
-                <!-- Voucher 3: Expired -->
-                <tr class="text-muted">
-                    <td><input type="checkbox" class="voucher-checkbox" value="3"></td>
-                    <td>
-                        <code class="bg-light px-2 py-1 rounded">CB-WIFI-G7H8I9</code>
-                        <button class="btn btn-sm btn-outline-secondary ms-1" onclick="copyCode('CB-WIFI-G7H8I9')" title="Copy">
-                            <i class="fas fa-copy"></i>
-                        </button>
-                    </td>
-                    <td>
-                        <span class="badge bg-secondary">3 Hours Pass</span>
-                    </td>
-                    <td>2026-03-15 09:00</td>
-                    <td class="text-muted">—</td>
-                    <td class="text-muted">—</td>
-                    <td class="text-danger">2026-03-16 09:00</td>
-                    <td><span class="badge bg-danger">Expired</span></td>
-                    <td>
-                        <div class="btn-group">
-                            <button class="btn btn-sm btn-outline-danger" title="Delete" onclick="confirmDelete('CB-WIFI-G7H8I9')">
-                                <i class="fas fa-trash"></i>
-                            </button>
-                        </div>
-                    </td>
-                </tr>
-
-                <!-- Voucher 4: Unused -->
-                <tr>
-                    <td><input type="checkbox" class="voucher-checkbox" value="4"></td>
-                    <td>
-                        <code class="bg-light px-2 py-1 rounded">CB-WIFI-J0K1L2</code>
-                        <button class="btn btn-sm btn-outline-secondary ms-1" onclick="copyCode('CB-WIFI-J0K1L2')" title="Copy">
-                            <i class="fas fa-copy"></i>
-                        </button>
-                    </td>
-                    <td>
-                        <span class="badge bg-success">Weekly Pass</span>
-                    </td>
-                    <td>2026-03-19 11:15</td>
-                    <td class="text-muted">—</td>
-                    <td class="text-muted">—</td>
-                    <td>2026-03-26 11:15</td>
-                    <td><span class="badge bg-success">Unused</span></td>
-                    <td>
-                        <div class="btn-group">
-                            <button class="btn btn-sm btn-outline-danger" title="Delete" onclick="confirmDelete('CB-WIFI-J0K1L2')">
-                                <i class="fas fa-trash"></i>
-                            </button>
-                        </div>
-                    </td>
-                </tr>
-
-                <!-- Voucher 5: Used -->
-                <tr>
-                    <td><input type="checkbox" class="voucher-checkbox" value="5"></td>
-                    <td>
-                        <code class="bg-light px-2 py-1 rounded">CB-WIFI-M3N4O5</code>
-                        <button class="btn btn-sm btn-outline-secondary ms-1" onclick="copyCode('CB-WIFI-M3N4O5')" title="Copy">
-                            <i class="fas fa-copy"></i>
-                        </button>
-                    </td>
-                    <td>
-                        <span class="badge bg-secondary">1 Hour Pass</span>
-                    </td>
-                    <td>2026-03-19 08:45</td>
-                    <td>0723***789</td>
-                    <td>2026-03-19 09:10</td>
-                    <td>2026-03-19 10:45</td>
-                    <td><span class="badge bg-info">Used</span></td>
-                    <td>
-                        <div class="btn-group">
-                            <button class="btn btn-sm btn-outline-primary" title="View Details" onclick="viewVoucherDetails('CB-WIFI-M3N4O5')">
-                                <i class="fas fa-eye"></i>
-                            </button>
-                            <button class="btn btn-sm btn-outline-danger" title="Delete" onclick="confirmDelete('CB-WIFI-M3N4O5')">
-                                <i class="fas fa-trash"></i>
-                            </button>
-                        </div>
-                    </td>
-                </tr>
+                        </td>
+                        <td>
+                            <span class="badge bg-secondary">{{ optional($voucher->package)->name ?? '-' }}</span>
+                        </td>
+                        <td>{{ optional($voucher->created_at)->format('Y-m-d H:i') ?? '-' }}</td>
+                        <td>{{ $voucher->used_by_phone ?? '—' }}</td>
+                        <td>{{ optional($voucher->used_at)->format('Y-m-d H:i') ?? '—' }}</td>
+                        <td class="{{ optional($voucher->valid_until)?->isPast() ? 'text-danger' : '' }}">{{ optional($voucher->valid_until)->format('Y-m-d H:i') ?? '-' }}</td>
+                        <td><span class="badge {{ $statusClass }}">{{ ucfirst($status) }}</span></td>
+                        <td>
+                            <div class="btn-group">
+                                <button class="btn btn-sm btn-outline-primary" title="View Details" onclick="viewVoucherDetails({{ (int) $voucher->id }}, '{{ $voucher->code_display ?? $voucher->code }}')">
+                                    <i class="fas fa-eye"></i>
+                                </button>
+                                <button class="btn btn-sm btn-outline-danger" title="Delete" onclick="confirmDelete({{ (int) $voucher->id }}, '{{ $voucher->code_display ?? $voucher->code }}')">
+                                    <i class="fas fa-trash"></i>
+                                </button>
+                            </div>
+                        </td>
+                    </tr>
+                @empty
+                    <tr>
+                        <td class="text-center text-muted py-4">No vouchers available.</td>
+                        <td></td>
+                        <td></td>
+                        <td></td>
+                        <td></td>
+                        <td></td>
+                        <td></td>
+                        <td></td>
+                        <td></td>
+                    </tr>
+                @endforelse
             </tbody>
         </table>
     </div>
@@ -253,7 +166,7 @@
             </button>
         </div>
         <div class="float-end">
-            Showing 1-5 of 500 vouchers
+            Showing {{ number_format((int) (($vouchers ?? collect())->count())) }} vouchers
         </div>
     </div>
 </div>
@@ -381,11 +294,9 @@
                             <label class="form-label">Select Package *</label>
                             <select class="form-select" name="package_id" required>
                                 <option value="">-- Choose Package --</option>
-                                <option value="1">1 Hour Pass - KES 50</option>
-                                <option value="2">3 Hours Pass - KES 100</option>
-                                <option value="3">24 Hours Pass - KES 400</option>
-                                <option value="4">Weekly Pass - KES 2,000</option>
-                                <option value="5">Monthly Pass - KES 5,000</option>
+                                @foreach(($packages ?? collect()) as $package)
+                                    <option value="{{ $package->id }}">{{ $package->name }} - KES {{ number_format((float) $package->price, 0) }}</option>
+                                @endforeach
                             </select>
                         </div>
                         <div class="col-md-6 mb-3">
@@ -477,39 +388,39 @@
                 <div class="row mb-3">
                     <div class="col-6">
                         <label class="form-label text-muted">Package</label>
-                        <p class="mb-0"><strong>24 Hours Pass</strong></p>
+                        <p class="mb-0"><strong id="detailPackage">-</strong></p>
                     </div>
                     <div class="col-6">
                         <label class="form-label text-muted">Status</label>
-                        <p class="mb-0"><span class="badge bg-info">Used</span></p>
+                        <p class="mb-0"><span class="badge bg-secondary" id="detailStatus">Unknown</span></p>
                     </div>
                 </div>
                 <div class="row mb-3">
                     <div class="col-6">
                         <label class="form-label text-muted">Generated</label>
-                        <p class="mb-0">2026-03-18 14:20</p>
+                        <p class="mb-0" id="detailGenerated">-</p>
                     </div>
                     <div class="col-6">
                         <label class="form-label text-muted">Expires</label>
-                        <p class="mb-0">2026-03-19 14:20</p>
+                        <p class="mb-0" id="detailExpires">-</p>
                     </div>
                 </div>
                 <div class="mb-3">
                     <label class="form-label text-muted">Used By</label>
-                    <p class="mb-0"><strong>0712***678</strong></p>
+                    <p class="mb-0"><strong id="detailUsedBy">-</strong></p>
                 </div>
                 <div class="mb-3">
                     <label class="form-label text-muted">Used At</label>
-                    <p class="mb-0">2026-03-18 15:45 (25 minutes after generation)</p>
+                    <p class="mb-0" id="detailUsedAt">-</p>
                 </div>
                 <div class="mb-3">
                     <label class="form-label text-muted">Router</label>
-                    <p class="mb-0">Main Hotspot (192.168.88.1)</p>
+                    <p class="mb-0" id="detailRouter">-</p>
                 </div>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal" data-dismiss="modal">Close</button>
-                <button type="button" class="btn btn-danger" onclick="confirmDelete(document.getElementById('detailCode').textContent)">
+                <button type="button" class="btn btn-danger" onclick="confirmDelete(window.__detailVoucherId, document.getElementById('detailCode').textContent)">
                     <i class="fas fa-trash me-1"></i>Delete Voucher
                 </button>
             </div>
@@ -540,7 +451,7 @@ function setVoucherQty(value) {
     }
 }
 
-// Generate vouchers (Mock)
+// Generate vouchers
 function generateVouchers() {
     const form = document.getElementById('generateVouchersForm');
     const packageSelect = form.querySelector('select[name="package_id"]');
@@ -564,24 +475,53 @@ function generateVouchers() {
         allowOutsideClick: false,
         didOpen: () => { Swal.showLoading(); }
     });
-    
-    setTimeout(() => {
+
+    const payload = {
+        package_id: packageSelect.value,
+        quantity: qty,
+        validity_hours: Number(form.querySelector('input[name="validity_hours"]').value || 24),
+        prefix: form.querySelector('input[name="prefix"]').value.trim(),
+        batch_label: form.querySelector('input[name="batch_label"]').value.trim(),
+    };
+
+    fetch('/admin/api/vouchers/generate', {
+        method: 'POST',
+        headers: {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
+            'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '',
+        },
+        body: JSON.stringify(payload),
+    })
+    .then(async (response) => {
+        const json = await response.json().catch(() => ({}));
+        if (!response.ok || !json?.success) {
+            const message = json?.message || 'Failed to generate vouchers';
+            throw new Error(message);
+        }
+        return json;
+    })
+    .then((json) => {
         const outputValue = outputOption ? outputOption.value : 'none';
         const outputLabel = outputOption ? outputOption.nextElementSibling.textContent.trim() : 'No Print';
-        const batchLabel = form.querySelector('input[name="batch_label"]').value.trim();
         const voucherLabel = qty === 1 ? 'Voucher' : 'Vouchers';
+        const generated = Array.isArray(json?.data?.vouchers) ? json.data.vouchers : [];
+        window.__lastGeneratedVouchers = generated;
+        window.__lastGeneratedPackage = json?.data?.package?.name || packageSelect.options[packageSelect.selectedIndex].text;
+        window.__lastGeneratedValidityHours = json?.data?.validity_hours || payload.validity_hours;
+
         const confirmText = outputValue === 'none' ? 'Done' : 'Print Now';
         const showCancel = outputValue !== 'none';
 
         Swal.fire({
             icon: 'success',
-            title: `${qty} ${voucherLabel} Generated!`,
+            title: `${generated.length || qty} ${voucherLabel} Generated!`,
             html: `
                 <div class="text-start">
-                    <p><strong>Package:</strong> ${packageSelect.options[packageSelect.selectedIndex].text}</p>
-                    <p><strong>Validity:</strong> ${form.querySelector('input[name="validity_hours"]').value} hours</p>
+                    <p><strong>Package:</strong> ${window.__lastGeneratedPackage}</p>
+                    <p><strong>Validity:</strong> ${window.__lastGeneratedValidityHours} hours</p>
                     <p><strong>Output:</strong> ${outputLabel}</p>
-                    ${batchLabel ? `<p><strong>Batch:</strong> ${batchLabel}</p>` : ''}
+                    <p><strong>Batch:</strong> ${json?.data?.batch_name || '-'}</p>
                 </div>
             `,
             showCancelButton: showCancel,
@@ -591,26 +531,59 @@ function generateVouchers() {
         }).then((result) => {
             if (result.isConfirmed && outputValue !== 'none') {
                 printVouchers(outputValue);
+                return;
             }
             location.reload();
         });
-    }, 2000);
+    })
+    .catch((error) => {
+        Swal.fire('Error', error.message || 'Failed to generate vouchers', 'error');
+    });
 }
 
 // View voucher details
-function viewVoucherDetails(code) {
-    document.getElementById('detailCode').textContent = code;
-    if (window.CBModal && window.CBModal.showById) {
-        window.CBModal.showById('voucherDetailsModal');
-    } else if (window.bootstrap && window.bootstrap.Modal) {
-        new bootstrap.Modal(document.getElementById('voucherDetailsModal')).show();
-    } else if (window.jQuery && window.jQuery.fn && window.jQuery.fn.modal) {
-        window.jQuery('#voucherDetailsModal').modal('show');
+async function viewVoucherDetails(id, code) {
+    try {
+        window.__detailVoucherId = id;
+
+        const response = await fetch(`/admin/api/vouchers/${id}`, {
+            headers: { 'Accept': 'application/json' }
+        });
+        const payload = await response.json().catch(() => ({}));
+
+        if (!response.ok || !payload?.success) {
+            throw new Error(payload?.message || 'Failed to load voucher details');
+        }
+
+        const row = payload.data || {};
+        const status = String(row.status || 'unknown').toLowerCase();
+        const statusClass = status === 'unused' ? 'bg-success' : (status === 'used' ? 'bg-warning text-dark' : (status === 'expired' ? 'bg-danger' : 'bg-secondary'));
+
+        document.getElementById('detailCode').textContent = row.code_display || code || '-';
+        document.getElementById('detailPackage').textContent = row.package_name || '-';
+        const statusEl = document.getElementById('detailStatus');
+        statusEl.className = `badge ${statusClass}`;
+        statusEl.textContent = status.charAt(0).toUpperCase() + status.slice(1);
+        document.getElementById('detailGenerated').textContent = row.created_at ? new Date(row.created_at).toLocaleString('en-KE') : '-';
+        document.getElementById('detailExpires').textContent = row.valid_until ? new Date(row.valid_until).toLocaleString('en-KE') : '-';
+        document.getElementById('detailUsedBy').textContent = row.used_by_phone || '-';
+        document.getElementById('detailUsedAt').textContent = row.used_at ? new Date(row.used_at).toLocaleString('en-KE') : '-';
+        document.getElementById('detailRouter').textContent = row.router_name || '-';
+
+        if (window.CBModal && window.CBModal.showById) {
+            window.CBModal.showById('voucherDetailsModal');
+        } else if (window.bootstrap && window.bootstrap.Modal) {
+            new bootstrap.Modal(document.getElementById('voucherDetailsModal')).show();
+        } else if (window.jQuery && window.jQuery.fn && window.jQuery.fn.modal) {
+            window.jQuery('#voucherDetailsModal').modal('show');
+        }
+    } catch (error) {
+        Swal.fire('Error', error.message || 'Failed to load voucher details', 'error');
     }
 }
 
 // Confirm delete
-function confirmDelete(code) {
+function confirmDelete(id, code) {
     Swal.fire({
         title: 'Delete Voucher?',
         text: `Are you sure you want to delete "${code}"? This cannot be undone.`,
@@ -625,10 +598,28 @@ function confirmDelete(code) {
                 allowOutsideClick: false,
                 didOpen: () => { Swal.showLoading(); }
             });
-            setTimeout(() => {
+
+            fetch(`/admin/api/vouchers/${id}`, {
+                method: 'DELETE',
+                headers: {
+                    'Accept': 'application/json',
+                    'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '',
+                },
+            })
+            .then(async (response) => {
+                const payload = await response.json().catch(() => ({}));
+                if (!response.ok || !payload?.success) {
+                    throw new Error(payload?.message || 'Failed to delete voucher');
+                }
+                return payload;
+            })
+            .then(() => {
                 Swal.fire('Deleted!', `Voucher ${code} has been deleted.`, 'success')
                     .then(() => location.reload());
-            }, 1000);
+            })
+            .catch((error) => {
+                Swal.fire('Error', error.message || 'Failed to delete voucher', 'error');
+            });
         }
     });
 }
@@ -649,8 +640,33 @@ document.getElementById('bulkDelete').addEventListener('click', function() {
         confirmButtonColor: '#EF4444'
     }).then((result) => {
         if (result.isConfirmed) {
-            Swal.fire('Deleted!', 'Selected vouchers have been deleted.', 'success')
-                .then(() => location.reload());
+            const ids = Array.from(selected)
+                .map((cb) => Number(cb.value))
+                .filter((id) => Number.isInteger(id) && id > 0);
+
+            fetch('/admin/api/vouchers/bulk-delete', {
+                method: 'POST',
+                headers: {
+                    'Accept': 'application/json',
+                    'Content-Type': 'application/json',
+                    'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '',
+                },
+                body: JSON.stringify({ voucher_ids: ids }),
+            })
+            .then(async (response) => {
+                const payload = await response.json().catch(() => ({}));
+                if (!response.ok || !payload?.success) {
+                    throw new Error(payload?.message || 'Failed to delete selected vouchers');
+                }
+                return payload;
+            })
+            .then((payload) => {
+                Swal.fire('Deleted!', payload.message || 'Selected vouchers deleted.', 'success')
+                    .then(() => location.reload());
+            })
+            .catch((error) => {
+                Swal.fire('Error', error.message || 'Failed to delete selected vouchers', 'error');
+            });
         }
     });
 });
@@ -662,37 +678,20 @@ document.getElementById('selectAll').addEventListener('change', function() {
     });
 });
 
-// Filter vouchers (Mock)
-document.getElementById('statusFilter').addEventListener('change', filterVouchers);
-document.getElementById('packageFilter').addEventListener('change', filterVouchers);
-
-function filterVouchers() {
-    const status = document.getElementById('statusFilter').value;
-    const pkg = document.getElementById('packageFilter').value;
-    
-    Swal.fire({
-        title: 'Filtering...',
-        text: `Showing ${status} vouchers for ${pkg === 'all' ? 'all packages' : pkg}`,
-        timer: 800,
-        showConfirmButton: false
-    });
-}
-
-// Search vouchers
-function searchVouchers() {
-    const query = document.getElementById('voucherSearch').value;
-    if (!query) return;
-    
-    Swal.fire({
-        title: 'Searching...',
-        text: `Looking for "${query}"`,
-        timer: 800,
-        showConfirmButton: false
-    });
-}
+// Search vouchers is bound to live loader below.
+function searchVouchers() {}
 
 // Print vouchers - List or Card format
 function printVouchers(format = 'list') {
+    const generatedVouchers = Array.isArray(window.__lastGeneratedVouchers) ? window.__lastGeneratedVouchers : [];
+    const generatedPackage = window.__lastGeneratedPackage || 'WiFi Package';
+    const generatedValidity = Number(window.__lastGeneratedValidityHours || 24);
+
+    if (!generatedVouchers.length) {
+        Swal.fire('Info', 'Generate vouchers first to print them.', 'info');
+        return;
+    }
+
     const printArea = document.getElementById('printArea');
     const today = new Date().toLocaleDateString('en-KE', { 
         year: 'numeric', month: 'long', day: 'numeric' 
@@ -705,30 +704,14 @@ function printVouchers(format = 'list') {
                 <h2>CloudBridge Networks</h2>
                 <p>Voucher Cards - Printed: ${today}</p>
             </div>
-            <div class="voucher-card">
-                <div class="package">1 Hour Pass</div>
-                <div class="code">CB-WIFI-A1B2C3</div>
-                <div class="validity">Valid: 24 hours from first use</div>
-                <div class="footer">CloudBridge Networks • www.cloudbridge.network</div>
-            </div>
-            <div class="voucher-card">
-                <div class="package">1 Hour Pass</div>
-                <div class="code">CB-WIFI-D4E5F6</div>
-                <div class="validity">Valid: 24 hours from first use</div>
-                <div class="footer">CloudBridge Networks • www.cloudbridge.network</div>
-            </div>
-            <div class="voucher-card">
-                <div class="package">24 Hours Pass</div>
-                <div class="code">CB-WIFI-G7H8I9</div>
-                <div class="validity">Valid: 24 hours from first use</div>
-                <div class="footer">CloudBridge Networks • www.cloudbridge.network</div>
-            </div>
-            <div class="voucher-card">
-                <div class="package">Weekly Pass</div>
-                <div class="code">CB-WIFI-J0K1L2</div>
-                <div class="validity">Valid: 7 days from first use</div>
-                <div class="footer">CloudBridge Networks • www.cloudbridge.network</div>
-            </div>
+            ${generatedVouchers.map((voucher) => `
+                <div class="voucher-card">
+                    <div class="package">${generatedPackage}</div>
+                    <div class="code">${voucher.code_display || voucher.code || '-'}</div>
+                    <div class="validity">Valid: ${generatedValidity} hours from first use</div>
+                    <div class="footer">CloudBridge Networks • www.cloudbridge.network</div>
+                </div>
+            `).join('')}
             <div class="no-print" style="text-align: center; margin-top: 20px;">
                 <button class="btn btn-primary" onclick="window.print()">
                     <i class="fas fa-print me-2"></i>Print Now
@@ -757,46 +740,16 @@ function printVouchers(format = 'list') {
                     </tr>
                 </thead>
                 <tbody>
-                    <tr>
-                        <td>1</td>
-                        <td><code>CB-WIFI-A1B2C3</code></td>
-                        <td>1 Hour Pass</td>
-                        <td>2026-03-19 10:30</td>
-                        <td>Unused</td>
-                        <td>2026-03-20 10:30</td>
-                    </tr>
-                    <tr>
-                        <td>2</td>
-                        <td><code>CB-WIFI-D4E5F6</code></td>
-                        <td>24 Hours Pass</td>
-                        <td>2026-03-18 14:20</td>
-                        <td>Used</td>
-                        <td>2026-03-19 14:20</td>
-                    </tr>
-                    <tr>
-                        <td>3</td>
-                        <td><code>CB-WIFI-G7H8I9</code></td>
-                        <td>3 Hours Pass</td>
-                        <td>2026-03-15 09:00</td>
-                        <td>Expired</td>
-                        <td>2026-03-16 09:00</td>
-                    </tr>
-                    <tr>
-                        <td>4</td>
-                        <td><code>CB-WIFI-J0K1L2</code></td>
-                        <td>Weekly Pass</td>
-                        <td>2026-03-19 11:15</td>
-                        <td>Unused</td>
-                        <td>2026-03-26 11:15</td>
-                    </tr>
-                    <tr>
-                        <td>5</td>
-                        <td><code>CB-WIFI-M3N4O5</code></td>
-                        <td>1 Hour Pass</td>
-                        <td>2026-03-19 08:45</td>
-                        <td>Used</td>
-                        <td>2026-03-19 10:45</td>
-                    </tr>
+                    ${generatedVouchers.map((voucher, index) => `
+                        <tr>
+                            <td>${index + 1}</td>
+                            <td><code>${voucher.code_display || voucher.code || '-'}</code></td>
+                            <td>${generatedPackage}</td>
+                            <td>${voucher.created_at ? new Date(voucher.created_at).toLocaleString('en-KE') : '-'}</td>
+                            <td>Unused</td>
+                            <td>${voucher.valid_until ? new Date(voucher.valid_until).toLocaleString('en-KE') : '-'}</td>
+                        </tr>
+                    `).join('')}
                 </tbody>
             </table>
             <div class="no-print" style="text-align: center; margin-top: 20px;">
@@ -834,17 +787,6 @@ function closePrint() {
     document.getElementById('printArea').innerHTML = '';
 }
 
-// Initialize DataTable
-$(document).ready(function() {
-    $('.data-table').DataTable({
-        responsive: true,
-        autoWidth: false,
-        paging: true,
-        searching: true,
-        order: [[3, 'desc']]
-    });
-});
-
 // Handle browser print completion
 window.onafterprint = function() {
     closePrint();
@@ -878,27 +820,43 @@ document.addEventListener('DOMContentLoaded', function() {
     function renderRows(rows) {
         if (!tbody) return;
         if (!rows.length) {
-            tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted py-4">No vouchers found</td></tr>';
+            tbody.innerHTML = `
+                <tr>
+                    <td class="text-center text-muted py-4">No vouchers found</td>
+                    <td></td>
+                    <td></td>
+                    <td></td>
+                    <td></td>
+                    <td></td>
+                    <td></td>
+                    <td></td>
+                    <td></td>
+                </tr>
+            `;
             return;
         }
 
         tbody.innerHTML = rows.map((row, index) => {
             const created = row.created_at ? new Date(row.created_at).toLocaleString('en-KE') : '-';
+            const usedAt = row.used_at ? new Date(row.used_at).toLocaleString('en-KE') : '—';
             const expiry = row.valid_until ? new Date(row.valid_until).toLocaleString('en-KE') : '-';
 
             return `
                 <tr>
                     <td><input type="checkbox" class="voucher-checkbox" value="${row.id || index + 1}"></td>
-                    <td><code>${row.code_display || row.code || '-'}</code></td>
-                    <td>${row.package_name || '-'}</td>
+                    <td><code class="bg-light px-2 py-1 rounded">${row.code_display || row.code || '-'}</code>
+                        <button class="btn btn-sm btn-outline-secondary ms-1" onclick="copyCode('${(row.code || '').replace(/'/g, "\\'")}')" title="Copy"><i class="fas fa-copy"></i></button>
+                    </td>
+                    <td><span class="badge bg-secondary">${row.package_name || '-'}</span></td>
                     <td>${created}</td>
-                    <td>${statusBadge(row.status)}</td>
+                    <td>${row.used_by_phone || '—'}</td>
+                    <td>${usedAt}</td>
                     <td>${expiry}</td>
-                    <td>${row.used_at ? new Date(row.used_at).toLocaleString('en-KE') : '-'}</td>
+                    <td>${statusBadge(row.status)}</td>
                     <td>
                         <div class="btn-group">
-                            <button class="btn btn-sm btn-outline-primary" onclick="viewVoucherDetails('${row.code_display || row.code || ''}')"><i class="fas fa-eye"></i></button>
-                            <button class="btn btn-sm btn-outline-secondary" onclick="copyVoucherCode('${row.code || ''}')"><i class="fas fa-copy"></i></button>
+                            <button class="btn btn-sm btn-outline-primary" onclick="viewVoucherDetails(${row.id || 0}, '${(row.code_display || row.code || '').replace(/'/g, "\\'")}')"><i class="fas fa-eye"></i></button>
+                            <button class="btn btn-sm btn-outline-danger" onclick="confirmDelete(${row.id || 0}, '${(row.code_display || row.code || '').replace(/'/g, "\\'")}')"><i class="fas fa-trash"></i></button>
                         </div>
                     </td>
                 </tr>
@@ -938,6 +896,11 @@ document.addEventListener('DOMContentLoaded', function() {
                 tableEl.DataTable().destroy();
             }
             tableEl.DataTable({ responsive: true, autoWidth: false, paging: true, searching: false, order: [[3, 'desc']] });
+
+            const footerCount = document.querySelector('.card-footer .float-end');
+            if (footerCount) {
+                footerCount.textContent = `Showing ${rows.length.toLocaleString()} vouchers`;
+            }
         } catch (error) {
             console.error('Failed to load vouchers:', error);
         }

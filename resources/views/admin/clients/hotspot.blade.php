@@ -52,7 +52,7 @@
 
             <div class="inner">
 
-                <h3>180</h3>
+                <h3>{{ number_format((int) ($stats['active_sessions'] ?? 0)) }}</h3>
 
                 <p>Active Sessions</p>
 
@@ -72,7 +72,7 @@
 
             <div class="inner">
 
-                <h3>2.5 GB/s</h3>
+                <h3>{{ number_format((float) ($stats['total_bandwidth'] ?? 0), 2) }} GB</h3>
 
                 <p>Total Bandwidth</p>
 
@@ -92,7 +92,7 @@
 
             <div class="inner">
 
-                <h3>45</h3>
+                <h3>{{ number_format((int) ($stats['new_last_hour'] ?? 0)) }}</h3>
 
                 <p>New (Last Hour)</p>
 
@@ -112,7 +112,7 @@
 
             <div class="inner">
 
-                <h3>12</h3>
+                <h3>{{ number_format((int) ($stats['routers_online'] ?? 0)) }}</h3>
 
                 <p>Routers Online</p>
 
@@ -158,12 +158,6 @@
 
                     <option value="all">All Routers</option>
 
-                    <option value="1" selected>Main Hotspot (192.168.88.1)</option>
-
-                    <option value="2">PPPoE Server (192.168.88.2)</option>
-
-                    <option value="3">Karen Branch (192.168.88.4)</option>
-
                 </select>
 
             </div>
@@ -175,11 +169,8 @@
                 <select class="form-select" id="statusFilter">
 
                     <option value="all">All</option>
-
                     <option value="active">Active</option>
-
                     <option value="idle">Idle</option>
-
                     <option value="blocked">Blocked</option>
 
                 </select>
@@ -193,14 +184,6 @@
                 <select class="form-select" id="packageFilter">
 
                     <option value="all">All Packages</option>
-
-                    <option value="1hour">1 Hour</option>
-
-                    <option value="3hours">3 Hours</option>
-
-                    <option value="24hours">24 Hours</option>
-
-                    <option value="weekly">Weekly</option>
 
                 </select>
 
@@ -278,376 +261,76 @@
             </thead>
 
             <tbody>
-
-                <!-- Client 1: Active -->
-
-                <tr>
-
-                    <td><input type="checkbox" class="client-checkbox" value="1"></td>
-
-                    <td class="action-col">
-                        <strong>user001</strong>
-
-                        <div class="text-muted small">John M.</div>
-
-                    </td>
-
-                    <td><code class="bg-light px-1">AA:BB:CC:11:22:33</code></td>
-
-                    <td><code>10.5.50.1</code></td>
-
-                    <td>Main Hotspot</td>
-
-                    <td><span class="badge bg-secondary">1 Hour Pass</span></td>
-
-                                        <td>
-                        <div class="fw-semibold">2026-03-19 11:00</div>
-                        <span class="badge bg-warning text-dark">15 min left</span>
-                    </td>
-                    <td class="action-col">
-                        <div class="fw-semibold text-success">00:45:23</div>
-                        <div class="text-muted small">Last online: just now</div>
-                    </td>
-
-                    <td class="action-col">
-                        <div class="progress" style="height: 6px; width: 100px;">
-
-                            <div class="progress-bar bg-success" style="width: 35%"></div>
-
-                        </div>
-
-                        <small>250 MB / 1 GB</small>
-
-                    </td>
-
-                    <td><span class="badge bg-success">Active</span></td>
-
-                    <td class="action-col">
-                        <div class="btn-group">
-
-                            <button class="btn btn-sm btn-outline-primary" title="View Details" onclick="viewClientDetails('user001')">
-
-                                <i class="fas fa-eye"></i>
-
-                            </button>
-
-                            <button class="btn btn-sm btn-outline-warning" title="Limit Speed" onclick="limitSpeed('user001')">
-
-                                <i class="fas fa-tachometer-alt"></i>
-
-                            </button>
-
-                            <button class="btn btn-sm btn-outline-danger" title="Disconnect" onclick="confirmDisconnect('user001', 'AA:BB:CC:11:22:33')">
-
-                                <i class="fas fa-plug"></i>
-
-                            </button>
-
-                        </div>
-
-                    </td>
-
-                </tr>
-
-
-
-                <!-- Client 2: Active -->
-
-                <tr>
-
-                    <td><input type="checkbox" class="client-checkbox" value="2"></td>
-
-                    <td class="action-col">
-                        <strong>user002</strong>
-
-                        <div class="text-muted small">Jane K.</div>
-
-                    </td>
-
-                    <td><code class="bg-light px-1">AA:BB:CC:44:55:66</code></td>
-
-                    <td><code>10.5.50.2</code></td>
-
-                    <td>Main Hotspot</td>
-
-                    <td><span class="badge bg-primary">24 Hours Pass</span></td>
-
-                                        <td>
-                        <div class="fw-semibold">2026-03-20 09:30</div>
-                        <span class="badge bg-info">7 hrs left</span>
-                    </td>
-                    <td>
-                        <div class="fw-semibold text-success">02:15:45</div>
-                        <div class="text-muted small">Last online: 1 min ago</div>
-                    </td>
-
-                    <td>
-
-                        <div class="progress" style="height: 6px; width: 100px;">
-
-                            <div class="progress-bar bg-warning" style="width: 78%"></div>
-
-                        </div>
-
-                        <small>780 MB / 1 GB</small>
-
-                    </td>
-
-                    <td><span class="badge bg-success">Active</span></td>
-
-                    <td>
-
-                        <div class="btn-group">
-
-                            <button class="btn btn-sm btn-outline-primary" title="View Details" onclick="viewClientDetails('user002')">
-
-                                <i class="fas fa-eye"></i>
-
-                            </button>
-
-                            <button class="btn btn-sm btn-outline-warning" title="Limit Speed" onclick="limitSpeed('user002')">
-
-                                <i class="fas fa-tachometer-alt"></i>
-
-                            </button>
-
-                            <button class="btn btn-sm btn-outline-danger" title="Disconnect" onclick="confirmDisconnect('user002', 'AA:BB:CC:44:55:66')">
-
-                                <i class="fas fa-plug"></i>
-
-                            </button>
-
-                        </div>
-
-                    </td>
-
-                </tr>
-
-
-
-                <!-- Client 3: Idle -->
-
-                <tr class="table-warning">
-
-                    <td><input type="checkbox" class="client-checkbox" value="3"></td>
-
-                    <td>
-
-                        <strong>user003</strong>
-
-                        <div class="text-muted small">Peter O.</div>
-
-                    </td>
-
-                    <td><code class="bg-light px-1">AA:BB:CC:77:88:99</code></td>
-
-                    <td><code>10.5.50.3</code></td>
-
-                    <td>Karen Branch</td>
-
-                    <td><span class="badge bg-secondary">3 Hours Pass</span></td>
-
-                                        <td>
-                        <div class="fw-semibold">2026-03-19 12:10</div>
-                        <span class="badge bg-warning text-dark">40 min left</span>
-                    </td>
-                    <td>
-                        <div class="fw-semibold text-warning">01:30:12</div>
-                        <div class="text-muted small">Last online: 5 min ago</div>
-                    </td>
-
-                    <td>
-
-                        <div class="progress" style="height: 6px; width: 100px;">
-
-                            <div class="progress-bar bg-info" style="width: 15%"></div>
-
-                        </div>
-
-                        <small>45 MB / 500 MB</small>
-
-                    </td>
-
-                    <td><span class="badge bg-warning text-dark">Idle</span></td>
-
-                    <td>
-
-                        <div class="btn-group">
-
-                            <button class="btn btn-sm btn-outline-primary" title="View Details" onclick="viewClientDetails('user003')">
-
-                                <i class="fas fa-eye"></i>
-
-                            </button>
-
-                            <button class="btn btn-sm btn-outline-secondary" title="Send Message" onclick="sendClientMessage('user003')">
-
-                                <i class="fas fa-comment"></i>
-
-                            </button>
-
-                            <button class="btn btn-sm btn-outline-danger" title="Disconnect" onclick="confirmDisconnect('user003', 'AA:BB:CC:77:88:99')">
-
-                                <i class="fas fa-plug"></i>
-
-                            </button>
-
-                        </div>
-
-                    </td>
-
-                </tr>
-
-
-
-                <!-- Client 4: Heavy User -->
-
-                <tr>
-
-                    <td><input type="checkbox" class="client-checkbox" value="4"></td>
-
-                    <td>
-
-                        <strong>user004</strong>
-
-                        <div class="text-muted small">Mary W.</div>
-
-                    </td>
-
-                    <td><code class="bg-light px-1">AA:BB:CC:00:11:22</code></td>
-
-                    <td><code>10.5.50.4</code></td>
-
-                    <td>Main Hotspot</td>
-
-                    <td><span class="badge bg-success">Weekly Pass</span></td>
-
-                                        <td>
-                        <div class="fw-semibold">2026-03-26</div>
-                        <span class="badge bg-success">6 days left</span>
-                    </td>
-                    <td>
-                        <div class="fw-semibold text-success">05:22:18</div>
-                        <div class="text-muted small">Last online: just now</div>
-                    </td>
-
-                    <td>
-
-                        <div class="progress" style="height: 6px; width: 100px;">
-
-                            <div class="progress-bar bg-danger" style="width: 95%"></div>
-
-                        </div>
-
-                        <small>4.8 GB / 5 GB</small>
-
-                    </td>
-
-                    <td><span class="badge bg-success">Active</span></td>
-
-                    <td>
-
-                        <div class="btn-group">
-
-                            <button class="btn btn-sm btn-outline-primary" title="View Details" onclick="viewClientDetails('user004')">
-
-                                <i class="fas fa-eye"></i>
-
-                            </button>
-
-                            <button class="btn btn-sm btn-outline-warning" title="Limit Speed" onclick="limitSpeed('user004')">
-
-                                <i class="fas fa-tachometer-alt"></i>
-
-                            </button>
-
-                            <button class="btn btn-sm btn-outline-danger" title="Disconnect" onclick="confirmDisconnect('user004', 'AA:BB:CC:00:11:22')">
-
-                                <i class="fas fa-plug"></i>
-
-                            </button>
-
-                        </div>
-
-                    </td>
-
-                </tr>
-
-
-
-                <!-- Client 5: New Connection -->
-
-                <tr>
-
-                    <td><input type="checkbox" class="client-checkbox" value="5"></td>
-
-                    <td>
-
-                        <strong>user005</strong>
-
-                        <div class="text-muted small">David L.</div>
-
-                    </td>
-
-                    <td><code class="bg-light px-1">AA:BB:CC:33:44:55</code></td>
-
-                    <td><code>10.5.50.5</code></td>
-
-                    <td>PPPoE Server</td>
-
-                    <td><span class="badge bg-secondary">1 Hour Pass</span></td>
-
-                                        <td>
-                        <div class="fw-semibold">2026-03-19 10:30</div>
-                        <span class="badge bg-warning text-dark">25 min left</span>
-                    </td>
-                    <td>
-                        <div class="fw-semibold text-success">00:05:33</div>
-                        <div class="text-muted small">Last online: just now</div>
-                    </td>
-
-                    <td>
-
-                        <div class="progress" style="height: 6px; width: 100px;">
-
-                            <div class="progress-bar bg-success" style="width: 5%"></div>
-
-                        </div>
-
-                        <small>12 MB / 500 MB</small>
-
-                    </td>
-
-                    <td><span class="badge bg-success">Active</span></td>
-
-                    <td>
-
-                        <div class="btn-group">
-
-                            <button class="btn btn-sm btn-outline-primary" title="View Details" onclick="viewClientDetails('user005')">
-
-                                <i class="fas fa-eye"></i>
-
-                            </button>
-
-                            <button class="btn btn-sm btn-outline-warning" title="Limit Speed" onclick="limitSpeed('user005')">
-
-                                <i class="fas fa-tachometer-alt"></i>
-
-                            </button>
-
-                            <button class="btn btn-sm btn-outline-danger" title="Disconnect" onclick="confirmDisconnect('user005', 'AA:BB:CC:33:44:55')">
-
-                                <i class="fas fa-plug"></i>
-
-                            </button>
-
-                        </div>
-
-                    </td>
-
-                </tr>
-
+                @forelse(($sessions ?? collect()) as $session)
+                    @php
+                        $username = $session->username ?: ($session->phone ?: 'guest');
+                        $bytesTotal = (int) ($session->bytes_total ?? 0);
+                        $dataMb = $bytesTotal / 1024 / 1024;
+                        $displayUsage = $dataMb >= 1024
+                            ? number_format($dataMb / 1024, 2) . ' GB'
+                            : number_format($dataMb, 0) . ' MB';
+                        $status = strtolower((string) ($session->status ?? 'unknown'));
+                        $statusClass = match ($status) {
+                            'active' => 'bg-success',
+                            'pending' => 'bg-warning text-dark',
+                            'terminated' => 'bg-danger',
+                            default => 'bg-secondary',
+                        };
+                    @endphp
+                    <tr>
+                        <td><input type="checkbox" class="client-checkbox" value="{{ $session->id }}"></td>
+                        <td class="action-col">
+                            <strong>{{ $username }}</strong>
+                            <div class="text-muted small">{{ $session->phone ?? 'N/A' }}</div>
+                        </td>
+                        <td><code class="bg-light px-1">{{ $session->mac_address ?? '-' }}</code></td>
+                        <td><code>{{ $session->ip_address ?? '-' }}</code></td>
+                        <td>{{ optional($session->router)->name ?? '-' }}</td>
+                        <td><span class="badge bg-secondary">{{ optional($session->package)->name ?? '-' }}</span></td>
+                        <td>
+                            <div class="fw-semibold">{{ optional($session->expires_at)->format('Y-m-d H:i') ?? '-' }}</div>
+                            <span class="badge bg-warning text-dark">{{ optional($session->expires_at)->diffForHumans() ?? '-' }}</span>
+                        </td>
+                        <td class="action-col">
+                            <div class="fw-semibold text-success">{{ optional($session->started_at)->diffForHumans(null, true) ?? '-' }}</div>
+                            <div class="text-muted small">Last online: {{ optional($session->last_activity_at ?? $session->started_at)->diffForHumans() ?? '-' }}</div>
+                        </td>
+                        <td class="action-col">
+                            <div class="progress" style="height: 6px; width: 100px;">
+                                <div class="progress-bar bg-success" style="width: {{ min(100, (int) ($session->progress_percentage ?? 0)) }}%"></div>
+                            </div>
+                            <small>{{ $displayUsage }}</small>
+                        </td>
+                        <td><span class="badge {{ $statusClass }}">{{ ucfirst($status) }}</span></td>
+                        <td class="action-col">
+                            <div class="btn-group">
+                                <button class="btn btn-sm btn-outline-primary" title="View Details" onclick="viewClientDetails('{{ $username }}')">
+                                    <i class="fas fa-eye"></i>
+                                </button>
+                                <button class="btn btn-sm btn-outline-warning" title="Limit Speed" onclick="limitSpeed('{{ $username }}')">
+                                    <i class="fas fa-tachometer-alt"></i>
+                                </button>
+                                <button class="btn btn-sm btn-outline-danger" title="Disconnect" onclick="confirmDisconnect('{{ $username }}', '{{ $session->mac_address ?? '' }}')">
+                                    <i class="fas fa-plug"></i>
+                                </button>
+                            </div>
+                        </td>
+                    </tr>
+                @empty
+                    <tr>
+                        <td class="text-center text-muted py-4">No hotspot sessions found</td>
+                        <td></td>
+                        <td></td>
+                        <td></td>
+                        <td></td>
+                        <td></td>
+                        <td></td>
+                        <td></td>
+                        <td></td>
+                        <td></td>
+                        <td></td>
+                    </tr>
+                @endforelse
             </tbody>
 
         </table>
@@ -660,7 +343,7 @@
             <small class="text-muted">Last updated: <span id="lastUpdate">Just now</span></small>
         </div>
         <div class="float-end">
-            Showing 1-5 of 180 active clients
+            Showing {{ number_format((int) (($sessions ?? collect())->count())) }} active clients
         </div>
     </div>
 
@@ -959,34 +642,39 @@ function viewClientDetails(username) {
 
     document.getElementById('detailUsername').textContent = username;
 
-    
+    const rows = Array.from(document.querySelectorAll('.data-table tbody tr'));
+    const targetRow = rows.find((row) => {
+        const rowUsername = row.cells?.[1]?.querySelector('strong')?.textContent?.trim();
+        return rowUsername === username;
+    });
 
-    // Mock data based on username
+    if (targetRow && targetRow.cells.length >= 10) {
+        const mac = targetRow.cells[2].textContent.trim();
+        const ip = targetRow.cells[3].textContent.trim();
+        const router = targetRow.cells[4].textContent.trim();
+        const packageName = targetRow.cells[5].textContent.trim();
+        const expiry = targetRow.cells[6].querySelector('.fw-semibold')?.textContent?.trim() || targetRow.cells[6].textContent.trim();
+        const uptime = targetRow.cells[7].querySelector('.fw-semibold')?.textContent?.trim() || '-';
+        const lastOnlineText = targetRow.cells[7].querySelector('.text-muted')?.textContent?.replace('Last online:', '').trim() || '-';
+        const usageText = targetRow.cells[8].querySelector('small')?.textContent?.trim() || '-';
+        const progressWidth = targetRow.cells[8].querySelector('.progress-bar')?.style?.width || '0%';
+        const status = targetRow.cells[9].textContent.trim();
 
-    if (username === 'user001') {
-
-        document.getElementById('detailStatus').className = 'badge bg-success fs-6';
-
-        document.getElementById('detailStatus').textContent = 'Active';
-
-        document.getElementById('detailMac').textContent = 'AA:BB:CC:11:22:33';
-
-        document.getElementById('detailIp').textContent = '10.5.50.1';
-
-        document.getElementById('detailRouter').textContent = 'Main Hotspot (192.168.88.1)';
-
+        document.getElementById('detailStatus').className = `badge ${status.toLowerCase() === 'active' ? 'bg-success' : 'bg-secondary'} fs-6`;
+        document.getElementById('detailStatus').textContent = status || 'Unknown';
+        document.getElementById('detailMac').textContent = mac || '-';
+        document.getElementById('detailIp').textContent = ip || '-';
+        document.getElementById('detailRouter').textContent = router || '-';
         document.getElementById('detailPackage').className = 'badge bg-secondary';
-        document.getElementById('detailPackage').textContent = '1 Hour Pass';
-        document.getElementById('detailUptime').textContent = '00:45:23';
-        document.getElementById('detailExpiry').textContent = '2026-03-19 11:00';
-        document.getElementById('detailLastOnline').textContent = 'Just now';
-        document.getElementById('detailDownload').textContent = '180 MB';
-        document.getElementById('detailUpload').textContent = '70 MB';
-        document.getElementById('detailProgress').style.width = '35%';
-        document.getElementById('detailDevice').textContent = 'Samsung Galaxy S21 (Android 13)';
-
-        document.getElementById('detailLastActivity').textContent = '2 minutes ago - HTTPS request to google.com';
-
+        document.getElementById('detailPackage').textContent = packageName || '-';
+        document.getElementById('detailUptime').textContent = uptime || '-';
+        document.getElementById('detailExpiry').textContent = expiry || '-';
+        document.getElementById('detailLastOnline').textContent = lastOnlineText || '-';
+        document.getElementById('detailDownload').textContent = usageText;
+        document.getElementById('detailUpload').textContent = '-';
+        document.getElementById('detailProgress').style.width = progressWidth;
+        document.getElementById('detailDevice').textContent = '-';
+        document.getElementById('detailLastActivity').textContent = `${lastOnlineText || '-'} - session activity`;        
     }
 
     
@@ -1439,7 +1127,21 @@ document.addEventListener('DOMContentLoaded', function() {
     function renderRows(rows) {
         if (!tbody) return;
         if (!rows.length) {
-            tbody.innerHTML = '<tr><td colspan="11" class="text-center text-muted py-4">No hotspot sessions found</td></tr>';
+            tbody.innerHTML = `
+                <tr>
+                    <td class="text-center text-muted py-4">No hotspot sessions found</td>
+                    <td></td>
+                    <td></td>
+                    <td></td>
+                    <td></td>
+                    <td></td>
+                    <td></td>
+                    <td></td>
+                    <td></td>
+                    <td></td>
+                    <td></td>
+                </tr>
+            `;
             return;
         }
 

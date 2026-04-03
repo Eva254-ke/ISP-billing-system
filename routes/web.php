@@ -9,6 +9,9 @@ use App\Models\Package;
 use App\Models\Payment;
 use App\Models\UserSession;
 use App\Models\Tenant;
+use App\Services\MikroTik\MikroTikService;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 /*
 |--------------------------------------------------------------------------
@@ -110,10 +113,15 @@ Route::prefix('wifi')->name('wifi.')->group(function () {
     Route::post('/extend', [\App\Http\Controllers\CaptivePortalController::class, 'extend'])->name('extend');
 });
 
-// ----------------------------------------------------------------------------
-// Payment Callback Webhooks (Public - For IntaSend/M-Pesa)
-// ----------------------------------------------------------------------------
-Route::post('/api/intasend/callback', [\App\Http\Controllers\CaptivePortalController::class, 'callback'])->name('intasend.callback');
+// Compatibility redirect: some users access captive via /admin/wifi by mistake.
+Route::get('/admin/wifi', function () {
+    $tenantId = (int) (Auth::user()?->tenant_id ?? 0);
+    if ($tenantId > 0) {
+        return redirect()->route('wifi.packages', ['tenant_id' => $tenantId]);
+    }
+
+    return redirect()->route('wifi.packages');
+});
 
 // Legacy M-Pesa Webhook (Public - kept for older callback URLs / local testing)
 Route::post('/api/mpesa/callback', function (Request $request) {
@@ -222,15 +230,136 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
             }
 
             if (($user->role ?? null) === 'super_admin') {
-                return null; // Super admin can view aggregate data.
+                $requestedTenantId = (int) request()->input('tenant_id', request()->query('tenant_id', 0));
+                if ($requestedTenantId > 0) {
+                    return Tenant::query()->active()->find($requestedTenantId);
+                }
+                return null; // Super admin can view aggregate data when tenant is not specified.
             }
 
             return null;
         };
+
+        $buildMikrotikCommands = function (array $settings): array {
+            $radiusServer = trim((string) ($settings['radius_server'] ?? config('radius.server_ip', '127.0.0.1')));
+            $radiusAuthPort = (int) ($settings['radius_port'] ?? config('radius.auth_port', 1812));
+            $radiusAcctPort = (int) ($settings['radius_acct_port'] ?? config('radius.acct_port', 1813));
+            $radiusSecret = trim((string) ($settings['radius_secret'] ?? config('radius.shared_secret', '')));
+
+            $safeServer = $radiusServer !== '' ? $radiusServer : 'YOUR_RADIUS_SERVER_IP';
+            $safeSecret = $radiusSecret !== '' ? $radiusSecret : 'YOUR_SHARED_SECRET';
+
+            return [
+                '/radius add service=hotspot,ppp address=' . $safeServer . ' protocol=udp authentication-port=' . max(1, $radiusAuthPort) . ' accounting-port=' . max(1, $radiusAcctPort) . ' secret=' . $safeSecret . ' timeout=300ms',
+                '/ip hotspot profile set [find] use-radius=yes',
+                '/ppp aaa set use-radius=yes accounting=yes interim-update=1m',
+                '/radius incoming set accept=yes port=3799',
+                '/radius monitor 0 once',
+            ];
+        };
+
+        Route::get('/settings', function () use ($resolveTenant, $buildMikrotikCommands) {
+            $tenant = $resolveTenant();
+
+            $settings = [];
+            if ($tenant) {
+                $tenantSettings = (array) ($tenant->settings ?? []);
+                $settings = (array) ($tenantSettings['admin_settings'] ?? []);
+            } else {
+                $settings = (array) cache()->get('admin_settings_global', []);
+            }
+
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'settings' => $settings,
+                    'mikrotik_commands' => $buildMikrotikCommands($settings),
+                ],
+            ]);
+        })->name('settings.show');
+
+        Route::post('/settings', function (Request $request) use ($resolveTenant, $buildMikrotikCommands) {
+            $settings = (array) $request->input('settings', []);
+
+            $tenant = $resolveTenant();
+            if ($tenant) {
+                $tenantSettings = (array) ($tenant->settings ?? []);
+                $tenantSettings['admin_settings'] = $settings;
+                $tenant->settings = $tenantSettings;
+                $tenant->save();
+            } else {
+                cache()->forever('admin_settings_global', $settings);
+            }
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Settings saved successfully',
+                'data' => [
+                    'mikrotik_commands' => $buildMikrotikCommands($settings),
+                ],
+            ]);
+        })->name('settings.save');
+
+        Route::post('/settings/mikrotik/test', function (Request $request, MikroTikService $mikroTikService) use ($resolveTenant, $buildMikrotikCommands) {
+            $tenant = $resolveTenant();
+
+            $settings = (array) $request->input('settings', []);
+            $commands = $buildMikrotikCommands($settings);
+
+            $router = Router::query()
+                ->when($tenant, fn ($query) => $query->where('tenant_id', $tenant->id))
+                ->orderByDesc('status')
+                ->orderBy('id')
+                ->first();
+
+            if (!$router) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'No router found for this tenant. Add a router first.',
+                    'commands' => $commands,
+                ], 404);
+            }
+
+            $isOnline = $mikroTikService->pingRouter($router);
+
+            if (!$isOnline) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Router is offline or unreachable',
+                    'router' => [
+                        'id' => $router->id,
+                        'name' => $router->name,
+                        'ip_address' => $router->ip_address,
+                    ],
+                    'commands' => $commands,
+                ], 503);
+            }
+
+            $systemInfo = $mikroTikService->getRouterSystemInfo($router);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'MikroTik API connection successful',
+                'router' => [
+                    'id' => $router->id,
+                    'name' => $router->name,
+                    'ip_address' => $router->ip_address,
+                    'status' => $router->status,
+                ],
+                'data' => [
+                    'cpu' => $systemInfo['cpu_load'] ?? null,
+                    'memory' => $systemInfo['memory_usage'] ?? null,
+                    'uptime' => $systemInfo['uptime'] ?? null,
+                    'version' => $systemInfo['version'] ?? null,
+                ],
+                'commands' => $commands,
+            ]);
+        })->name('settings.mikrotik.test');
         
         // Router Status & Testing
-        Route::get('/routers/status', function () use ($resolveTenant) {
+        Route::get('/routers/status', function (Request $request, MikroTikService $mikroTikService) use ($resolveTenant) {
             $tenant = $resolveTenant();
+            $live = $request->boolean('live', true);
 
             $query = Router::query();
             if ($tenant) {
@@ -241,25 +370,55 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
                 ->orderBy('name')
                 ->limit(100)
                 ->get()
-                ->map(function (Router $router) {
+                ->map(function (Router $router) use ($live, $mikroTikService) {
+                    $status = (string) ($router->status ?? Router::STATUS_OFFLINE);
+                    $cpu = $router->cpu_usage;
+                    $memory = $router->memory_usage;
+
+                    if ($live) {
+                        $isOnline = $mikroTikService->pingRouter($router);
+                        $status = $isOnline ? Router::STATUS_ONLINE : Router::STATUS_OFFLINE;
+
+                        if ($isOnline) {
+                            $systemInfo = $mikroTikService->getRouterSystemInfo($router);
+                            $cpu = isset($systemInfo['cpu_load']) ? (int) $systemInfo['cpu_load'] : $cpu;
+                            $memory = isset($systemInfo['memory_usage']) ? (int) $systemInfo['memory_usage'] : $memory;
+
+                            if ((int) $cpu >= Router::HEALTHY_CPU_THRESHOLD || (int) $memory >= Router::HEALTHY_MEMORY_THRESHOLD) {
+                                $router->markWarning('High resource usage');
+                                $status = Router::STATUS_WARNING;
+                            }
+                        }
+                    }
+
                     return [
                         'id' => $router->id,
                         'name' => $router->name,
                         'ip' => $router->ip_address,
-                        'status' => $router->status,
+                        'status' => $status,
                         'users' => (int) ($router->active_sessions ?? 0),
-                        'cpu' => $router->cpu_usage,
-                        'memory' => $router->memory_usage,
+                        'cpu' => $cpu,
+                        'memory' => $memory,
+                        'last_seen_at' => $router->last_seen_at?->toIso8601String(),
                     ];
                 });
+
+            $online = $routers->filter(fn ($router) => in_array($router['status'], [Router::STATUS_ONLINE, Router::STATUS_WARNING], true))->count();
+            $offline = $routers->where('status', Router::STATUS_OFFLINE)->count();
 
             return response()->json([
                 'success' => true,
                 'data' => $routers,
+                'summary' => [
+                    'online' => $online,
+                    'offline' => $offline,
+                    'total' => $routers->count(),
+                    'live' => $live,
+                ],
             ]);
         })->name('routers.status');
         
-        Route::post('/routers/test', function (Request $request) use ($resolveTenant) {
+        Route::post('/routers/test', function (Request $request, MikroTikService $mikroTikService) use ($resolveTenant) {
             $tenant = $resolveTenant();
 
             $router = Router::query()
@@ -273,11 +432,28 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
                 ], 404);
             }
 
+            $isOnline = $mikroTikService->pingRouter($router);
+
+            if (!$isOnline) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Router is offline or unreachable',
+                    'router' => $router->id,
+                ], 503);
+            }
+
+            $systemInfo = $mikroTikService->getRouterSystemInfo($router);
+
             return response()->json([
                 'success' => true,
-                'message' => 'Connection test queued',
-                'latency' => rand(5, 50) . 'ms',
+                'message' => 'Router is online',
                 'router' => $router->id,
+                'data' => [
+                    'status' => $router->status,
+                    'cpu' => $systemInfo['cpu_load'] ?? $router->cpu_usage,
+                    'memory' => $systemInfo['memory_usage'] ?? $router->memory_usage,
+                    'uptime' => $systemInfo['uptime'] ?? null,
+                ],
             ]);
         })->name('routers.test');
         
@@ -364,10 +540,15 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
                 ->map(fn (Package $package) => [
                     'id' => $package->id,
                     'name' => $package->name,
+                    'description' => $package->description,
                     'price' => (float) $package->price,
                     'duration_value' => $package->duration_value,
                     'duration_unit' => $package->duration_unit,
+                    'download_limit_mbps' => $package->download_limit_mbps,
+                    'upload_limit_mbps' => $package->upload_limit_mbps,
+                    'mikrotik_profile_name' => $package->mikrotik_profile_name,
                     'is_active' => (bool) $package->is_active,
+                    'total_sales' => (int) ($package->total_sales ?? 0),
                     'sort_order' => $package->sort_order,
                 ]);
 
@@ -376,6 +557,153 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
                 'data' => $packages,
             ]);
         })->name('packages.index');
+
+        Route::post('/packages', function (Request $request) use ($resolveTenant) {
+            $tenant = $resolveTenant();
+
+            if (!$tenant) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Tenant not found',
+                ], 404);
+            }
+
+            $validated = $request->validate([
+                'name' => 'required|string|max:120',
+                'description' => 'nullable|string|max:255',
+                'price' => 'required|numeric|min:0',
+                'duration_value' => 'required|integer|min:1|max:100000',
+                'duration_unit' => 'required|in:minutes,hours,days,weeks,months',
+                'download_limit_mbps' => 'nullable|integer|min:1|max:100000',
+                'upload_limit_mbps' => 'nullable|integer|min:1|max:100000',
+                'mikrotik_profile_name' => 'nullable|string|max:120',
+                'is_active' => 'nullable|boolean',
+            ]);
+
+            $codeBase = strtoupper(preg_replace('/[^A-Z0-9]+/', '-', (string) $validated['name']));
+            $codeBase = trim($codeBase, '-');
+            if ($codeBase === '') {
+                $codeBase = 'PKG';
+            }
+
+            $code = $codeBase;
+            $attempt = 1;
+            while (Package::query()->where('code', $code)->exists()) {
+                $attempt++;
+                $code = $codeBase . '-' . $attempt;
+            }
+
+            $sortOrder = (int) (Package::query()
+                ->where('tenant_id', $tenant->id)
+                ->max('sort_order') ?? 0) + 1;
+
+            $package = Package::create([
+                'tenant_id' => $tenant->id,
+                'name' => $validated['name'],
+                'description' => $validated['description'] ?? null,
+                'code' => $code,
+                'price' => $validated['price'],
+                'currency' => 'KES',
+                'duration_value' => $validated['duration_value'],
+                'duration_unit' => $validated['duration_unit'],
+                'download_limit_mbps' => $validated['download_limit_mbps'] ?? null,
+                'upload_limit_mbps' => $validated['upload_limit_mbps'] ?? null,
+                'mikrotik_profile_name' => $validated['mikrotik_profile_name'] ?? null,
+                'is_active' => (bool) ($validated['is_active'] ?? true),
+                'sort_order' => $sortOrder,
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Package created successfully',
+                'data' => [
+                    'id' => $package->id,
+                    'name' => $package->name,
+                ],
+            ], 201);
+        })->name('packages.create');
+
+        Route::put('/packages/{package}', function (Request $request, Package $package) use ($resolveTenant) {
+            $tenant = $resolveTenant();
+
+            if (!$tenant || (int) $package->tenant_id !== (int) $tenant->id) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Package not found',
+                ], 404);
+            }
+
+            $validated = $request->validate([
+                'name' => 'required|string|max:120',
+                'description' => 'nullable|string|max:255',
+                'price' => 'required|numeric|min:0',
+                'duration_value' => 'required|integer|min:1|max:100000',
+                'duration_unit' => 'required|in:minutes,hours,days,weeks,months',
+                'download_limit_mbps' => 'nullable|integer|min:1|max:100000',
+                'upload_limit_mbps' => 'nullable|integer|min:1|max:100000',
+                'mikrotik_profile_name' => 'nullable|string|max:120',
+                'is_active' => 'nullable|boolean',
+            ]);
+
+            $package->update([
+                'name' => $validated['name'],
+                'description' => $validated['description'] ?? null,
+                'price' => $validated['price'],
+                'duration_value' => $validated['duration_value'],
+                'duration_unit' => $validated['duration_unit'],
+                'download_limit_mbps' => $validated['download_limit_mbps'] ?? null,
+                'upload_limit_mbps' => $validated['upload_limit_mbps'] ?? null,
+                'mikrotik_profile_name' => $validated['mikrotik_profile_name'] ?? null,
+                'is_active' => (bool) ($validated['is_active'] ?? false),
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Package updated successfully',
+            ]);
+        })->name('packages.update');
+
+        Route::patch('/packages/{package}/status', function (Request $request, Package $package) use ($resolveTenant) {
+            $tenant = $resolveTenant();
+
+            if (!$tenant || (int) $package->tenant_id !== (int) $tenant->id) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Package not found',
+                ], 404);
+            }
+
+            $validated = $request->validate([
+                'is_active' => 'required|boolean',
+            ]);
+
+            $package->update([
+                'is_active' => (bool) $validated['is_active'],
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Package status updated',
+            ]);
+        })->name('packages.status');
+
+        Route::delete('/packages/{package}', function (Package $package) use ($resolveTenant) {
+            $tenant = $resolveTenant();
+
+            if (!$tenant || (int) $package->tenant_id !== (int) $tenant->id) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Package not found',
+                ], 404);
+            }
+
+            $package->delete();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Package deleted successfully',
+            ]);
+        })->name('packages.delete');
         
         // Client Stats (Live)
         Route::get('/clients/stats', function () use ($resolveTenant) {
@@ -551,6 +879,203 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
         })->name('payments.stats');
 
         // Vouchers Data
+        Route::post('/vouchers/generate', function (Request $request) use ($resolveTenant) {
+            $tenant = $resolveTenant();
+
+            if (!$tenant) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Tenant not found',
+                ], 404);
+            }
+
+            $validated = $request->validate([
+                'package_id' => 'required|integer|exists:packages,id',
+                'quantity' => 'required|integer|min:1|max:1000',
+                'validity_hours' => 'required|integer|min:1|max:8760',
+                'prefix' => 'nullable|string|max:20',
+                'batch_label' => 'nullable|string|max:120',
+            ]);
+
+            $package = Package::query()
+                ->where('tenant_id', $tenant->id)
+                ->where('is_active', true)
+                ->find($validated['package_id']);
+
+            if (!$package) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Selected package is not available for this tenant',
+                ], 422);
+            }
+
+            $prefix = strtoupper(trim((string) ($validated['prefix'] ?? 'CB-WIFI')));
+            $prefix = preg_replace('/[^A-Z0-9-]/', '', $prefix);
+            $prefix = trim((string) $prefix, '-');
+            if ($prefix === '') {
+                $prefix = 'CB-WIFI';
+            }
+
+            $batchId = (string) Str::uuid();
+            $batchName = trim((string) ($validated['batch_label'] ?? ''));
+            if ($batchName === '') {
+                $batchName = 'Batch-' . now()->format('Ymd-His');
+            }
+
+            $quantity = (int) $validated['quantity'];
+            $validityHours = (int) $validated['validity_hours'];
+
+            $vouchers = DB::transaction(function () use ($tenant, $package, $quantity, $validityHours, $prefix, $batchId, $batchName) {
+                $created = collect();
+
+                for ($i = 0; $i < $quantity; $i++) {
+                    do {
+                        $code = strtoupper(Str::random(6));
+                        $exists = \App\Models\Voucher::query()
+                            ->where('tenant_id', $tenant->id)
+                            ->where('prefix', $prefix)
+                            ->where('code', $code)
+                            ->exists();
+                    } while ($exists);
+
+                    $created->push(\App\Models\Voucher::create([
+                        'tenant_id' => $tenant->id,
+                        'package_id' => $package->id,
+                        'code' => $code,
+                        'prefix' => $prefix,
+                        'status' => 'unused',
+                        'valid_from' => now(),
+                        'valid_until' => now()->copy()->addHours($validityHours),
+                        'validity_hours' => $validityHours,
+                        'batch_id' => $batchId,
+                        'batch_name' => $batchName,
+                        'captive_portal_redeemable' => true,
+                    ]));
+                }
+
+                return $created;
+            });
+
+            return response()->json([
+                'success' => true,
+                'message' => "Generated {$quantity} voucher(s)",
+                'data' => [
+                    'batch_id' => $batchId,
+                    'batch_name' => $batchName,
+                    'package' => [
+                        'id' => $package->id,
+                        'name' => $package->name,
+                    ],
+                    'validity_hours' => $validityHours,
+                    'vouchers' => $vouchers->map(fn ($voucher) => [
+                        'id' => $voucher->id,
+                        'code' => $voucher->code,
+                        'code_display' => $voucher->code_display,
+                        'created_at' => $voucher->created_at?->toIso8601String(),
+                        'valid_until' => $voucher->valid_until?->toIso8601String(),
+                    ]),
+                ],
+            ], 201);
+        })->name('vouchers.generate');
+
+        Route::get('/vouchers/{voucher}', function (\App\Models\Voucher $voucher) use ($resolveTenant) {
+            $tenant = $resolveTenant();
+
+            if (!$tenant || (int) $voucher->tenant_id !== (int) $tenant->id) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Voucher not found',
+                ], 404);
+            }
+
+            $voucher->load(['package', 'router']);
+
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'id' => $voucher->id,
+                    'code' => $voucher->code,
+                    'code_display' => $voucher->code_display,
+                    'status' => $voucher->status,
+                    'package_name' => $voucher->package?->name,
+                    'created_at' => $voucher->created_at?->toIso8601String(),
+                    'valid_until' => $voucher->valid_until?->toIso8601String(),
+                    'used_by_phone' => $voucher->used_by_phone,
+                    'used_at' => $voucher->used_at?->toIso8601String(),
+                    'router_name' => $voucher->router?->name,
+                ],
+            ]);
+        })->name('vouchers.show');
+
+        Route::delete('/vouchers/{voucher}', function (\App\Models\Voucher $voucher) use ($resolveTenant) {
+            $tenant = $resolveTenant();
+
+            if (!$tenant || (int) $voucher->tenant_id !== (int) $tenant->id) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Voucher not found',
+                ], 404);
+            }
+
+            if (strtolower((string) $voucher->status) === 'used') {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Used vouchers cannot be deleted',
+                ], 422);
+            }
+
+            $voucher->delete();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Voucher deleted successfully',
+            ]);
+        })->name('vouchers.delete');
+
+        Route::post('/vouchers/bulk-delete', function (Request $request) use ($resolveTenant) {
+            $tenant = $resolveTenant();
+
+            if (!$tenant) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Tenant not found',
+                ], 404);
+            }
+
+            $validated = $request->validate([
+                'voucher_ids' => 'required|array|min:1',
+                'voucher_ids.*' => 'integer',
+            ]);
+
+            $vouchers = \App\Models\Voucher::query()
+                ->where('tenant_id', $tenant->id)
+                ->whereIn('id', $validated['voucher_ids'])
+                ->get();
+
+            if ($vouchers->isEmpty()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'No matching vouchers found',
+                ], 404);
+            }
+
+            $blocked = $vouchers->filter(fn ($voucher) => strtolower((string) $voucher->status) === 'used')->count();
+            $toDelete = $vouchers->reject(fn ($voucher) => strtolower((string) $voucher->status) === 'used');
+
+            foreach ($toDelete as $voucher) {
+                $voucher->delete();
+            }
+
+            return response()->json([
+                'success' => true,
+                'message' => "Deleted {$toDelete->count()} voucher(s)" . ($blocked > 0 ? "; skipped {$blocked} used voucher(s)" : ''),
+                'data' => [
+                    'deleted' => $toDelete->count(),
+                    'skipped_used' => $blocked,
+                ],
+            ]);
+        })->name('vouchers.bulk-delete');
+
         Route::get('/vouchers', function (Request $request) use ($resolveTenant) {
             $tenant = $resolveTenant();
 
@@ -576,6 +1101,7 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
                         'status' => $voucher->status,
                         'package_id' => $voucher->package_id,
                         'package_name' => $voucher->package?->name,
+                        'used_by_phone' => $voucher->used_by_phone,
                         'valid_until' => $voucher->valid_until?->toIso8601String(),
                         'used_at' => $voucher->used_at?->toIso8601String(),
                         'created_at' => $voucher->created_at?->toIso8601String(),

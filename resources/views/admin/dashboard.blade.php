@@ -168,41 +168,28 @@
                         </tr>
                     </thead>
                     <tbody>
-                        <tr>
-                            <td>10:45 AM</td>
-                            <td>0712***678</td>
-                            <td>1 Hour</td>
-                            <td>KES 50</td>
-                            <td><span class="badge bg-success">Success</span></td>
-                        </tr>
-                        <tr>
-                            <td>10:32 AM</td>
-                            <td>0723***789</td>
-                            <td>3 Hours</td>
-                            <td>KES 100</td>
-                            <td><span class="badge bg-success">Success</span></td>
-                        </tr>
-                        <tr>
-                            <td>10:15 AM</td>
-                            <td>0734***890</td>
-                            <td>24 Hours</td>
-                            <td>KES 400</td>
-                            <td><span class="badge bg-success">Success</span></td>
-                        </tr>
-                        <tr>
-                            <td>09:58 AM</td>
-                            <td>0745***901</td>
-                            <td>1 Hour</td>
-                            <td>KES 50</td>
-                            <td><span class="badge bg-danger">Failed</span></td>
-                        </tr>
-                        <tr>
-                            <td>09:45 AM</td>
-                            <td>0756***012</td>
-                            <td>Weekly</td>
-                            <td>KES 2,000</td>
-                            <td><span class="badge bg-success">Success</span></td>
-                        </tr>
+                        @forelse(($recentPayments ?? collect())->take(5) as $payment)
+                            @php
+                                $status = strtolower((string) ($payment->status ?? 'unknown'));
+                                $statusClass = match ($status) {
+                                    'completed', 'confirmed', 'activated' => 'bg-success',
+                                    'pending' => 'bg-warning text-dark',
+                                    'failed' => 'bg-danger',
+                                    default => 'bg-secondary',
+                                };
+                            @endphp
+                            <tr>
+                                <td>{{ optional($payment->created_at)->format('h:i A') ?? '-' }}</td>
+                                <td>{{ $payment->phone ?? '-' }}</td>
+                                <td>{{ $payment->package_name ?? optional($payment->package)->name ?? '-' }}</td>
+                                <td>KES {{ number_format((float) ($payment->amount ?? 0), 0) }}</td>
+                                <td><span class="badge {{ $statusClass }}">{{ ucfirst($status) }}</span></td>
+                            </tr>
+                        @empty
+                            <tr>
+                                <td colspan="5" class="text-center text-muted py-3">No recent payments.</td>
+                            </tr>
+                        @endforelse
                     </tbody>
                 </table>
             </div>
@@ -224,47 +211,27 @@
                 </div>
             </div>
             <div class="card-body">
-                <ul class="products-list product-list-in-card ps-2 pe-2">
-                    <li class="item">
-                        <div class="product-img">
-                            <i class="fas fa-circle text-success fa-2x"></i>
-                        </div>
-                        <div class="product-info">
-                            <a href="#" class="product-title">Main Hotspot
-                                <span class="badge bg-success float-end">Online</span></a>
-                            <span class="product-description">192.168.88.1 • 180 users</span>
-                        </div>
-                    </li>
-                    <li class="item">
-                        <div class="product-img">
-                            <i class="fas fa-circle text-success fa-2x"></i>
-                        </div>
-                        <div class="product-info">
-                            <a href="#" class="product-title">PPPoE Server
-                                <span class="badge bg-success float-end">Online</span></a>
-                            <span class="product-description">192.168.88.2 • 54 users</span>
-                        </div>
-                    </li>
-                    <li class="item">
-                        <div class="product-img">
-                            <i class="fas fa-circle text-danger fa-2x"></i>
-                        </div>
-                        <div class="product-info">
-                            <a href="#" class="product-title">Backup Router
-                                <span class="badge bg-danger float-end">Offline</span></a>
-                            <span class="product-description">192.168.88.3 • 0 users</span>
-                        </div>
-                    </li>
-                    <li class="item">
-                        <div class="product-img">
-                            <i class="fas fa-circle text-success fa-2x"></i>
-                        </div>
-                        <div class="product-info">
-                            <a href="#" class="product-title">Karen Branch
-                                <span class="badge bg-success float-end">Online</span></a>
-                            <span class="product-description">192.168.88.4 • 45 users</span>
-                        </div>
-                    </li>
+                <ul class="products-list product-list-in-card ps-2 pe-2" id="routerStatusList">
+                    @forelse(($routerStatuses ?? collect())->take(4) as $router)
+                        @php
+                            $status = strtolower((string) ($router->status ?? 'offline'));
+                            $isOnline = in_array($status, ['online', 'warning'], true);
+                            $iconClass = $isOnline ? 'text-success' : 'text-danger';
+                            $badgeClass = $isOnline ? 'bg-success' : 'bg-danger';
+                        @endphp
+                        <li class="item">
+                            <div class="product-img">
+                                <i class="fas fa-circle {{ $iconClass }} fa-2x"></i>
+                            </div>
+                            <div class="product-info">
+                                <a href="#" class="product-title">{{ $router->name }}
+                                    <span class="badge {{ $badgeClass }} float-end">{{ ucfirst($status) }}</span></a>
+                                <span class="product-description">{{ $router->ip_address }} • {{ (int) ($router->active_sessions ?? 0) }} users</span>
+                            </div>
+                        </li>
+                    @empty
+                        <li class="item text-muted">No routers configured.</li>
+                    @endforelse
                 </ul>
             </div>
         </div>
@@ -343,6 +310,82 @@
             cards[3].textContent = `${Number(summary.routers_online || 0)}/${Number(summary.routers_total || 0)}`;
         }
 
+        const liveRouterPayload = await fetchJson('/admin/api/routers/status?live=1', {
+            success: false,
+            summary: { online: 0, total: 0 },
+            data: [],
+        });
+
+        if (cards.length >= 4) {
+            const liveOnline = Number(liveRouterPayload?.summary?.online ?? 0);
+            const liveTotal = Number(liveRouterPayload?.summary?.total ?? 0);
+            cards[3].textContent = `${liveOnline}/${liveTotal}`;
+        }
+
+        const recentPaymentsBody = document.querySelector('.table.table-hover.table-striped tbody');
+        const routerStatusList = document.getElementById('routerStatusList');
+
+        const escapeHtml = (value) => String(value ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+
+        const paymentsPayload = await fetchJson('/admin/api/payments?limit=5', { success: false, data: [] });
+        const recentPayments = Array.isArray(paymentsPayload?.data) ? paymentsPayload.data : [];
+
+        if (recentPaymentsBody) {
+            if (!recentPayments.length) {
+                recentPaymentsBody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-3">No recent payments.</td></tr>';
+            } else {
+                recentPaymentsBody.innerHTML = recentPayments.map((payment) => {
+                    const status = String(payment.status || 'unknown').toLowerCase();
+                    const statusClass = (status === 'completed' || status === 'confirmed' || status === 'activated')
+                        ? 'bg-success'
+                        : (status === 'pending' ? 'bg-warning text-dark' : (status === 'failed' ? 'bg-danger' : 'bg-secondary'));
+                    const createdAt = payment.created_at ? new Date(payment.created_at) : null;
+                    const timeText = createdAt
+                        ? createdAt.toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit', hour12: true })
+                        : '-';
+
+                    return `
+                        <tr>
+                            <td>${escapeHtml(timeText)}</td>
+                            <td>${escapeHtml(payment.phone || '-')}</td>
+                            <td>${escapeHtml(payment.package_name || '-')}</td>
+                            <td>KES ${Number(payment.amount || 0).toLocaleString()}</td>
+                            <td><span class="badge ${statusClass}">${escapeHtml(status.charAt(0).toUpperCase() + status.slice(1))}</span></td>
+                        </tr>
+                    `;
+                }).join('');
+            }
+        }
+
+        const liveRouters = Array.isArray(liveRouterPayload?.data) ? liveRouterPayload.data.slice(0, 4) : [];
+        if (routerStatusList) {
+            if (!liveRouters.length) {
+                routerStatusList.innerHTML = '<li class="item text-muted">No routers configured.</li>';
+            } else {
+                routerStatusList.innerHTML = liveRouters.map((router) => {
+                    const status = String(router.status || 'offline').toLowerCase();
+                    const isOnline = status === 'online' || status === 'warning';
+                    return `
+                        <li class="item">
+                            <div class="product-img">
+                                <i class="fas fa-circle ${isOnline ? 'text-success' : 'text-danger'} fa-2x"></i>
+                            </div>
+                            <div class="product-info">
+                                <a href="#" class="product-title">${escapeHtml(router.name || 'Router')}
+                                    <span class="badge ${isOnline ? 'bg-success' : 'bg-danger'} float-end">${escapeHtml(status.charAt(0).toUpperCase() + status.slice(1))}</span></a>
+                                <span class="product-description">${escapeHtml(router.ip || '-')} • ${Number(router.users || 0).toLocaleString()} users</span>
+                            </div>
+                        </li>
+                    `;
+                }).join('');
+            }
+        }
+
         const footerBlocks = document.querySelectorAll('.description-block .description-header');
         if (footerBlocks.length >= 4) {
             footerBlocks[0].textContent = `KES ${Number(summary.revenue_week || 0).toLocaleString()}`;
@@ -391,13 +434,17 @@
         const packageLabels = ['Active Packages', 'Inactive Packages'];
         const activePackages = Number(packageStatsPayload.active || 0);
         const inactivePackages = Math.max(0, Number(packageStatsPayload.total || 0) - activePackages);
-        const packageData = [Math.max(activePackages, 0), Math.max(inactivePackages, 0)].map(v => Math.max(1, v));
+        const totalPackages = Math.max(0, activePackages + inactivePackages);
+        const packageData = totalPackages > 0
+            ? [Math.max(activePackages, 0), Math.max(inactivePackages, 0)]
+            : [0];
+        const resolvedPackageLabels = totalPackages > 0 ? packageLabels : ['No Sales'];
 
         new ApexCharts(document.querySelector("#packageChart"), {
             chart: { type: 'donut', height: 300, toolbar: { show: false }, foreColor: '#E2E8F0' },
             noData: { text: 'No package sales yet', style: { color: '#E2E8F0' } },
             series: packageData,
-            labels: packageLabels,
+            labels: resolvedPackageLabels,
             colors: ['#38BDF8', '#22D3EE', '#34D399', '#FBBF24', '#F87171'],
             dataLabels: { enabled: false },
             legend: { position: 'bottom', labels: { colors: '#E2E8F0' }, markers: { width: 10, height: 10, radius: 12 } },
@@ -413,7 +460,7 @@
                                 show: true,
                                 label: 'Total Sales',
                                 color: '#CBD5E1',
-                                formatter: function() { return packageData.reduce((a,b)=>a+b,0); }
+                                formatter: function() { return totalPackages; }
                             }
                         }
                     }

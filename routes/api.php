@@ -66,6 +66,11 @@ Route::post('/payment/callback', [PaymentController::class, 'callback'])
     ->name('api.payment.callback')
     ->withoutMiddleware(['auth:sanctum', 'web', 'throttle:api']); // Public webhook
 
+// Backward-compatible IntaSend webhook alias using the same callback pipeline.
+Route::post('/intasend/callback', [PaymentController::class, 'callback'])
+    ->name('intasend.callback')
+    ->withoutMiddleware(['auth:sanctum', 'web', 'throttle:api']);
+
 /**
  * Legacy M-Pesa Callback (Deprecated)
  * 

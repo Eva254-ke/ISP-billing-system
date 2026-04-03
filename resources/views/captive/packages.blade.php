@@ -443,6 +443,9 @@
         @if(session('success'))
             <div class="success">{{ session('success') }}</div>
         @endif
+        @if(!empty($tenantResolutionError))
+            <div class="error">{{ $tenantResolutionError }}</div>
+        @endif
         @if($errors->any())
             <div class="error">{{ $errors->first() }}</div>
         @endif
@@ -463,16 +466,18 @@
             {{-- Package Grid --}}
             <div class="packages">
                 @forelse($packages as $pkg)
-                <div class="package-card" data-package-id="{{ $pkg->id }}" data-package-name="{{ $pkg->name }}" data-package-price="{{ $pkg->price }}" data-package-duration="{{ $pkg->duration_minutes }}" data-package-speed="{{ $pkg->speed_mbps ?? '10' }}" tabindex="0">
+                <div class="package-card" data-package-id="{{ $pkg->id }}" data-package-name="{{ $pkg->name }}" data-package-price="{{ $pkg->price }}" data-package-duration="{{ $pkg->duration_formatted }}" data-package-speed="{{ $pkg->download_limit_mbps ?? 'Unlimited' }}" tabindex="0">
                     <h3>{{ $pkg->name }}</h3>
                     <div class="price">KES {{ number_format($pkg->price) }}</div>
                     <ul class="features">
-                        <li>{{ $pkg->duration_minutes }} min</li>
-                        <li>{{ $pkg->speed_mbps ?? '10' }} Mbps</li>
+                        <li>{{ $pkg->duration_formatted }}</li>
+                        <li>{{ $pkg->bandwidth_formatted }}</li>
                     </ul>
                 </div>
                 @empty
-                <div class="error" style="grid-column: 1/-1;">No packages available.</div>
+                <div class="error" style="grid-column: 1/-1;">
+                    No packages available for {{ $tenant?->name ?? 'this tenant' }}{{ $tenant?->id ? ' (ID '.$tenant->id.')' : '' }}.
+                </div>
                 @endforelse
             </div>
 
@@ -482,8 +487,8 @@
                     <h4>Voucher</h4>
                     <form method="POST" action="{{ route('wifi.reconnect') }}">
                         @csrf
+                        <input type="tel" name="phone" placeholder="0712345678" value="{{ $phone ?? '' }}" required pattern="0[17]\d{8}" autocomplete="tel" inputmode="tel">
                         <input type="text" name="voucher_code" placeholder="Code" required maxlength="32" autocomplete="off">
-                        <input type="hidden" name="phone" id="voucherPhone">
                         <button type="submit" class="btn btn-secondary">Apply</button>
                     </form>
                 </div>
@@ -492,8 +497,8 @@
                     <form method="POST" action="{{ route('wifi.reconnect') }}">
                         @csrf
                         <input type="hidden" name="reconnect_type" value="mpesa_code">
+                        <input type="tel" name="phone" placeholder="0712345678" value="{{ $phone ?? '' }}" required pattern="0[17]\d{8}" autocomplete="tel" inputmode="tel">
                         <input type="text" name="mpesa_code" placeholder="QGH45XYZ" required maxlength="32" autocomplete="off">
-                        <input type="hidden" name="phone" id="mpesaPhone">
                         <button type="submit" class="btn btn-secondary">Reconnect</button>
                     </form>
                 </div>
@@ -552,7 +557,7 @@
             document.getElementById('modalPackageId').value = pkg.id;
             document.getElementById('modalPackageName').textContent = pkg.name;
             document.getElementById('modalPackagePrice').textContent = 'KES ' + pkg.price;
-            document.getElementById('modalPackageDetails').textContent = pkg.duration + ' min • ' + pkg.speed + ' Mbps';
+            document.getElementById('modalPackageDetails').textContent = pkg.duration + ' • ' + pkg.speed + (pkg.speed === 'Unlimited' ? '' : ' Mbps');
             modal.classList.add('active');
             document.getElementById('modalPhone').focus();
         }
@@ -593,22 +598,6 @@
             const btn = document.getElementById('modalPayBtn');
             btn.classList.add('loading');
             btn.textContent = 'Processing';
-        });
-
-        // Sync phone to quick action forms
-        document.addEventListener('DOMContentLoaded', function() {
-            const modalPhone = document.getElementById('modalPhone');
-            if (modalPhone) {
-                ['voucherPhone', 'mpesaPhone'].forEach(id => {
-                    const hidden = document.getElementById(id);
-                    if (hidden) {
-                        hidden.value = modalPhone.value;
-                        modalPhone.addEventListener('input', function() {
-                            hidden.value = this.value;
-                        });
-                    }
-                });
-            }
         });
 
         // Active session countdown
