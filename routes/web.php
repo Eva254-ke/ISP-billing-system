@@ -88,7 +88,7 @@ Route::prefix('portal')->name('portal.')->group(function () {
     Route::get('/package/{package}', fn($package) => view('portal.payment', ['package' => $package]))->name('package.show');
     Route::post('/payment/initiate', fn() => view('portal.payment_status'))->name('payment.initiate');
     Route::get('/payment/status/{checkoutId}', fn($checkoutId) => view('portal.payment_status'))->name('payment.status');
-    Route::get('/payment/success/{payment}', fn($payment) => view('portal.success'))->name('payment.success');
+    Route::get('/payment/success/{payment?}', fn($payment = null) => view('portal.success', ['payment' => $payment]))->name('payment.success');
     Route::get('/voucher/redeem', fn() => view('portal.voucher'))->name('voucher.redeem');
 });
 

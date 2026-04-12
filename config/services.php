@@ -117,8 +117,11 @@ return [
         'public_key' => env('PAYSTACK_PUBLIC_KEY'),
         'secret_key' => env('PAYSTACK_SECRET_KEY'),
         'merchant_email' => env('PAYSTACK_MERCHANT_EMAIL'),
+        'base_url' => env('PAYSTACK_BASE_URL', 'https://api.paystack.co'),
         'env' => env('PAYSTACK_ENV', 'sandbox'),
-        'callback_url' => env('PAYSTACK_CALLBACK_URL', 'https://app.cloudbridge.network/api/payment/paystack/callback'),
+        'mobile_money_provider' => env('PAYSTACK_MOBILE_MONEY_PROVIDER', 'mpesa'),
+        'callback_url' => env('PAYSTACK_CALLBACK_URL', 'https://wifi.cloubridge.com/api/paystack/webhook'),
+        'success_url' => env('PAYSTACK_SUCCESS_URL', 'https://wifi.cloubridge.com/portal/payment/success'),
     ],
 
     /*

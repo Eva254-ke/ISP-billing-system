@@ -8,8 +8,9 @@ use App\Models\Payment;
 use App\Models\Tenant;
 use App\Models\UserSession;
 use App\Models\Voucher;
-use App\Services\MikroTik\MikroTikService;
-use App\Services\IntaSend\IntaSendService;
+use App\Services\MikroTik\SessionManager;
+use App\Services\Paystack\PaystackService;
+use App\Services\Radius\FreeRadiusProvisioningService;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\DB;
 
@@ -73,7 +74,7 @@ class CaptivePortalController extends Controller
             ->where('is_active', true)
             ->findOrFail($request->package_id);
 
-        if (!$this->isIntaSendConfigured()) {
+        if (!$this->isPaystackConfigured()) {
             return back()->withErrors(['Payment gateway is not configured. Please contact support.']);
         }
         
@@ -89,6 +90,10 @@ class CaptivePortalController extends Controller
                 'status' => 'pending',
                 'initiated_at' => now(),
                 'payment_channel' => 'captive_portal',
+                'metadata' => [
+                    'gateway' => 'paystack',
+                    'created_via' => 'captive_portal',
+                ],
             ]);
         });
         
@@ -102,25 +107,44 @@ class CaptivePortalController extends Controller
         session(['captive_phone' => $request->phone]);
         
         try {
-            $intasend = app(IntaSendService::class);
-            $response = $intasend->stkPush(
+            $paystack = app(PaystackService::class);
+            $response = $paystack->chargeMobileMoney(
                 phone: $this->normalizePhoneForStk($request->phone),
                 amount: (float) $package->price,
-                accountRef: $payment->mpesa_checkout_request_id,
+                reference: $payment->mpesa_checkout_request_id,
+                email: $this->buildPaystackCustomerEmail($request->phone, (int) $package->tenant_id),
                 narration: 'CloudBridge WiFi - ' . $package->name,
-                callbackUrl: (string) (config('services.intasend.callback_url') ?: route('api.payment.callback'))
+                metadata: [
+                    'payment_id' => $payment->id,
+                    'tenant_id' => $package->tenant_id,
+                    'package_id' => $package->id,
+                    'flow' => 'captive_portal',
+                ],
             );
+
+            $payment->update([
+                'metadata' => array_merge($payment->metadata ?? [], [
+                    'paystack_status' => $response['status'] ?? null,
+                    'paystack_reference' => $response['reference'] ?? null,
+                ]),
+            ]);
             
             if ($response['success']) {
+                if (($response['status'] ?? '') === 'success') {
+                    $this->markPaymentCompletedFromPaystack($payment, $response['raw'] ?? []);
+                }
+
                 return redirect()->route('wifi.status', ['phone' => $request->phone])
                     ->with('message', 'Check your phone to complete payment');
             }
             
-            Log::warning('STK Push failed', ['response' => $response]);
+            $this->markPaymentFailedFromPaystack($payment, $response['raw'] ?? [], (string) ($response['error'] ?? 'Payment initiation failed'));
+
+            Log::warning('Paystack mobile money charge failed', ['response' => $response]);
             return back()->withErrors(['Payment initiation failed. Try again.']);
             
         } catch (\Exception $e) {
-            Log::error('STK Push exception', [
+            Log::error('Paystack charge exception', [
                 'error' => $e->getMessage(),
                 'phone' => $request->phone
             ]);
@@ -171,6 +195,8 @@ class CaptivePortalController extends Controller
             ->whereIn('payment_channel', ['captive_portal', 'voucher'])
             ->orderBy('created_at', 'desc')
             ->first();
+
+        $payment = $this->syncPendingPaystackPayment($payment);
         
         if (!$payment) {
             return redirect()->route('wifi.packages')
@@ -179,35 +205,7 @@ class CaptivePortalController extends Controller
         
         if ($payment->status === 'completed') {
             try {
-                $existingSession = UserSession::where('payment_id', $payment->id)
-                    ->active()
-                    ->first();
-
-                if (!$existingSession) {
-                    $routerId = $this->resolveRouterIdForPayment($payment);
-                    $durationMinutes = $payment->package?->duration_in_minutes ?? 60;
-
-                    if ($routerId) {
-                        UserSession::create([
-                            'tenant_id' => $payment->tenant_id,
-                            'router_id' => $routerId,
-                            'package_id' => $payment->package_id,
-                            'username' => $this->resolveRadiusUsernameFromPhone($payment->phone, $payment->id),
-                            'phone' => $payment->phone,
-                            'status' => 'active',
-                            'started_at' => now(),
-                            'expires_at' => now()->copy()->addMinutes($durationMinutes),
-                            'payment_id' => $payment->id,
-                        ]);
-
-                        Log::info('Session activated', ['payment_id' => $payment->id]);
-                    } else {
-                        Log::warning('Session activation skipped: no router found for tenant', [
-                            'payment_id' => $payment->id,
-                            'tenant_id' => $payment->tenant_id,
-                        ]);
-                    }
-                }
+                $this->activatePaidAccess($payment);
                 
             } catch (\Exception $e) {
                 Log::error('MikroTik activation failed', [
@@ -445,7 +443,7 @@ class CaptivePortalController extends Controller
         $phone = trim($request->phone);
         $package = Package::findOrFail($request->package_id);
 
-        if (!$this->isIntaSendConfigured()) {
+        if (!$this->isPaystackConfigured()) {
             return back()->withErrors(['Payment gateway is not configured. Please contact support.']);
         }
         
@@ -471,22 +469,40 @@ class CaptivePortalController extends Controller
                 'initiated_at' => now(),
                 'payment_channel' => 'session_extension',
                 'metadata' => [
+                    'gateway' => 'paystack',
                     'parent_payment_id' => $activeSession->payment_id,
                 ],
             ]);
         });
         
         try {
-            $intasend = app(IntaSendService::class);
-            $response = $intasend->stkPush(
+            $paystack = app(PaystackService::class);
+            $response = $paystack->chargeMobileMoney(
                 phone: $this->normalizePhoneForStk($phone),
                 amount: (float) $package->price,
-                accountRef: $payment->mpesa_checkout_request_id,
+                reference: $payment->mpesa_checkout_request_id,
+                email: $this->buildPaystackCustomerEmail($phone, (int) $package->tenant_id),
                 narration: 'CloudBridge Session Extension - ' . $package->name,
-                callbackUrl: (string) (config('services.intasend.callback_url') ?: route('api.payment.callback'))
+                metadata: [
+                    'payment_id' => $payment->id,
+                    'tenant_id' => $package->tenant_id,
+                    'package_id' => $package->id,
+                    'flow' => 'session_extension',
+                ],
             );
+
+            $payment->update([
+                'metadata' => array_merge($payment->metadata ?? [], [
+                    'paystack_status' => $response['status'] ?? null,
+                    'paystack_reference' => $response['reference'] ?? null,
+                ]),
+            ]);
             
             if ($response['success']) {
+                if (($response['status'] ?? '') === 'success') {
+                    $this->markPaymentCompletedFromPaystack($payment, $response['raw'] ?? []);
+                }
+
                 Log::info('Extension STK sent', [
                     'phone' => $phone,
                     'amount' => $package->price,
@@ -497,6 +513,7 @@ class CaptivePortalController extends Controller
                     ->with('message', 'Complete STK Push to extend your session');
             }
             
+            $this->markPaymentFailedFromPaystack($payment, $response['raw'] ?? [], (string) ($response['error'] ?? 'Payment initiation failed'));
             return back()->withErrors(['STK Push failed. Try again.']);
             
         } catch (\Exception $e) {
@@ -517,9 +534,15 @@ class CaptivePortalController extends Controller
             ->where('payment_channel', 'captive_portal')
             ->orderBy('created_at', 'desc')
             ->first();
+
+        $payment = $this->syncPendingPaystackPayment($payment);
         
         if (!$payment) {
             return response()->json(['status' => 'not_found']);
+        }
+
+        if ($payment->status === 'completed') {
+            $this->activatePaidAccess($payment);
         }
         
         $session = UserSession::where('phone', $phone)
@@ -538,66 +561,291 @@ class CaptivePortalController extends Controller
     }
     
     /**
-     * IntaSend payment callback webhook
+     * Paystack payment callback webhook.
      */
-    public function callback(Request $request)
+    public function paystackCallback(Request $request)
     {
-        $data = $request->all();
-        
-        Log::info('IntaSend callback received', $data);
-        
-        $reference = $data['reference'] ?? null;
-        $status = $data['status'] ?? null;
-        
-        if (!$reference || !$status) {
-            return response()->json(['error' => 'Missing required fields'], 400);
+        $rawPayload = (string) $request->getContent();
+        $signature = $request->header('x-paystack-signature');
+        $paystack = app(PaystackService::class);
+
+        if (!$paystack->verifyWebhookSignature($rawPayload, $signature)) {
+            Log::warning('Invalid Paystack signature', [
+                'ip' => $request->ip(),
+                'signature_present' => !empty($signature),
+            ]);
+
+            return response()->json(['status' => 'ignored'], 401);
         }
-        
-        $payment = Payment::where('mpesa_checkout_request_id', $reference)->first();
-        
+
+        $eventPayload = $request->all();
+        $event = strtolower((string) ($eventPayload['event'] ?? ''));
+        $transaction = (array) ($eventPayload['data'] ?? []);
+        $reference = (string) ($transaction['reference'] ?? '');
+        $transactionStatus = strtolower((string) ($transaction['status'] ?? ''));
+
+        if ($reference === '') {
+            Log::warning('Paystack callback missing reference', [
+                'event' => $event,
+            ]);
+
+            return response()->json(['status' => 'received']);
+        }
+
+        $payment = Payment::where('mpesa_checkout_request_id', $reference)
+            ->orWhere('reference', $reference)
+            ->first();
+
         if (!$payment) {
-            Log::warning('Callback for unknown reference', ['reference' => $reference]);
-            return response()->json(['error' => 'Payment not found'], 404);
-        }
-        
-        if ($payment->status !== 'pending') {
-            Log::info('Duplicate callback ignored', [
+            Log::warning('Paystack callback for unknown reference', [
                 'reference' => $reference,
-                'current_status' => $payment->status
+                'event' => $event,
             ]);
-            return response()->json(['success' => true]);
+
+            return response()->json(['status' => 'received']);
         }
-        
-        if ($status === 'SUCCESS') {
-            DB::transaction(function () use ($payment, $data) {
-                $payment->update([
-                    'status' => 'completed',
-                    'mpesa_transaction_id' => $data['transaction_id'] ?? $payment->mpesa_transaction_id,
-                    'mpesa_receipt_number' => $data['mpesa_code'] ?? $payment->mpesa_receipt_number,
-                    'callback_data' => $data,
-                    'confirmed_at' => now(),
-                    'completed_at' => now(),
+
+        if (in_array($payment->status, ['completed', 'failed'], true)) {
+            return response()->json(['status' => 'received']);
+        }
+
+        if ($event === 'charge.success' || $transactionStatus === 'success') {
+            $this->markPaymentCompletedFromPaystack($payment, $eventPayload);
+            return response()->json(['status' => 'received']);
+        }
+
+        if (
+            $event === 'charge.failed'
+            || in_array($transactionStatus, ['failed', 'abandoned', 'cancelled', 'canceled', 'reversed'], true)
+        ) {
+            $reason = (string) ($transaction['gateway_response'] ?? $transaction['message'] ?? 'Payment failed');
+            $this->markPaymentFailedFromPaystack($payment, $eventPayload, $reason);
+            return response()->json(['status' => 'received']);
+        }
+
+        $payment->update([
+            'callback_data' => $eventPayload,
+            'metadata' => array_merge($payment->metadata ?? [], [
+                'gateway' => 'paystack',
+                'paystack_last_event' => $event,
+                'paystack_last_status' => $transactionStatus !== '' ? $transactionStatus : null,
+            ]),
+        ]);
+
+        return response()->json(['status' => 'received']);
+    }
+
+    private function syncPendingPaystackPayment(?Payment $payment): ?Payment
+    {
+        if (!$payment || $payment->status !== 'pending') {
+            return $payment;
+        }
+
+        $gateway = strtolower((string) data_get($payment->metadata, 'gateway', ''));
+        if ($gateway !== 'paystack') {
+            return $payment;
+        }
+
+        try {
+            $paystack = app(PaystackService::class);
+            $verification = $paystack->verifyTransaction((string) $payment->mpesa_checkout_request_id);
+
+            if (!$verification['success']) {
+                Log::warning('Paystack verification failed for pending payment', [
+                    'payment_id' => $payment->id,
+                    'reference' => $payment->mpesa_checkout_request_id,
+                    'error' => $verification['error'] ?? null,
                 ]);
-            });
-            
-            Log::info('Payment confirmed via callback', [
-                'reference' => $reference,
-                'payment_id' => $payment->id
-            ]);
-        } else {
+
+                return $payment;
+            }
+
+            if ($verification['is_paid']) {
+                $this->markPaymentCompletedFromPaystack($payment, $verification['raw'] ?? []);
+                return $payment->fresh();
+            }
+
+            if ($verification['is_failed']) {
+                $reason = (string) ($verification['gateway_response'] ?? $verification['error'] ?? 'Payment failed');
+                $this->markPaymentFailedFromPaystack($payment, $verification['raw'] ?? [], $reason);
+                return $payment->fresh();
+            }
+
             $payment->update([
-                'status' => 'failed',
-                'callback_data' => $data,
-                'failed_at' => now()
+                'metadata' => array_merge($payment->metadata ?? [], [
+                    'paystack_last_status' => $verification['payment_status'] ?? 'pending',
+                ]),
             ]);
-            
-            Log::warning('Payment failed via callback', [
-                'reference' => $reference,
-                'status' => $status
+        } catch (\Throwable $e) {
+            Log::error('Paystack pending sync exception', [
+                'payment_id' => $payment->id,
+                'reference' => $payment->mpesa_checkout_request_id,
+                'error' => $e->getMessage(),
             ]);
         }
-        
-        return response()->json(['success' => true]);
+
+        return $payment;
+    }
+
+    private function markPaymentCompletedFromPaystack(Payment $payment, array $payload): void
+    {
+        if ($payment->status === 'completed') {
+            return;
+        }
+
+        $transaction = (array) ($payload['data'] ?? []);
+        $paidAt = $transaction['paid_at'] ?? $transaction['paidAt'] ?? now()->toIso8601String();
+
+        $payment->update([
+            'status' => 'completed',
+            'mpesa_transaction_id' => $transaction['id'] ?? $payment->mpesa_transaction_id,
+            'mpesa_receipt_number' => $transaction['reference'] ?? $payment->mpesa_receipt_number,
+            'callback_data' => $payload,
+            'confirmed_at' => $payment->confirmed_at ?? now(),
+            'completed_at' => $payment->completed_at ?? now(),
+            'failed_at' => null,
+            'metadata' => array_merge($payment->metadata ?? [], [
+                'gateway' => 'paystack',
+                'paystack_last_event' => strtolower((string) ($payload['event'] ?? 'charge.success')),
+                'paystack_last_status' => 'success',
+                'paystack_paid_at' => $paidAt,
+            ]),
+        ]);
+    }
+
+    private function markPaymentFailedFromPaystack(Payment $payment, array $payload, string $reason): void
+    {
+        if ($payment->status === 'completed') {
+            return;
+        }
+
+        $payment->update([
+            'status' => 'failed',
+            'callback_data' => $payload,
+            'failed_at' => now(),
+            'metadata' => array_merge($payment->metadata ?? [], [
+                'gateway' => 'paystack',
+                'paystack_last_event' => strtolower((string) ($payload['event'] ?? 'charge.failed')),
+                'paystack_last_status' => 'failed',
+                'paystack_failure_reason' => $reason,
+            ]),
+        ]);
+    }
+
+    private function activatePaidAccess(Payment $payment): ?UserSession
+    {
+        $activeSession = UserSession::where('payment_id', $payment->id)
+            ->active()
+            ->first();
+
+        if ($activeSession) {
+            return $activeSession;
+        }
+
+        $routerId = $this->resolveRouterIdForPayment($payment);
+        if (!$routerId) {
+            Log::warning('Access activation skipped: no router found for tenant', [
+                'payment_id' => $payment->id,
+                'tenant_id' => $payment->tenant_id,
+            ]);
+            return null;
+        }
+
+        $durationMinutes = max(1, (int) ($payment->package?->duration_in_minutes ?? 60));
+        $username = $this->resolveRadiusUsernameFromPhone($payment->phone, $payment->id);
+        $expiresAt = now()->copy()->addMinutes($durationMinutes);
+
+        $session = UserSession::firstOrCreate(
+            ['payment_id' => $payment->id],
+            [
+                'tenant_id' => $payment->tenant_id,
+                'router_id' => $routerId,
+                'package_id' => $payment->package_id,
+                'username' => $username,
+                'phone' => $payment->phone,
+                'status' => 'pending',
+                'started_at' => now(),
+                'expires_at' => $expiresAt,
+            ]
+        );
+
+        if ((bool) config('radius.enabled', false) && $payment->package) {
+            try {
+                $radiusProvisioning = app(FreeRadiusProvisioningService::class);
+                $radiusProvisioning->provisionUser(
+                    username: $username,
+                    password: $username,
+                    package: $payment->package,
+                    expiresAt: $expiresAt
+                );
+
+                $session->update([
+                    'status' => 'active',
+                    'started_at' => $session->started_at ?? now(),
+                    'expires_at' => $expiresAt,
+                    'last_synced_at' => now(),
+                    'metadata' => array_merge($session->metadata ?? [], [
+                        'radius' => [
+                            'provisioned' => true,
+                            'username' => $username,
+                            'provisioned_at' => now()->toIso8601String(),
+                            'expires_at' => $expiresAt->toIso8601String(),
+                            'auth_hint' => 'password_equals_username',
+                        ],
+                    ]),
+                ]);
+
+                $payment->update([
+                    'metadata' => array_merge($payment->metadata ?? [], [
+                        'radius' => [
+                            'provisioned' => true,
+                            'username' => $username,
+                            'provisioned_at' => now()->toIso8601String(),
+                            'expires_at' => $expiresAt->toIso8601String(),
+                            'auth_hint' => 'password_equals_username',
+                        ],
+                    ]),
+                ]);
+
+                Log::info('Paid access provisioned via FreeRADIUS', [
+                    'payment_id' => $payment->id,
+                    'session_id' => $session->id,
+                    'username' => $username,
+                ]);
+
+                return $session->fresh();
+            } catch (\Throwable $e) {
+                Log::error('FreeRADIUS provisioning failed after payment', [
+                    'payment_id' => $payment->id,
+                    'session_id' => $session->id,
+                    'username' => $username,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
+        if ($payment->package) {
+            $sessionManager = app(SessionManager::class);
+            $activation = $sessionManager->activateSession($session, $payment->package);
+
+            if (!($activation['success'] ?? false)) {
+                Log::warning('MikroTik activation not completed', [
+                    'payment_id' => $payment->id,
+                    'session_id' => $session->id,
+                    'reason' => $activation['error'] ?? 'unknown',
+                    'queued' => (bool) ($activation['queued'] ?? false),
+                ]);
+                return $session->fresh();
+            }
+
+            Log::info('Paid access activated on MikroTik', [
+                'payment_id' => $payment->id,
+                'session_id' => $session->id,
+                'username' => $session->username,
+            ]);
+        }
+
+        return $session->fresh();
     }
 
     private function resolveRouterIdForPayment(Payment $payment): ?int
@@ -639,22 +887,20 @@ class CaptivePortalController extends Controller
         return 'cbu' . (int) $paymentId;
     }
 
-    private function isIntaSendConfigured(): bool
+    private function buildPaystackCustomerEmail(string $phone, int $tenantId = 0): string
     {
-        $publicKey = (string) config('services.intasend.public_key', '');
-        $secretKey = (string) config('services.intasend.secret_key', '');
-
-        if (trim($publicKey) === '' || trim($secretKey) === '') {
-            return false;
+        $digits = preg_replace('/\D+/', '', $phone);
+        if ($digits === '') {
+            $digits = (string) now()->timestamp;
         }
 
-        $placeholders = [
-            'your_public_key_here',
-            'your_secret_key_here',
-            'changeme',
-        ];
+        $tenantPrefix = $tenantId > 0 ? ('t' . $tenantId . '-') : '';
 
-        return !in_array(strtolower(trim($publicKey)), $placeholders, true)
-            && !in_array(strtolower(trim($secretKey)), $placeholders, true);
+        return strtolower($tenantPrefix . $digits) . '@wifi.cloudbridge.local';
+    }
+
+    private function isPaystackConfigured(): bool
+    {
+        return app(PaystackService::class)->isConfigured();
     }
 }

@@ -7,6 +7,7 @@ use App\Http\Controllers\Api\MikroTik\SessionController;
 use App\Http\Controllers\Api\PaymentController;
 use App\Http\Controllers\Api\PackageController;
 use App\Http\Controllers\Api\VoucherController;
+use App\Http\Controllers\CaptivePortalController;
 
 /*
 |--------------------------------------------------------------------------
@@ -64,6 +65,14 @@ Route::get('/health', function () {
  */
 Route::post('/payment/callback', [PaymentController::class, 'callback'])
     ->name('api.payment.callback')
+    ->withoutMiddleware(['auth:sanctum', 'web', 'throttle:api']); // Public webhook
+
+Route::post('/payment/paystack/callback', [CaptivePortalController::class, 'paystackCallback'])
+    ->name('api.payment.paystack.callback')
+    ->withoutMiddleware(['auth:sanctum', 'web', 'throttle:api']); // Public webhook
+
+Route::post('/paystack/webhook', [CaptivePortalController::class, 'paystackCallback'])
+    ->name('api.paystack.webhook')
     ->withoutMiddleware(['auth:sanctum', 'web', 'throttle:api']); // Public webhook
 
 // Backward-compatible IntaSend webhook alias using the same callback pipeline.
