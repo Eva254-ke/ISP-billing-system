@@ -777,15 +777,26 @@ class Tenant extends Model
     public static function findBySubdomainOrDomain(string $identifier): ?self
     {
         $cacheKey = "tenant_by_{$identifier}";
-        $tenantId = Cache::remember($cacheKey, 300, function () use ($identifier) {
-            return (int) static::query()
+
+        $cached = Cache::get($cacheKey);
+        if (is_object($cached)) {
+            // Drop stale serialized objects from old cache entries.
+            Cache::forget($cacheKey);
+            $cached = null;
+        }
+
+        $tenantId = is_numeric($cached) ? (int) $cached : 0;
+        if ($tenantId <= 0) {
+            $tenantId = (int) static::query()
                 ->where('subdomain', $identifier)
                 ->orWhere('domain', $identifier)
                 ->active()
                 ->value('id');
-        });
 
-        if (!$tenantId) {
+            Cache::put($cacheKey, $tenantId ?: null, 300);
+        }
+
+        if ($tenantId <= 0) {
             return null;
         }
 
