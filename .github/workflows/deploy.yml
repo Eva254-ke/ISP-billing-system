@@ -65,7 +65,7 @@ jobs:
             .
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         with:
           name: release
           path: release.tar.gz
@@ -77,7 +77,7 @@ jobs:
     environment: production
     steps:
       - name: Download artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v3
         with:
           name: release
           path: .
@@ -156,6 +156,9 @@ jobs:
             chmod -R 775 storage bootstrap/cache
 
             ln -sfn "$RELEASE" "$CURRENT"
+
+            # Keep a stable public path for Nginx when symlink restrictions are enabled.
+            ln -sfn "$CURRENT/public" "$APP_ROOT/public"
 
             systemctl reload php8.4-fpm
 

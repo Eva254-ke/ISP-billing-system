@@ -776,13 +776,20 @@ class Tenant extends Model
 
     public static function findBySubdomainOrDomain(string $identifier): ?self
     {
-        return Cache::remember("tenant_by_{$identifier}", 300, function () use ($identifier) {
-            return static::query()
+        $cacheKey = "tenant_by_{$identifier}";
+        $tenantId = Cache::remember($cacheKey, 300, function () use ($identifier) {
+            return (int) static::query()
                 ->where('subdomain', $identifier)
                 ->orWhere('domain', $identifier)
                 ->active()
-                ->first();
+                ->value('id');
         });
+
+        if (!$tenantId) {
+            return null;
+        }
+
+        return static::active()->find($tenantId);
     }
 
     public static function findWithCaptivePortalById(int $id): ?self
