@@ -166,7 +166,23 @@ Route::post('/api/mpesa/callback/{tenant?}', function (Request $request, ?int $t
         'ip' => $request->ip(),
     ]);
 
-    ProcessMpesaCallback::dispatch($normalized)->onQueue('critical');
+    try {
+        ProcessMpesaCallback::dispatch($normalized)->onQueue('critical');
+    } catch (\Throwable $queueException) {
+        Log::channel('payment')->error('Failed to queue M-Pesa callback job, falling back to sync processing', [
+            'checkout_request_id' => $normalized['CheckoutRequestID'] ?? null,
+            'error' => $queueException->getMessage(),
+        ]);
+
+        try {
+            ProcessMpesaCallback::dispatchSync($normalized);
+        } catch (\Throwable $syncException) {
+            Log::channel('payment')->critical('Synchronous M-Pesa callback fallback failed', [
+                'checkout_request_id' => $normalized['CheckoutRequestID'] ?? null,
+                'error' => $syncException->getMessage(),
+            ]);
+        }
+    }
 
     return response()->json(['ResultCode' => 0, 'ResultDesc' => 'Accepted']);
 })
