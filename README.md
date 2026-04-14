@@ -59,6 +59,24 @@ This runs: Laravel server, queue worker, pail logs, and Vite.
 npm run build
 ```
 
+### Queue Worker (Production)
+M-Pesa callbacks are queued on `critical`. Keep a persistent worker running:
+
+```bash
+php artisan queue:work redis --queue=critical,high,medium,low,default --sleep=1 --tries=5 --timeout=120 --backoff=10 --max-time=3600 --memory=256
+```
+
+Recommended (auto-restart, boot persistence) via systemd:
+
+```bash
+# edit deploy/systemd/cloudbridge-queue.service first:
+# - User / Group
+# - WorkingDirectory
+# - php binary path in ExecStart
+bash scripts/queue/install-systemd.sh
+bash scripts/queue/check-worker.sh
+```
+
 ## Build Notes
 This project uses Vite for compiled assets. For critical UI adjustments without a rebuild, a runtime override stylesheet is loaded:
 - `public/css/admin-overrides.css`
