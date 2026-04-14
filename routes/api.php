@@ -7,7 +7,6 @@ use App\Http\Controllers\Api\MikroTik\SessionController;
 use App\Http\Controllers\Api\PaymentController;
 use App\Http\Controllers\Api\PackageController;
 use App\Http\Controllers\Api\VoucherController;
-use App\Http\Controllers\CaptivePortalController;
 
 /*
 |--------------------------------------------------------------------------
@@ -67,13 +66,35 @@ Route::post('/payment/callback', [PaymentController::class, 'callback'])
     ->name('api.payment.callback')
     ->withoutMiddleware(['auth:sanctum', 'web', 'throttle:api']); // Public webhook
 
-Route::post('/payment/paystack/callback', [CaptivePortalController::class, 'paystackCallback'])
-    ->name('api.payment.paystack.callback')
-    ->withoutMiddleware(['auth:sanctum', 'web', 'throttle:api']); // Public webhook
+Route::post('/payment/paystack/callback', function (Request $request) {
+    \Log::channel('payment')->warning('Disabled Paystack webhook endpoint called', [
+        'path' => '/api/payment/paystack/callback',
+        'ip' => $request->ip(),
+        'user_agent' => $request->userAgent(),
+    ]);
 
-Route::post('/paystack/webhook', [CaptivePortalController::class, 'paystackCallback'])
+    return response()->json([
+        'status' => 'disabled',
+        'message' => 'Paystack webhook is disabled. Use M-Pesa Daraja callback.',
+    ], 410);
+})
+    ->name('api.payment.paystack.callback')
+    ->withoutMiddleware(['auth:sanctum', 'web', 'throttle:api']); // Public endpoint kept for backward compatibility
+
+Route::post('/paystack/webhook', function (Request $request) {
+    \Log::channel('payment')->warning('Disabled Paystack webhook endpoint called', [
+        'path' => '/api/paystack/webhook',
+        'ip' => $request->ip(),
+        'user_agent' => $request->userAgent(),
+    ]);
+
+    return response()->json([
+        'status' => 'disabled',
+        'message' => 'Paystack webhook is disabled. Use M-Pesa Daraja callback.',
+    ], 410);
+})
     ->name('api.paystack.webhook')
-    ->withoutMiddleware(['auth:sanctum', 'web', 'throttle:api']); // Public webhook
+    ->withoutMiddleware(['auth:sanctum', 'web', 'throttle:api']); // Public endpoint kept for backward compatibility
 
 // Backward-compatible IntaSend webhook alias using the same callback pipeline.
 Route::post('/intasend/callback', [PaymentController::class, 'callback'])

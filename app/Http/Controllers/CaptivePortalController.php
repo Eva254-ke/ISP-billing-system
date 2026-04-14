@@ -9,7 +9,7 @@ use App\Models\Tenant;
 use App\Models\UserSession;
 use App\Models\Voucher;
 use App\Services\MikroTik\SessionManager;
-use App\Services\Paystack\PaystackService;
+use App\Services\Mpesa\DarajaService;
 use App\Services\Radius\FreeRadiusProvisioningService;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\DB;
@@ -63,6 +63,7 @@ class CaptivePortalController extends Controller
     public function pay(Request $request)
     {
         $tenantId = (int) session('captive_tenant_id');
+        $gateway = $this->resolvePaymentGateway();
 
         $request->validate([
             'phone' => 'required|regex:/^0[17]\d{8}$/',
@@ -74,11 +75,11 @@ class CaptivePortalController extends Controller
             ->where('is_active', true)
             ->findOrFail($request->package_id);
 
-        if (!$this->isPaystackConfigured()) {
+        if (!$this->isGatewayConfigured($gateway)) {
             return back()->withErrors(['Payment gateway is not configured. Please contact support.']);
         }
         
-        $payment = DB::transaction(function () use ($request, $package) {
+        $payment = DB::transaction(function () use ($request, $package, $gateway) {
             return Payment::create([
                 'tenant_id' => $package->tenant_id,
                 'phone' => $request->phone,
@@ -91,7 +92,7 @@ class CaptivePortalController extends Controller
                 'initiated_at' => now(),
                 'payment_channel' => 'captive_portal',
                 'metadata' => [
-                    'gateway' => 'paystack',
+                    'gateway' => $gateway,
                     'created_via' => 'captive_portal',
                 ],
             ]);
@@ -107,46 +108,25 @@ class CaptivePortalController extends Controller
         session(['captive_phone' => $request->phone]);
         
         try {
-            $paystack = app(PaystackService::class);
-            $response = $paystack->chargeMobileMoney(
-                phone: $this->normalizePhoneForStk($request->phone),
-                amount: (float) $package->price,
-                reference: $payment->mpesa_checkout_request_id,
-                email: $this->buildPaystackCustomerEmail($request->phone, (int) $package->tenant_id),
-                narration: 'CloudBridge WiFi - ' . $package->name,
-                metadata: [
-                    'payment_id' => $payment->id,
-                    'tenant_id' => $package->tenant_id,
-                    'package_id' => $package->id,
-                    'flow' => 'captive_portal',
-                ],
+            $response = $this->initiateStkPush(
+                payment: $payment,
+                package: $package,
+                phone: (string) $request->phone,
+                flow: 'captive_portal'
             );
 
-            $payment->update([
-                'metadata' => array_merge($payment->metadata ?? [], [
-                    'paystack_status' => $response['status'] ?? null,
-                    'paystack_reference' => $response['reference'] ?? null,
-                ]),
-            ]);
-            
             if ($response['success']) {
-                if (($response['status'] ?? '') === 'success') {
-                    $this->markPaymentCompletedFromPaystack($payment, $response['raw'] ?? []);
-                }
-
                 return redirect()->route('wifi.status', ['phone' => $request->phone])
-                    ->with('message', 'Check your phone to complete payment');
+                    ->with('message', (string) ($response['user_message'] ?? 'Check your phone to complete payment'));
             }
-            
-            $this->markPaymentFailedFromPaystack($payment, $response['raw'] ?? [], (string) ($response['error'] ?? 'Payment initiation failed'));
 
-            Log::warning('Paystack mobile money charge failed', ['response' => $response]);
-            return back()->withErrors(['Payment initiation failed. Try again.']);
+            return back()->withErrors([(string) ($response['error'] ?? 'Payment initiation failed. Try again.')]);
             
         } catch (\Exception $e) {
-            Log::error('Paystack charge exception', [
+            Log::error('Captive portal STK initiation exception', [
                 'error' => $e->getMessage(),
-                'phone' => $request->phone
+                'phone' => $request->phone,
+                'gateway' => $gateway,
             ]);
             return back()->withErrors(['Payment service unavailable. Please try again.']);
         }
@@ -195,15 +175,13 @@ class CaptivePortalController extends Controller
             ->whereIn('payment_channel', ['captive_portal', 'voucher'])
             ->orderBy('created_at', 'desc')
             ->first();
-
-        $payment = $this->syncPendingPaystackPayment($payment);
         
         if (!$payment) {
             return redirect()->route('wifi.packages')
                 ->withErrors(['No payment found. Please start again.']);
         }
         
-        if ($payment->status === 'completed') {
+        if (in_array($payment->status, ['completed', 'confirmed'], true)) {
             try {
                 $this->activatePaidAccess($payment);
                 
@@ -435,6 +413,8 @@ class CaptivePortalController extends Controller
      */
     public function extend(Request $request)
     {
+        $gateway = $this->resolvePaymentGateway();
+
         $request->validate([
             'phone' => 'required|regex:/^0[17]\d{8}$/',
             'package_id' => 'required|exists:packages,id'
@@ -443,7 +423,7 @@ class CaptivePortalController extends Controller
         $phone = trim($request->phone);
         $package = Package::findOrFail($request->package_id);
 
-        if (!$this->isPaystackConfigured()) {
+        if (!$this->isGatewayConfigured($gateway)) {
             return back()->withErrors(['Payment gateway is not configured. Please contact support.']);
         }
         
@@ -456,7 +436,7 @@ class CaptivePortalController extends Controller
                 ->withErrors(['No active session found. Please purchase a package first.']);
         }
         
-        $payment = DB::transaction(function () use ($phone, $package, $activeSession) {
+        $payment = DB::transaction(function () use ($phone, $package, $activeSession, $gateway) {
             return Payment::create([
                 'tenant_id' => $package->tenant_id,
                 'phone' => $phone,
@@ -469,57 +449,39 @@ class CaptivePortalController extends Controller
                 'initiated_at' => now(),
                 'payment_channel' => 'session_extension',
                 'metadata' => [
-                    'gateway' => 'paystack',
+                    'gateway' => $gateway,
                     'parent_payment_id' => $activeSession->payment_id,
                 ],
             ]);
         });
         
         try {
-            $paystack = app(PaystackService::class);
-            $response = $paystack->chargeMobileMoney(
-                phone: $this->normalizePhoneForStk($phone),
-                amount: (float) $package->price,
-                reference: $payment->mpesa_checkout_request_id,
-                email: $this->buildPaystackCustomerEmail($phone, (int) $package->tenant_id),
-                narration: 'CloudBridge Session Extension - ' . $package->name,
-                metadata: [
-                    'payment_id' => $payment->id,
-                    'tenant_id' => $package->tenant_id,
-                    'package_id' => $package->id,
-                    'flow' => 'session_extension',
-                ],
+            $response = $this->initiateStkPush(
+                payment: $payment,
+                package: $package,
+                phone: $phone,
+                flow: 'session_extension'
             );
 
-            $payment->update([
-                'metadata' => array_merge($payment->metadata ?? [], [
-                    'paystack_status' => $response['status'] ?? null,
-                    'paystack_reference' => $response['reference'] ?? null,
-                ]),
-            ]);
-            
             if ($response['success']) {
-                if (($response['status'] ?? '') === 'success') {
-                    $this->markPaymentCompletedFromPaystack($payment, $response['raw'] ?? []);
-                }
-
                 Log::info('Extension STK sent', [
                     'phone' => $phone,
                     'amount' => $package->price,
                     'reference' => $payment->mpesa_checkout_request_id,
+                    'gateway' => $gateway,
                 ]);
-                
+
                 return redirect()->route('wifi.status', ['phone' => $phone])
-                    ->with('message', 'Complete STK Push to extend your session');
+                    ->with('message', (string) ($response['user_message'] ?? 'Complete STK Push to extend your session'));
             }
-            
-            $this->markPaymentFailedFromPaystack($payment, $response['raw'] ?? [], (string) ($response['error'] ?? 'Payment initiation failed'));
-            return back()->withErrors(['STK Push failed. Try again.']);
+
+            return back()->withErrors([(string) ($response['error'] ?? 'STK Push failed. Try again.')]);
             
         } catch (\Exception $e) {
             Log::error('Extension STK failed', [
                 'phone' => $phone,
-                'error' => $e->getMessage()
+                'error' => $e->getMessage(),
+                'gateway' => $gateway,
             ]);
             return back()->withErrors(['Payment service unavailable.']);
         }
@@ -534,18 +496,16 @@ class CaptivePortalController extends Controller
             ->where('payment_channel', 'captive_portal')
             ->orderBy('created_at', 'desc')
             ->first();
-
-        $payment = $this->syncPendingPaystackPayment($payment);
         
         if (!$payment) {
             return response()->json(['status' => 'not_found']);
         }
 
-        if ($payment->status === 'completed') {
+        if (in_array($payment->status, ['completed', 'confirmed'], true)) {
             $this->activatePaidAccess($payment);
         }
         
-        $session = UserSession::where('phone', $phone)
+        $session = UserSession::where('payment_id', $payment->id)
             ->active()
             ->first();
         
@@ -561,159 +521,81 @@ class CaptivePortalController extends Controller
     }
     
     /**
-     * Paystack payment callback webhook.
+     * Paystack is disabled for captive portal production flow.
      */
     public function paystackCallback(Request $request)
     {
-        $rawPayload = (string) $request->getContent();
-        $signature = $request->header('x-paystack-signature');
-        $paystack = app(PaystackService::class);
-
-        if (!$paystack->verifyWebhookSignature($rawPayload, $signature)) {
-            Log::warning('Invalid Paystack signature', [
-                'ip' => $request->ip(),
-                'signature_present' => !empty($signature),
-            ]);
-
-            return response()->json(['status' => 'ignored'], 401);
-        }
-
-        $eventPayload = $request->all();
-        $event = strtolower((string) ($eventPayload['event'] ?? ''));
-        $transaction = (array) ($eventPayload['data'] ?? []);
-        $reference = (string) ($transaction['reference'] ?? '');
-        $transactionStatus = strtolower((string) ($transaction['status'] ?? ''));
-
-        if ($reference === '') {
-            Log::warning('Paystack callback missing reference', [
-                'event' => $event,
-            ]);
-
-            return response()->json(['status' => 'received']);
-        }
-
-        $payment = Payment::where('mpesa_checkout_request_id', $reference)
-            ->orWhere('reference', $reference)
-            ->first();
-
-        if (!$payment) {
-            Log::warning('Paystack callback for unknown reference', [
-                'reference' => $reference,
-                'event' => $event,
-            ]);
-
-            return response()->json(['status' => 'received']);
-        }
-
-        if (in_array($payment->status, ['completed', 'failed'], true)) {
-            return response()->json(['status' => 'received']);
-        }
-
-        if ($event === 'charge.success' || $transactionStatus === 'success') {
-            $this->markPaymentCompletedFromPaystack($payment, $eventPayload);
-            return response()->json(['status' => 'received']);
-        }
-
-        if (
-            $event === 'charge.failed'
-            || in_array($transactionStatus, ['failed', 'abandoned', 'cancelled', 'canceled', 'reversed'], true)
-        ) {
-            $reason = (string) ($transaction['gateway_response'] ?? $transaction['message'] ?? 'Payment failed');
-            $this->markPaymentFailedFromPaystack($payment, $eventPayload, $reason);
-            return response()->json(['status' => 'received']);
-        }
-
-        $payment->update([
-            'callback_data' => $eventPayload,
-            'metadata' => array_merge($payment->metadata ?? [], [
-                'gateway' => 'paystack',
-                'paystack_last_event' => $event,
-                'paystack_last_status' => $transactionStatus !== '' ? $transactionStatus : null,
-            ]),
+        Log::warning('Paystack callback ignored: captive portal is Daraja-only', [
+            'ip' => $request->ip(),
+            'user_agent' => $request->userAgent(),
         ]);
 
-        return response()->json(['status' => 'received']);
+        return response()->json([
+            'status' => 'disabled',
+            'message' => 'Paystack is disabled. Use M-Pesa Daraja STK Push.',
+        ], 410);
     }
 
-    private function syncPendingPaystackPayment(?Payment $payment): ?Payment
+    private function initiateStkPush(Payment $payment, Package $package, string $phone, string $flow): array
     {
-        if (!$payment || $payment->status !== 'pending') {
-            return $payment;
-        }
-
-        $gateway = strtolower((string) data_get($payment->metadata, 'gateway', ''));
-        if ($gateway !== 'paystack') {
-            return $payment;
-        }
-
-        try {
-            $paystack = app(PaystackService::class);
-            $verification = $paystack->verifyTransaction((string) $payment->mpesa_checkout_request_id);
-
-            if (!$verification['success']) {
-                Log::warning('Paystack verification failed for pending payment', [
-                    'payment_id' => $payment->id,
-                    'reference' => $payment->mpesa_checkout_request_id,
-                    'error' => $verification['error'] ?? null,
-                ]);
-
-                return $payment;
-            }
-
-            if ($verification['is_paid']) {
-                $this->markPaymentCompletedFromPaystack($payment, $verification['raw'] ?? []);
-                return $payment->fresh();
-            }
-
-            if ($verification['is_failed']) {
-                $reason = (string) ($verification['gateway_response'] ?? $verification['error'] ?? 'Payment failed');
-                $this->markPaymentFailedFromPaystack($payment, $verification['raw'] ?? [], $reason);
-                return $payment->fresh();
-            }
-
-            $payment->update([
-                'metadata' => array_merge($payment->metadata ?? [], [
-                    'paystack_last_status' => $verification['payment_status'] ?? 'pending',
-                ]),
-            ]);
-        } catch (\Throwable $e) {
-            Log::error('Paystack pending sync exception', [
-                'payment_id' => $payment->id,
-                'reference' => $payment->mpesa_checkout_request_id,
-                'error' => $e->getMessage(),
-            ]);
-        }
-
-        return $payment;
+        return $this->initiateDarajaStkPush($payment, $package, $phone, $flow);
     }
 
-    private function markPaymentCompletedFromPaystack(Payment $payment, array $payload): void
+    private function initiateDarajaStkPush(Payment $payment, Package $package, string $phone, string $flow): array
     {
-        if ($payment->status === 'completed') {
-            return;
-        }
+        $daraja = app(DarajaService::class);
+        $response = $daraja->stkPush(
+            phone: $this->normalizePhoneForStk($phone),
+            amount: (float) $package->price,
+            accountReference: (string) $payment->mpesa_checkout_request_id,
+            description: ($flow === 'session_extension' ? 'CloudBridge Session Extension - ' : 'CloudBridge WiFi - ') . $package->name,
+            callbackUrl: $this->resolveDarajaCallbackUrl()
+        );
 
-        $transaction = (array) ($payload['data'] ?? []);
-        $paidAt = $transaction['paid_at'] ?? $transaction['paidAt'] ?? now()->toIso8601String();
+        $newCheckoutId = (string) ($response['checkout_request_id'] ?? '');
+        $newMerchantId = (string) ($response['merchant_request_id'] ?? '');
 
-        $payment->update([
-            'status' => 'completed',
-            'mpesa_transaction_id' => $transaction['id'] ?? $payment->mpesa_transaction_id,
-            'mpesa_receipt_number' => $transaction['reference'] ?? $payment->mpesa_receipt_number,
-            'callback_data' => $payload,
-            'confirmed_at' => $payment->confirmed_at ?? now(),
-            'completed_at' => $payment->completed_at ?? now(),
-            'failed_at' => null,
+        $updates = [
             'metadata' => array_merge($payment->metadata ?? [], [
-                'gateway' => 'paystack',
-                'paystack_last_event' => strtolower((string) ($payload['event'] ?? 'charge.success')),
-                'paystack_last_status' => 'success',
-                'paystack_paid_at' => $paidAt,
+                'gateway' => 'daraja',
+                'daraja_response_code' => $response['response_code'] ?? null,
+                'daraja_response_description' => $response['response_description'] ?? null,
+                'daraja_merchant_request_id' => $newMerchantId !== '' ? $newMerchantId : null,
+                'daraja_last_request_at' => now()->toIso8601String(),
             ]),
+        ];
+
+        if ($response['success'] && $newCheckoutId !== '' && $newCheckoutId !== (string) $payment->mpesa_checkout_request_id) {
+            $updates['mpesa_checkout_request_id'] = $newCheckoutId;
+        }
+
+        $payment->update($updates);
+
+        if ($response['success']) {
+            return [
+                'success' => true,
+                'user_message' => (string) ($response['customer_message'] ?: 'STK Push sent. Complete payment on your phone.'),
+                'error' => null,
+            ];
+        }
+
+        $error = (string) ($response['error'] ?? 'STK Push failed');
+        $this->markPaymentFailedFromDaraja($payment, $response['raw'] ?? [], $error);
+
+        Log::warning('Daraja STK push failed', [
+            'payment_id' => $payment->id,
+            'error' => $error,
+            'flow' => $flow,
         ]);
+
+        return [
+            'success' => false,
+            'user_message' => null,
+            'error' => 'STK Push failed. Try again.',
+        ];
     }
 
-    private function markPaymentFailedFromPaystack(Payment $payment, array $payload, string $reason): void
+    private function markPaymentFailedFromDaraja(Payment $payment, array $payload, string $reason): void
     {
         if ($payment->status === 'completed') {
             return;
@@ -724,10 +606,9 @@ class CaptivePortalController extends Controller
             'callback_data' => $payload,
             'failed_at' => now(),
             'metadata' => array_merge($payment->metadata ?? [], [
-                'gateway' => 'paystack',
-                'paystack_last_event' => strtolower((string) ($payload['event'] ?? 'charge.failed')),
-                'paystack_last_status' => 'failed',
-                'paystack_failure_reason' => $reason,
+                'gateway' => 'daraja',
+                'daraja_last_status' => 'failed',
+                'daraja_failure_reason' => $reason,
             ]),
         ]);
     }
@@ -887,20 +768,23 @@ class CaptivePortalController extends Controller
         return 'cbu' . (int) $paymentId;
     }
 
-    private function buildPaystackCustomerEmail(string $phone, int $tenantId = 0): string
+    private function resolveDarajaCallbackUrl(): string
     {
-        $digits = preg_replace('/\D+/', '', $phone);
-        if ($digits === '') {
-            $digits = (string) now()->timestamp;
+        $configured = trim((string) config('services.mpesa.callback_url', ''));
+        if ($configured !== '') {
+            return $configured;
         }
 
-        $tenantPrefix = $tenantId > 0 ? ('t' . $tenantId . '-') : '';
-
-        return strtolower($tenantPrefix . $digits) . '@wifi.cloudbridge.local';
+        return url('/api/mpesa/callback');
     }
 
-    private function isPaystackConfigured(): bool
+    private function resolvePaymentGateway(): string
     {
-        return app(PaystackService::class)->isConfigured();
+        return 'daraja';
+    }
+
+    private function isGatewayConfigured(string $gateway): bool
+    {
+        return app(DarajaService::class)->isConfigured();
     }
 }

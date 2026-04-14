@@ -126,21 +126,24 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | Payment Services - SAFARICOM DARAJA (Future/Enterprise)
+    | Payment Services - SAFARICOM DARAJA
     |--------------------------------------------------------------------------
     |
-    | Daraja is reserved for when we get Aggregator status (0% fees).
-    | Not active until approved by Safaricom.
+    | Direct Safaricom STK support for captive portal STK Push.
+    | Default transaction type is Buy Goods (Till): CustomerBuyGoodsOnline.
     |
     */
 
     'mpesa' => [
+        'stk_provider' => env('MPESA_STK_PROVIDER', 'daraja'),
         'consumer_key' => env('MPESA_CONSUMER_KEY'),
         'consumer_secret' => env('MPESA_CONSUMER_SECRET'),
         'passkey' => env('MPESA_PASSKEY'),
         
         'business_shortcode' => env('MPESA_BUSINESS_SHORTCODE'), // Your Paybill/Till
         'callback_url' => env('MPESA_CALLBACK_URL'),
+        'transaction_type' => env('MPESA_TRANSACTION_TYPE', 'CustomerBuyGoodsOnline'),
+        'timeout' => (int) env('MPESA_TIMEOUT', 30),
         
         'env' => env('MPESA_ENV', 'sandbox'),
         'sandbox_url' => 'https://sandbox.safaricom.co.ke',

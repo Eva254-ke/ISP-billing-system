@@ -80,8 +80,8 @@
                     </div>
                     <div class="col-md-6">
                         <div class="form-group mb-3">
-                            <label class="form-label">Till Number / Paybill *</label>
-                            <input type="text" class="form-control" id="mpesa_till" value="174379" placeholder="e.g., 174379">
+                            <label class="form-label">Till Number (Buy Goods) *</label>
+                            <input type="text" class="form-control" id="mpesa_till" value="5468788" placeholder="e.g., 5468788">
                         </div>
                     </div>
                 </div>
@@ -91,7 +91,7 @@
                         <div class="form-group mb-3">
                             <label class="form-label">Consumer Key *</label>
                             <div class="input-group">
-                                <input type="password" class="form-control" id="mpesa_key" value="••••••••••••••••">
+                                <input type="password" class="form-control" id="mpesa_key" value="" placeholder="Enter Daraja consumer key">
                                 <button class="btn btn-outline-secondary" type="button" onclick="togglePassword('mpesa_key')">
                                     <i class="fas fa-eye"></i>
                                 </button>
@@ -102,7 +102,7 @@
                         <div class="form-group mb-3">
                             <label class="form-label">Consumer Secret *</label>
                             <div class="input-group">
-                                <input type="password" class="form-control" id="mpesa_secret" value="••••••••••••••••">
+                                <input type="password" class="form-control" id="mpesa_secret" value="" placeholder="Enter Daraja consumer secret">
                                 <button class="btn btn-outline-secondary" type="button" onclick="togglePassword('mpesa_secret')">
                                     <i class="fas fa-eye"></i>
                                 </button>
@@ -116,7 +116,7 @@
                         <div class="form-group mb-3">
                             <label class="form-label">Passkey *</label>
                             <div class="input-group">
-                                <input type="password" class="form-control" id="mpesa_passkey" value="••••••••••••••••">
+                                <input type="password" class="form-control" id="mpesa_passkey" value="" placeholder="Enter Daraja passkey">
                                 <button class="btn btn-outline-secondary" type="button" onclick="togglePassword('mpesa_passkey')">
                                     <i class="fas fa-eye"></i>
                                 </button>
@@ -127,7 +127,7 @@
                     <div class="col-md-6">
                         <div class="form-group mb-3">
                             <label class="form-label">Callback URL</label>
-                            <input type="text" class="form-control" id="mpesa_callback" value="https://cloudbridge.network/api/mpesa/callback" readonly>
+                            <input type="text" class="form-control" id="mpesa_callback" value="{{ url('/api/mpesa/callback') }}" readonly>
                             <small class="text-muted">Register this URL in Daraja portal</small>
                         </div>
                     </div>
@@ -136,8 +136,8 @@
                 <div class="row">
                     <div class="col-md-6">
                         <div class="form-group mb-3">
-                            <label class="form-label">STK Push Shortcode</label>
-                            <input type="text" class="form-control" id="mpesa_shortcode" value="174379">
+                            <label class="form-label">Business Short Code (Till)</label>
+                            <input type="text" class="form-control" id="mpesa_shortcode" value="5468788">
                         </div>
                     </div>
                     <div class="col-md-6">
@@ -1039,21 +1039,39 @@ bindMikrotikCommandRefresh();
 loadSettingsFromServer();
 
 // Test M-Pesa Connection
-function testMpesaConnection() {
+async function testMpesaConnection() {
     Swal.fire({
         title: 'Testing M-Pesa Connection...',
         text: 'Validating credentials with Safaricom Daraja API',
         allowOutsideClick: false,
         didOpen: () => { Swal.showLoading(); }
     });
-    setTimeout(() => {
+
+    try {
+        const settings = collectSettings();
+        const payload = await apiRequest(`${SETTINGS_API_BASE}/mpesa/test`, 'POST', {
+            mpesa_env: settings.mpesa_env,
+            mpesa_key: settings.mpesa_key,
+            mpesa_secret: settings.mpesa_secret,
+            mpesa_passkey: settings.mpesa_passkey,
+            mpesa_shortcode: settings.mpesa_shortcode,
+            mpesa_till: settings.mpesa_till,
+            mpesa_timeout: settings.mpesa_timeout,
+        });
+
         Swal.fire({
             icon: 'success',
             title: 'Connection Successful!',
-            text: 'M-Pesa credentials are valid. STK Push is ready.',
-            footer: 'Response time: 245ms'
+            text: payload?.message || 'M-Pesa credentials are valid. STK Push is ready.',
+            footer: `Environment: ${(payload?.data?.environment || settings.mpesa_env || 'sandbox').toUpperCase()}`,
         });
-    }, 2000);
+    } catch (error) {
+        Swal.fire({
+            icon: 'error',
+            title: 'Connection Failed',
+            text: error?.message || 'Unable to validate M-Pesa credentials',
+        });
+    }
 }
 
 // Test SMS Connection

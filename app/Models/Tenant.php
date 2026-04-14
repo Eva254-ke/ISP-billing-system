@@ -740,11 +740,11 @@ class Tenant extends Model
             $errors[] = 'Payment method is required';
         }
         
-        if ($this->usesDaraja() && !$this->payment_shortcode) {
-            $errors[] = 'Paybill number is required for Paybill/Till payments';
+        if ($this->payment_method === self::PAYMENT_METHOD_PAYBILL && !$this->payment_shortcode) {
+            $errors[] = 'Paybill number is required for Paybill payments';
         }
         
-        if ($this->payment_method === 'till' && !$this->till_number) {
+        if ($this->payment_method === self::PAYMENT_METHOD_TILL && !$this->till_number) {
             $errors[] = 'Till number is required for Till payments';
         }
         

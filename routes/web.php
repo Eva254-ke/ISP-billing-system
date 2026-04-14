@@ -9,8 +9,11 @@ use App\Models\Package;
 use App\Models\Payment;
 use App\Models\UserSession;
 use App\Models\Tenant;
+use App\Jobs\ProcessMpesaCallback;
 use App\Services\MikroTik\MikroTikService;
+use App\Services\Mpesa\DarajaService;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 /*
@@ -123,11 +126,53 @@ Route::get('/admin/wifi', function () {
     return redirect()->route('wifi.packages');
 });
 
-// Legacy M-Pesa Webhook (Public - kept for older callback URLs / local testing)
-Route::post('/api/mpesa/callback', function (Request $request) {
-    \Log::info('M-Pesa Callback Received', $request->all());
+// M-Pesa Daraja Webhook (Public)
+Route::post('/api/mpesa/callback/{tenant?}', function (Request $request, ?int $tenant = null) {
+    $payload = (array) $request->all();
+    $stk = (array) data_get($payload, 'Body.stkCallback', []);
+    $callback = $stk !== [] ? $stk : $payload;
+
+    $normalized = [
+        'MerchantRequestID' => $callback['MerchantRequestID'] ?? null,
+        'CheckoutRequestID' => $callback['CheckoutRequestID'] ?? null,
+        'ResultCode' => $callback['ResultCode'] ?? null,
+        'ResultDesc' => $callback['ResultDesc'] ?? null,
+        'tenant_id' => $tenant,
+    ];
+
+    $items = data_get($callback, 'CallbackMetadata.Item', []);
+    if (is_array($items)) {
+        foreach ($items as $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+
+            $name = (string) ($item['Name'] ?? '');
+            if ($name === '') {
+                continue;
+            }
+
+            $normalized[$name] = $item['Value'] ?? null;
+        }
+    }
+
+    $normalized['raw_payload'] = $payload;
+
+    Log::channel('payment')->info('M-Pesa callback received', [
+        'checkout_request_id' => $normalized['CheckoutRequestID'] ?? null,
+        'merchant_request_id' => $normalized['MerchantRequestID'] ?? null,
+        'result_code' => $normalized['ResultCode'] ?? null,
+        'tenant_id' => $tenant,
+        'ip' => $request->ip(),
+    ]);
+
+    ProcessMpesaCallback::dispatch($normalized)->onQueue('critical');
+
     return response()->json(['ResultCode' => 0, 'ResultDesc' => 'Accepted']);
-})->name('api.mpesa.callback.legacy');
+})
+    ->withoutMiddleware([\Illuminate\Foundation\Http\Middleware\ValidateCsrfToken::class])
+    ->whereNumber('tenant')
+    ->name('api.mpesa.callback.legacy');
 
 // ============================================================================
 // ADMIN ROUTES (Protected)
@@ -299,6 +344,60 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
                 ],
             ]);
         })->name('settings.save');
+
+        Route::post('/settings/mpesa/test', function (Request $request) {
+            $validated = $request->validate([
+                'mpesa_env' => 'nullable|string|in:sandbox,live,production',
+                'mpesa_key' => 'required|string|min:5',
+                'mpesa_secret' => 'required|string|min:5',
+                'mpesa_passkey' => 'nullable|string',
+                'mpesa_shortcode' => 'nullable|string',
+                'mpesa_till' => 'nullable|string',
+                'mpesa_timeout' => 'nullable|integer|min:10|max:120',
+            ]);
+
+            $env = strtolower((string) ($validated['mpesa_env'] ?? 'sandbox'));
+            if ($env === 'production') {
+                $env = 'live';
+            }
+
+            $shortcode = trim((string) ($validated['mpesa_shortcode'] ?? ''));
+            if ($shortcode === '') {
+                $shortcode = trim((string) ($validated['mpesa_till'] ?? ''));
+            }
+
+            $service = new DarajaService([
+                'consumer_key' => (string) ($validated['mpesa_key'] ?? ''),
+                'consumer_secret' => (string) ($validated['mpesa_secret'] ?? ''),
+                'passkey' => (string) ($validated['mpesa_passkey'] ?? ''),
+                'business_shortcode' => $shortcode,
+                'callback_url' => url('/api/mpesa/callback'),
+                'env' => $env,
+                'timeout' => (int) ($validated['mpesa_timeout'] ?? 30),
+            ]);
+
+            $result = $service->testConnection();
+            if (!($result['success'] ?? false)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => (string) ($result['message'] ?? 'Daraja credential validation failed'),
+                    'data' => [
+                        'environment' => $env,
+                        'http_status' => $result['http_status'] ?? null,
+                    ],
+                ], 422);
+            }
+
+            return response()->json([
+                'success' => true,
+                'message' => 'M-Pesa credentials are valid.',
+                'data' => [
+                    'environment' => $env,
+                    'http_status' => $result['http_status'] ?? 200,
+                    'callback_url' => url('/api/mpesa/callback'),
+                ],
+            ]);
+        })->name('settings.mpesa.test');
 
         Route::post('/settings/mikrotik/test', function (Request $request, MikroTikService $mikroTikService) use ($resolveTenant, $buildMikrotikCommands) {
             $tenant = $resolveTenant();
