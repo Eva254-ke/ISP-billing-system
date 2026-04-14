@@ -145,7 +145,7 @@ return [
         'transaction_type' => env('MPESA_TRANSACTION_TYPE', 'CustomerBuyGoodsOnline'),
         'timeout' => (int) env('MPESA_TIMEOUT', 30),
         
-        'env' => env('MPESA_ENV', 'sandbox'),
+        'env' => env('MPESA_ENV', 'live'),
         'sandbox_url' => 'https://sandbox.safaricom.co.ke',
         'live_url' => 'https://api.safaricom.co.ke',
         
