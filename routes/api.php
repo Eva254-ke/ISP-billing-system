@@ -2,6 +2,8 @@
 
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
+use Illuminate\Support\Facades\Log;
+use App\Jobs\ProcessMpesaCallback;
 use App\Http\Controllers\Api\MikroTik\RouterController;
 use App\Http\Controllers\Api\MikroTik\SessionController;
 use App\Http\Controllers\Api\PaymentController;
@@ -102,23 +104,71 @@ Route::post('/intasend/callback', [PaymentController::class, 'callback'])
     ->withoutMiddleware(['auth:sanctum', 'web', 'throttle:api']);
 
 /**
- * Legacy M-Pesa Callback (Deprecated)
- * 
- * Kept for backward compatibility during migration.
- * Returns error to encourage migration to new endpoint.
+ * M-Pesa Daraja Callback (Primary)
+ * Public webhook endpoint for STK callbacks.
  */
-Route::post('/mpesa/callback/{tenant?}', function (Request $request, ?int $tenantId = null) {
-    \Log::channel('payment')->warning('Legacy callback received', [
-        'tenant_id' => $tenantId,
+Route::post('/mpesa/callback/{tenant?}', function (Request $request, ?int $tenant = null) {
+    $payload = (array) $request->all();
+    $stk = (array) data_get($payload, 'Body.stkCallback', []);
+    $callback = $stk !== [] ? $stk : $payload;
+
+    $normalized = [
+        'MerchantRequestID' => $callback['MerchantRequestID'] ?? null,
+        'CheckoutRequestID' => $callback['CheckoutRequestID'] ?? null,
+        'ResultCode' => $callback['ResultCode'] ?? null,
+        'ResultDesc' => $callback['ResultDesc'] ?? null,
+        'tenant_id' => $tenant,
+    ];
+
+    $items = data_get($callback, 'CallbackMetadata.Item', []);
+    if (is_array($items)) {
+        foreach ($items as $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+
+            $name = (string) ($item['Name'] ?? '');
+            if ($name === '') {
+                continue;
+            }
+
+            $normalized[$name] = $item['Value'] ?? null;
+        }
+    }
+
+    $normalized['raw_payload'] = $payload;
+
+    Log::channel('payment')->info('M-Pesa callback received', [
+        'checkout_request_id' => $normalized['CheckoutRequestID'] ?? null,
+        'merchant_request_id' => $normalized['MerchantRequestID'] ?? null,
+        'result_code' => $normalized['ResultCode'] ?? null,
+        'tenant_id' => $tenant,
         'ip' => $request->ip(),
-        'user_agent' => $request->userAgent(),
     ]);
-    
-    return response()->json([
-        'ResultCode' => 1,
-        'ResultDesc' => 'Deprecated endpoint. Use /api/payment/callback',
-    ], 410); // Gone
-})->withoutMiddleware(['auth:sanctum', 'web', 'throttle:api']);
+
+    try {
+        ProcessMpesaCallback::dispatch($normalized)->onQueue('critical');
+    } catch (\Throwable $queueException) {
+        Log::channel('payment')->error('Failed to queue M-Pesa callback job, falling back to sync processing', [
+            'checkout_request_id' => $normalized['CheckoutRequestID'] ?? null,
+            'error' => $queueException->getMessage(),
+        ]);
+
+        try {
+            ProcessMpesaCallback::dispatchSync($normalized);
+        } catch (\Throwable $syncException) {
+            Log::channel('payment')->critical('Synchronous M-Pesa callback fallback failed', [
+                'checkout_request_id' => $normalized['CheckoutRequestID'] ?? null,
+                'error' => $syncException->getMessage(),
+            ]);
+        }
+    }
+
+    return response()->json(['ResultCode' => 0, 'ResultDesc' => 'Accepted']);
+})
+    ->whereNumber('tenant')
+    ->name('api.mpesa.callback')
+    ->withoutMiddleware(['auth:sanctum', 'web', 'throttle:api']);
 
 // ──────────────────────────────────────────────────────────────────────────
 // PROTECTED API ROUTES (Require Laravel Sanctum Authentication)

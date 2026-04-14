@@ -9,11 +9,9 @@ use App\Models\Package;
 use App\Models\Payment;
 use App\Models\UserSession;
 use App\Models\Tenant;
-use App\Jobs\ProcessMpesaCallback;
 use App\Services\MikroTik\MikroTikService;
 use App\Services\Mpesa\DarajaService;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 /*
@@ -125,70 +123,6 @@ Route::get('/admin/wifi', function () {
 
     return redirect()->route('wifi.packages');
 });
-
-// M-Pesa Daraja Webhook (Public)
-Route::post('/api/mpesa/callback/{tenant?}', function (Request $request, ?int $tenant = null) {
-    $payload = (array) $request->all();
-    $stk = (array) data_get($payload, 'Body.stkCallback', []);
-    $callback = $stk !== [] ? $stk : $payload;
-
-    $normalized = [
-        'MerchantRequestID' => $callback['MerchantRequestID'] ?? null,
-        'CheckoutRequestID' => $callback['CheckoutRequestID'] ?? null,
-        'ResultCode' => $callback['ResultCode'] ?? null,
-        'ResultDesc' => $callback['ResultDesc'] ?? null,
-        'tenant_id' => $tenant,
-    ];
-
-    $items = data_get($callback, 'CallbackMetadata.Item', []);
-    if (is_array($items)) {
-        foreach ($items as $item) {
-            if (!is_array($item)) {
-                continue;
-            }
-
-            $name = (string) ($item['Name'] ?? '');
-            if ($name === '') {
-                continue;
-            }
-
-            $normalized[$name] = $item['Value'] ?? null;
-        }
-    }
-
-    $normalized['raw_payload'] = $payload;
-
-    Log::channel('payment')->info('M-Pesa callback received', [
-        'checkout_request_id' => $normalized['CheckoutRequestID'] ?? null,
-        'merchant_request_id' => $normalized['MerchantRequestID'] ?? null,
-        'result_code' => $normalized['ResultCode'] ?? null,
-        'tenant_id' => $tenant,
-        'ip' => $request->ip(),
-    ]);
-
-    try {
-        ProcessMpesaCallback::dispatch($normalized)->onQueue('critical');
-    } catch (\Throwable $queueException) {
-        Log::channel('payment')->error('Failed to queue M-Pesa callback job, falling back to sync processing', [
-            'checkout_request_id' => $normalized['CheckoutRequestID'] ?? null,
-            'error' => $queueException->getMessage(),
-        ]);
-
-        try {
-            ProcessMpesaCallback::dispatchSync($normalized);
-        } catch (\Throwable $syncException) {
-            Log::channel('payment')->critical('Synchronous M-Pesa callback fallback failed', [
-                'checkout_request_id' => $normalized['CheckoutRequestID'] ?? null,
-                'error' => $syncException->getMessage(),
-            ]);
-        }
-    }
-
-    return response()->json(['ResultCode' => 0, 'ResultDesc' => 'Accepted']);
-})
-    ->withoutMiddleware([\Illuminate\Foundation\Http\Middleware\ValidateCsrfToken::class])
-    ->whereNumber('tenant')
-    ->name('api.mpesa.callback.legacy');
 
 // ============================================================================
 // ADMIN ROUTES (Protected)
