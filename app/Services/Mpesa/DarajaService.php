@@ -130,7 +130,7 @@ class DarajaService
             'TransactionType' => $this->transactionType,
             'Amount' => max(1, (int) round($amount)),
             'PartyA' => $stkPhone,
-            'PartyB' => $this->businessShortcode,
+            'PartyB' => config('services.mpesa.partyb', '4953118'),
             'PhoneNumber' => $stkPhone,
             'CallBackURL' => $stkCallbackUrl,
             'AccountReference' => $reference,
