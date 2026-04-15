@@ -181,8 +181,31 @@ jobs:
             systemctl reload nginx
 
             echo "Running post-deploy health checks..."
-            curl -fsSI --resolve "$APP_HOST:443:127.0.0.1" "https://$APP_HOST/css/captive-portal.css" >/dev/null
-            curl -fsSI --resolve "$APP_HOST:443:127.0.0.1" "https://$APP_HOST/wifi" >/dev/null
+            check_health() {
+              PATH_TO_CHECK="$1"
+              ATTEMPT=1
+              MAX_ATTEMPTS=5
+
+              while [ "$ATTEMPT" -le "$MAX_ATTEMPTS" ]; do
+                STATUS_CODE=$(curl -sS -o /dev/null -w "%{http_code}" --connect-timeout 5 --max-time 15 -H "Host: $APP_HOST" "http://127.0.0.1$PATH_TO_CHECK" || true)
+                case "$STATUS_CODE" in
+                  2*|3*)
+                    echo "Health check passed: $PATH_TO_CHECK (HTTP $STATUS_CODE)"
+                    return 0
+                    ;;
+                esac
+
+                echo "Health check attempt $ATTEMPT/$MAX_ATTEMPTS failed for $PATH_TO_CHECK (HTTP $STATUS_CODE)"
+                ATTEMPT=$((ATTEMPT + 1))
+                sleep 2
+              done
+
+              echo "Health check failed after $MAX_ATTEMPTS attempts: $PATH_TO_CHECK" >&2
+              return 1
+            }
+
+            check_health "/css/captive-portal.css"
+            check_health "/wifi"
 
             cd "$RELEASES"
             ls -dt */ 2>/dev/null | tail -n +6 | xargs rm -rf 2>/dev/null || true
