@@ -5,10 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <meta name="theme-color" content="#155eef">
     <title>CloudBridge WiFi</title>
+    @php
+        $captiveCssPath = public_path('css/captive-portal.css');
+        $captiveCssVersion = file_exists($captiveCssPath) ? filemtime($captiveCssPath) : time();
+    @endphp
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&family=Plus+Jakarta+Sans:wght@500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="{{ asset('css/captive-portal.css') }}">
+    <link rel="stylesheet" href="/css/captive-portal.css?v={{ $captiveCssVersion }}">
 </head>
 <body>
     <main class="cp-page">

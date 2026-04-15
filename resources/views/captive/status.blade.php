@@ -8,10 +8,14 @@
     <meta http-equiv="refresh" content="10">
     @endif
     <title>Connection Status - CloudBridge WiFi</title>
+    @php
+        $captiveCssPath = public_path('css/captive-portal.css');
+        $captiveCssVersion = file_exists($captiveCssPath) ? filemtime($captiveCssPath) : time();
+    @endphp
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&family=Plus+Jakarta+Sans:wght@500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="{{ asset('css/captive-portal.css') }}">
+    <link rel="stylesheet" href="/css/captive-portal.css?v={{ $captiveCssVersion }}">
 </head>
 <body>
     <main class="cp-page cp-status-shell">
