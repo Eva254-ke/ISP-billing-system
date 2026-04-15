@@ -3,11 +3,17 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <meta name="theme-color" content="#155eef">
-    <title>CloudBridge WiFi</title>
+    <meta name="theme-color" content="#0e7490">
+    <title>{{ $tenant?->name ?: 'CloudBridge WiFi' }} - WiFi Packages</title>
     @php
         $captiveCssPath = public_path('css/captive-portal.css');
         $captiveCssVersion = file_exists($captiveCssPath) ? filemtime($captiveCssPath) : time();
+        $selectedPackageId = (int) old('package_id', 0);
+        $selectedPackage = $packages->firstWhere('id', $selectedPackageId);
+        $reconnectParams = array_filter([
+            'tenant_id' => request()->query('tenant_id'),
+            'phone' => old('phone', $phone ?? ''),
+        ], static fn ($value) => $value !== null && $value !== '');
     @endphp
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -21,244 +27,220 @@
                 <div class="cp-brand-mark">CB</div>
                 <div class="cp-brand-text">
                     <h1>{{ $tenant?->name ?: 'CloudBridge WiFi' }}</h1>
-                    <p>Fast, secure internet access</p>
+                    <p>Secure internet in minutes</p>
                 </div>
             </div>
-            <div class="cp-support">Support: <a href="tel:+254700000000">+254 700 000 000</a></div>
+            <div class="cp-support">Call support: <a href="tel:+254742939094">0742939094</a></div>
         </header>
 
-        <section class="cp-stack">
+        @if(session('error'))
+            <div class="cp-flash error">{{ session('error') }}</div>
+        @endif
+        @if(session('success'))
+            <div class="cp-flash success">{{ session('success') }}</div>
+        @endif
+        @if(session('message'))
+            <div class="cp-flash success">{{ session('message') }}</div>
+        @endif
+        @if(!empty($tenantResolutionError))
+            <div class="cp-flash error">{{ $tenantResolutionError }}</div>
+        @endif
+        @if($errors->any())
+            <div class="cp-flash error">{{ $errors->first() }}</div>
+        @endif
+
+        @if(isset($activeSession) && $activeSession)
+            @php
+                $statusPhone = $activeSession->phone ?? $phone;
+            @endphp
             <article class="cp-card">
-                @if(session('error'))
-                    <div class="cp-flash error">{{ session('error') }}</div>
-                @endif
-                @if(session('success'))
-                    <div class="cp-flash success">{{ session('success') }}</div>
-                @endif
-                @if(session('message'))
-                    <div class="cp-flash success">{{ session('message') }}</div>
-                @endif
-                @if(!empty($tenantResolutionError))
-                    <div class="cp-flash error">{{ $tenantResolutionError }}</div>
-                @endif
-                @if($errors->any())
-                    <div class="cp-flash error">{{ $errors->first() }}</div>
-                @endif
+                <span class="cp-status-pill success">Connected</span>
+                <h2 class="cp-section-title">You are already connected</h2>
+                <p class="cp-card-subtitle">Your session is active now. Check remaining time below.</p>
 
-                @if(isset($activeSession) && $activeSession)
-                    <h2>Session Active</h2>
-                    <p class="cp-card-subtitle">You are currently connected. You can restore status or buy additional access.</p>
-
-                    <div class="cp-facts" style="margin-top:12px;">
-                        <div class="cp-fact">
-                            <span>Phone</span>
-                            <span>{{ $activeSession->phone ?? ($phone ?: 'N/A') }}</span>
-                        </div>
-                        <div class="cp-fact">
-                            <span>Expires</span>
-                            <span id="activeExpires">{{ $activeSession->expires_at?->format('H:i') ?? 'N/A' }}</span>
-                        </div>
-                        <div class="cp-fact">
-                            <span>Time left</span>
-                            <span id="timeLeft">--:--</span>
-                        </div>
+                <div class="cp-facts">
+                    <div class="cp-fact">
+                        <span>Phone</span>
+                        <span>{{ $statusPhone ?: 'N/A' }}</span>
                     </div>
+                    <div class="cp-fact">
+                        <span>Expires</span>
+                        <span id="activeExpires">{{ $activeSession->expires_at?->format('H:i') ?? 'N/A' }}</span>
+                    </div>
+                    <div class="cp-fact">
+                        <span>Time Left</span>
+                        <span id="timeLeft">--:--:--</span>
+                    </div>
+                </div>
 
-                    <div class="cp-actions">
-                        <a href="{{ route('wifi.status', ['phone' => $phone]) }}" class="cp-btn cp-btn-primary">View Connection Status</a>
-                        <a href="{{ route('wifi.packages', ['phone' => $phone]) }}" class="cp-btn cp-btn-soft">Buy More Time</a>
+                @if($statusPhone)
+                    <a href="{{ route('wifi.status', ['phone' => $statusPhone]) }}" class="cp-btn cp-btn-primary cp-btn-block">View Connection Status</a>
+                @endif
+            </article>
+        @else
+            <article class="cp-card">
+                <div class="cp-flow">
+                    <div class="cp-flow-step is-current">1. Choose package</div>
+                    <div class="cp-flow-step">2. Pay with M-Pesa</div>
+                    <div class="cp-flow-step">3. Get connected</div>
+                </div>
+
+                <h2 class="cp-section-title">Choose package and pay</h2>
+                <p class="cp-card-subtitle">Simple flow: select package, enter phone number, pay, then internet connects automatically.</p>
+
+                @if($packages->isEmpty())
+                    <div class="cp-panel">
+                        <h3>No packages available</h3>
+                        <p>Please contact support to activate packages for this hotspot.</p>
                     </div>
                 @else
-                    <h2>Choose Your Package</h2>
-                    <p class="cp-card-subtitle">Select a plan, complete M-Pesa payment, and get online in seconds.</p>
+                    <form method="POST" action="{{ route('wifi.pay') }}" id="cpPaymentForm" class="cp-payment-form">
+                        @csrf
 
-                    <div class="cp-trust-row">
-                        <div class="cp-trust-item"><strong>Secure Checkout</strong>M-Pesa PIN is only entered on your phone.</div>
-                        <div class="cp-trust-item"><strong>Instant Activation</strong>Access is enabled automatically after payment.</div>
-                        <div class="cp-trust-item"><strong>Reliable Support</strong>Help is available if anything delays.</div>
-                    </div>
+                        <div class="cp-field">
+                            <label for="cpPhone">M-Pesa Number</label>
+                            <input
+                                id="cpPhone"
+                                type="tel"
+                                name="phone"
+                                placeholder="0712345678"
+                                value="{{ old('phone', $phone ?? '') }}"
+                                required
+                                pattern="0[17]\d{8}"
+                                autocomplete="tel"
+                                inputmode="tel">
+                        </div>
 
-                    <div class="cp-grid cp-package-grid" style="margin-top:14px;">
-                        @forelse($packages as $pkg)
-                            <article class="cp-package">
-                                <div class="cp-package-title">
-                                    <h3>{{ $pkg->name }}</h3>
-                                    <div class="cp-price">KES {{ number_format((float) $pkg->price, 0) }}<small>/plan</small></div>
-                                </div>
-                                <div class="cp-meta">
-                                    <div class="cp-meta-line"><strong>Duration:</strong> {{ $pkg->duration_formatted }}</div>
-                                    <div class="cp-meta-line"><strong>Speed:</strong> {{ $pkg->bandwidth_formatted }}</div>
-                                </div>
+                        <input type="hidden" name="package_id" id="cpPackageId" value="{{ $selectedPackageId > 0 ? $selectedPackageId : '' }}">
+
+                        <div class="cp-grid cp-package-grid">
+                            @foreach($packages as $pkg)
+                                @php
+                                    $isSelected = $selectedPackageId === (int) $pkg->id;
+                                @endphp
                                 <button
                                     type="button"
-                                    class="cp-btn cp-btn-primary cp-btn-block js-open-payment"
+                                    class="cp-package-card js-package-card{{ $isSelected ? ' is-selected' : '' }}"
                                     data-package-id="{{ $pkg->id }}"
                                     data-package-name="{{ $pkg->name }}"
-                                    data-package-price="{{ number_format((float) $pkg->price, 0) }}"
+                                    data-package-price="KES {{ number_format((float) $pkg->price, 0) }}"
                                     data-package-duration="{{ $pkg->duration_formatted }}"
-                                    data-package-speed="{{ $pkg->bandwidth_formatted }}">
-                                    Pay With M-Pesa
+                                    data-package-speed="{{ $pkg->bandwidth_formatted }}"
+                                    aria-pressed="{{ $isSelected ? 'true' : 'false' }}">
+                                    <div class="cp-package-name">{{ $pkg->name }}</div>
+                                    <div class="cp-package-price">KES {{ number_format((float) $pkg->price, 0) }}</div>
+                                    <div class="cp-package-meta">{{ $pkg->duration_formatted }}</div>
+                                    <div class="cp-package-meta">{{ $pkg->bandwidth_formatted }}</div>
                                 </button>
-                            </article>
-                        @empty
-                            <div class="cp-flash error">No packages are available right now for this location.</div>
-                        @endforelse
-                    </div>
+                            @endforeach
+                        </div>
+
+                        <div class="cp-selected-summary" id="cpSelectedSummary">
+                            @if($selectedPackage)
+                                Selected: {{ $selectedPackage->name }} - KES {{ number_format((float) $selectedPackage->price, 0) }}
+                            @else
+                                Select a package to continue.
+                            @endif
+                        </div>
+
+                        <button
+                            type="submit"
+                            class="cp-btn cp-btn-primary cp-btn-block"
+                            id="cpPayButton"
+                            {{ $selectedPackage ? '' : 'disabled' }}>
+                            Pay and Connect
+                        </button>
+                    </form>
                 @endif
             </article>
 
-            <article id="reconnect" class="cp-card" data-reconnect-mode="{{ request('mode') === 'reconnect' ? '1' : '0' }}">
-                <h2>Already Paid? Restore Access</h2>
-                <p class="cp-card-subtitle">No separate page needed. Use your M-Pesa code or voucher right here.</p>
-
-                <div class="cp-form-grid">
-                    <section class="cp-form-card">
-                        <h4>Reconnect With M-Pesa Code</h4>
-                        <form method="POST" action="{{ route('wifi.reconnect') }}">
-                            @csrf
-                            <div class="cp-field">
-                                <label for="reconnectPhone">Phone Number</label>
-                                <input id="reconnectPhone" type="tel" name="phone" placeholder="0712345678" value="{{ $phone ?? '' }}" required pattern="0[17]\d{8}" autocomplete="tel" inputmode="tel">
-                            </div>
-                            <div class="cp-field">
-                                <label for="mpesaCode">M-Pesa Transaction Code</label>
-                                <input id="mpesaCode" type="text" name="mpesa_code" placeholder="QGH45XYZ" required maxlength="32" autocomplete="off">
-                            </div>
-                            <button type="submit" class="cp-btn cp-btn-soft cp-btn-block">Verify And Connect</button>
-                        </form>
-                    </section>
-
-                    <section class="cp-form-card">
-                        <h4>Redeem Voucher</h4>
-                        <form method="POST" action="{{ route('wifi.reconnect') }}">
-                            @csrf
-                            <div class="cp-field">
-                                <label for="voucherPhone">Phone Number</label>
-                                <input id="voucherPhone" type="tel" name="phone" placeholder="0712345678" value="{{ $phone ?? '' }}" required pattern="0[17]\d{8}" autocomplete="tel" inputmode="tel">
-                            </div>
-                            <div class="cp-field">
-                                <label for="voucherCode">Voucher Code</label>
-                                <input id="voucherCode" type="text" name="voucher_code" placeholder="CB-WIFI-1234" required maxlength="64" autocomplete="off">
-                            </div>
-                            <button type="submit" class="cp-btn cp-btn-soft cp-btn-block">Redeem Voucher</button>
-                        </form>
-                    </section>
-                </div>
+            <article class="cp-card cp-card-compact">
+                <h3 class="cp-section-subtitle">Already paid?</h3>
+                <p class="cp-card-subtitle">Reconnect using your M-Pesa code or voucher on a separate screen.</p>
+                <a href="{{ route('wifi.reconnect.form', $reconnectParams) }}" class="cp-btn cp-btn-soft cp-btn-block">Open Reconnect Screen</a>
             </article>
-        </section>
+        @endif
 
-        <div class="cp-footer">
-            Need help? <a href="tel:+254700000000">Call support now</a>
-        </div>
+        <footer class="cp-footer">
+            <p>Call support: <a href="tel:+254742939094">0742939094</a></p>
+            <p>Engineered by Engineer Omwenga Evans</p>
+        </footer>
     </main>
 
-    <div class="cp-modal-shell" id="paymentModal" aria-hidden="true">
-        <div class="cp-modal" role="dialog" aria-modal="true" aria-labelledby="paymentModalTitle">
-            <div class="cp-modal-head">
-                <h3 id="paymentModalTitle">Confirm Payment Details</h3>
-                <button type="button" class="cp-modal-close" id="closePaymentModal" aria-label="Close">&times;</button>
-            </div>
-
-            <div class="cp-selected-package">
-                <div class="name" id="modalPackageName">Package</div>
-                <div class="detail" id="modalPackageDetails">Details</div>
-            </div>
-
-            <form method="POST" action="{{ route('wifi.pay') }}" id="paymentForm" style="margin-top:10px;">
-                @csrf
-                <input type="hidden" name="package_id" id="modalPackageId">
-                <div class="cp-field">
-                    <label for="modalPhone">M-Pesa Number</label>
-                    <input id="modalPhone" type="tel" name="phone" placeholder="0712345678" value="{{ $phone ?? '' }}" required pattern="0[17]\d{8}" autocomplete="tel" inputmode="tel">
-                </div>
-                <p class="cp-small" style="margin:0 0 10px;">You will receive the M-Pesa prompt on this number.</p>
-                <div class="cp-actions" style="margin-top:0;">
-                    <button type="submit" class="cp-btn cp-btn-primary cp-btn-block" id="modalPayBtn">Pay And Connect</button>
-                    <button type="button" class="cp-btn cp-btn-outline cp-btn-block" id="cancelPaymentModal">Cancel</button>
-                </div>
-            </form>
-        </div>
-    </div>
-
     <script>
-        const paymentModal = document.getElementById('paymentModal');
-        const closePaymentModal = document.getElementById('closePaymentModal');
-        const cancelPaymentModal = document.getElementById('cancelPaymentModal');
-        const paymentForm = document.getElementById('paymentForm');
+        const packageCards = document.querySelectorAll('.js-package-card');
+        const packageInput = document.getElementById('cpPackageId');
+        const payButton = document.getElementById('cpPayButton');
+        const summaryNode = document.getElementById('cpSelectedSummary');
+        const payForm = document.getElementById('cpPaymentForm');
 
-        function openPaymentModal(pkg) {
-            document.getElementById('modalPackageId').value = pkg.id;
-            document.getElementById('modalPackageName').textContent = `${pkg.name} - KES ${pkg.price}`;
-            document.getElementById('modalPackageDetails').textContent = `${pkg.duration} | ${pkg.speed}`;
-            paymentModal.classList.add('is-open');
-            paymentModal.setAttribute('aria-hidden', 'false');
-            document.getElementById('modalPhone').focus();
-        }
-
-        function closeModal() {
-            paymentModal.classList.remove('is-open');
-            paymentModal.setAttribute('aria-hidden', 'true');
-        }
-
-        document.querySelectorAll('.js-open-payment').forEach((button) => {
-            button.addEventListener('click', () => {
-                openPaymentModal({
-                    id: button.dataset.packageId,
-                    name: button.dataset.packageName,
-                    price: button.dataset.packagePrice,
-                    duration: button.dataset.packageDuration,
-                    speed: button.dataset.packageSpeed,
-                });
-            });
-        });
-
-        closePaymentModal?.addEventListener('click', closeModal);
-        cancelPaymentModal?.addEventListener('click', closeModal);
-        paymentModal?.addEventListener('click', (event) => {
-            if (event.target === paymentModal) {
-                closeModal();
+        function setSelectedPackage(card) {
+            if (!card || !packageInput || !summaryNode || !payButton) {
+                return;
             }
-        });
 
-        paymentForm?.addEventListener('submit', () => {
-            const btn = document.getElementById('modalPayBtn');
-            btn.disabled = true;
-            btn.textContent = 'Sending M-Pesa Prompt...';
-        });
+            packageCards.forEach((node) => {
+                node.classList.remove('is-selected');
+                node.setAttribute('aria-pressed', 'false');
+            });
 
-        const reconnectPanel = document.getElementById('reconnect');
-        if (reconnectPanel?.dataset.reconnectMode === '1') {
-            reconnectPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            card.classList.add('is-selected');
+            card.setAttribute('aria-pressed', 'true');
+
+            const packageId = card.dataset.packageId || '';
+            const packageName = card.dataset.packageName || 'Package';
+            const packagePrice = card.dataset.packagePrice || '';
+            const packageDuration = card.dataset.packageDuration || '';
+
+            packageInput.value = packageId;
+            summaryNode.textContent = `Selected: ${packageName} - ${packagePrice} (${packageDuration})`;
+            payButton.disabled = packageId === '';
         }
+
+        packageCards.forEach((card) => {
+            card.addEventListener('click', () => setSelectedPackage(card));
+        });
+
+        if (packageInput && packageInput.value !== '') {
+            const preselectedCard = document.querySelector(`.js-package-card[data-package-id="${packageInput.value}"]`);
+            if (preselectedCard) {
+                setSelectedPackage(preselectedCard);
+            }
+        }
+
+        payForm?.addEventListener('submit', () => {
+            if (!payButton) {
+                return;
+            }
+
+            payButton.disabled = true;
+            payButton.textContent = 'Sending M-Pesa Prompt...';
+        });
 
         @if(isset($activeSession) && $activeSession)
         const expiresAt = new Date('{{ $activeSession->expires_at?->toIso8601String() ?? $activeSession->expires_at }}').getTime();
         function updateActiveCountdown() {
-            const now = Date.now();
-            const diff = expiresAt - now;
-            if (diff <= 0) {
-                const node = document.getElementById('timeLeft');
-                if (node) node.textContent = 'Expired';
+            const node = document.getElementById('timeLeft');
+            if (!node || !expiresAt) {
                 return;
             }
+
+            const diff = expiresAt - Date.now();
+            if (diff <= 0) {
+                node.textContent = 'Expired';
+                return;
+            }
+
             const totalSeconds = Math.floor(diff / 1000);
             const hours = Math.floor(totalSeconds / 3600);
             const minutes = Math.floor((totalSeconds % 3600) / 60);
             const seconds = totalSeconds % 60;
-            const text = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-            const node = document.getElementById('timeLeft');
-            if (node) node.textContent = text;
+            node.textContent = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
         }
+
         updateActiveCountdown();
         setInterval(updateActiveCountdown, 1000);
         @endif
-
-        const codeInputs = [document.getElementById('mpesaCode'), document.getElementById('voucherCode')];
-        codeInputs.forEach((input) => {
-            input?.addEventListener('input', function () {
-                this.value = this.value.toUpperCase().trimStart();
-            });
-        });
     </script>
 </body>
 </html>

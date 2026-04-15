@@ -23,9 +23,11 @@ class CaptivePortalController extends Controller
     {
         $tenant = $this->resolveTenant($request);
         $phone = session('captive_phone') ?? $request->query('phone');
+        $mode = strtolower(trim((string) $request->query('mode', '')));
+        $showReconnectScreen = $mode === 'reconnect';
 
         if (!$tenant) {
-            return response()->view('captive.packages', [
+            return response()->view($showReconnectScreen ? 'captive.reconnect' : 'captive.packages', [
                 'packages' => collect(),
                 'activeSession' => null,
                 'phone' => $phone,
@@ -35,6 +37,10 @@ class CaptivePortalController extends Controller
         }
 
         session(['captive_tenant_id' => $tenant->id]);
+
+        if ($showReconnectScreen) {
+            return view('captive.reconnect', compact('phone', 'tenant'));
+        }
         
         $activeSession = null;
         if ($phone) {

@@ -102,13 +102,32 @@ jobs:
           port: 22
           key: ${{ secrets.DO_SSH_PRIVATE_KEY }}
           script: |
-            set -e
+            set -Eeuo pipefail
             APP_ROOT=/var/www/cloudbridge
             RELEASES=$APP_ROOT/releases
             SHARED=$APP_ROOT/shared
             RELEASE=$RELEASES/${{ github.run_number }}-${{ github.sha }}
             CURRENT=$APP_ROOT/current
             ARCHIVE=/tmp/deploy/release.tar.gz
+            APP_HOST=app.cloubridge.com
+            PREVIOUS_RELEASE=$(readlink -f "$CURRENT" 2>/dev/null || true)
+
+            rollback() {
+              EXIT_CODE=$?
+              echo "Deployment failed (exit code: $EXIT_CODE)"
+              if [ -n "${PREVIOUS_RELEASE}" ] && [ -d "${PREVIOUS_RELEASE}" ]; then
+                echo "Rolling back to: ${PREVIOUS_RELEASE}"
+                ln -sfn "${PREVIOUS_RELEASE}" "$CURRENT"
+                ln -sfn "${PREVIOUS_RELEASE}/public" "$APP_ROOT/public"
+                systemctl reload php8.4-fpm || true
+                systemctl reload nginx || true
+              else
+                echo "No previous release found, rollback skipped."
+              fi
+              exit "$EXIT_CODE"
+            }
+
+            trap rollback ERR
 
             echo "Starting CloudBridge deployment..."
             echo "Release: $RELEASE"
@@ -156,15 +175,19 @@ jobs:
             chmod -R 775 storage bootstrap/cache
 
             ln -sfn "$RELEASE" "$CURRENT"
-
-            # Keep a stable public path for Nginx when symlink restrictions are enabled.
-            ln -sfn "$CURRENT/public" "$APP_ROOT/public"
+            ln -sfn "$RELEASE/public" "$APP_ROOT/public"
 
             systemctl reload php8.4-fpm
+            systemctl reload nginx
+
+            echo "Running post-deploy health checks..."
+            curl -fsSI --resolve "$APP_HOST:443:127.0.0.1" "https://$APP_HOST/css/captive-portal.css" >/dev/null
+            curl -fsSI --resolve "$APP_HOST:443:127.0.0.1" "https://$APP_HOST/wifi" >/dev/null
 
             cd "$RELEASES"
             ls -dt */ 2>/dev/null | tail -n +6 | xargs rm -rf 2>/dev/null || true
 
             rm -f "$ARCHIVE"
+            trap - ERR
 
             echo "Deployment successful."
