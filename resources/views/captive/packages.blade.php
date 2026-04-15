@@ -28,6 +28,99 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&family=Plus+Jakarta+Sans:wght@500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/css/captive-portal.css?v={{ $captiveCssVersion }}">
+    <style>
+        /* Two-step flow transitions */
+        .cp-step-container {
+            position: relative;
+            overflow: hidden;
+        }
+        .cp-step {
+            transition: transform 0.35s cubic-bezier(.4,0,.2,1), opacity 0.3s ease;
+        }
+        .cp-step[hidden] {
+            display: block !important;
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            pointer-events: none;
+            opacity: 0;
+            transform: translateX(60px);
+        }
+        .cp-step.is-active {
+            position: relative;
+            pointer-events: auto;
+            opacity: 1;
+            transform: translateX(0);
+        }
+        .cp-step.is-leaving {
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            pointer-events: none;
+            opacity: 0;
+            transform: translateX(-60px);
+        }
+
+        /* Back button */
+        .cp-back-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: none;
+            border: none;
+            color: var(--cp-primary);
+            font: inherit;
+            font-size: 14px;
+            font-weight: 700;
+            cursor: pointer;
+            padding: 0;
+            margin-bottom: 12px;
+        }
+        .cp-back-btn:hover {
+            text-decoration: underline;
+        }
+        .cp-back-btn svg {
+            width: 18px;
+            height: 18px;
+        }
+
+        /* Selected package summary on step 2 */
+        .cp-pay-summary {
+            border: 1px solid var(--cp-border);
+            border-radius: var(--cp-radius-md);
+            background: var(--cp-surface-soft);
+            padding: 14px;
+            margin-bottom: 14px;
+            display: grid;
+            gap: 4px;
+        }
+        .cp-pay-summary-name {
+            font-size: 16px;
+            font-weight: 800;
+            line-height: 1.25;
+        }
+        .cp-pay-summary-price {
+            font-size: 22px;
+            font-weight: 800;
+            color: var(--cp-primary);
+            line-height: 1.2;
+        }
+        .cp-pay-summary-meta {
+            color: var(--cp-muted);
+            font-size: 13px;
+            line-height: 1.3;
+        }
+
+        /* Package card continue indicator */
+        .cp-package-card .cp-pkg-tap-hint {
+            display: none;
+            font-size: 11px;
+            font-weight: 700;
+            color: var(--cp-primary);
+            margin-top: 2px;
+        }
+        .cp-package-card.is-selected .cp-pkg-tap-hint {
+            display: block;
+        }
+    </style>
 </head>
 <body>
     <main class="cp-page">
@@ -87,27 +180,74 @@
                 @endif
             </article>
         @else
-            <article class="cp-card">
-                <div class="cp-flow">
-                    <div class="cp-flow-step is-current">1. Choose package</div>
-                    <div class="cp-flow-step">2. Pay with M-Pesa</div>
-                    <div class="cp-flow-step">3. Get connected</div>
+            <article class="cp-card cp-step-container">
+                {{-- ============== STEP 1: Choose Package ============== --}}
+                <div class="cp-step is-active" id="cpStep1">
+                    <div class="cp-flow">
+                        <div class="cp-flow-step is-current">1. Choose package</div>
+                        <div class="cp-flow-step">2. Enter phone & pay</div>
+                        <div class="cp-flow-step">3. Get connected</div>
+                    </div>
+
+                    <h2 class="cp-section-title">Choose a package</h2>
+                    <p class="cp-card-subtitle">Select a WiFi package below, then you'll enter your M-Pesa number to pay.</p>
+
+                    @if($packages->isEmpty())
+                        <div class="cp-panel">
+                            <h3>No packages available</h3>
+                            <p>Please contact support to activate packages for this hotspot.</p>
+                        </div>
+                    @else
+                        <div class="cp-grid cp-package-grid" style="margin-top:14px">
+                            @foreach($packages as $pkg)
+                                <button
+                                    type="button"
+                                    class="cp-package-card js-package-card"
+                                    data-package-id="{{ $pkg->id }}"
+                                    data-package-name="{{ $pkg->name }}"
+                                    data-package-price="KES {{ number_format((float) $pkg->price, 0) }}"
+                                    data-package-duration="{{ $pkg->duration_formatted }}"
+                                    data-package-speed="{{ $pkg->bandwidth_formatted }}"
+                                    aria-pressed="false">
+                                    <div class="cp-package-name">{{ $pkg->name }}</div>
+                                    <div class="cp-package-price">KES {{ number_format((float) $pkg->price, 0) }}</div>
+                                    <div class="cp-package-meta">{{ $pkg->duration_formatted }}</div>
+                                    <div class="cp-package-meta">{{ $pkg->bandwidth_formatted }}</div>
+                                    <div class="cp-pkg-tap-hint">Tap again to continue →</div>
+                                </button>
+                            @endforeach
+                        </div>
+                    @endif
                 </div>
 
-                <h2 class="cp-section-title">Choose package and pay</h2>
-                <p class="cp-card-subtitle">Simple flow: select package, enter phone number, pay, then internet connects automatically.</p>
-
-                @if($packages->isEmpty())
-                    <div class="cp-panel">
-                        <h3>No packages available</h3>
-                        <p>Please contact support to activate packages for this hotspot.</p>
+                {{-- ============== STEP 2: Enter Phone & Pay ============== --}}
+                <div class="cp-step" id="cpStep2" hidden>
+                    <div class="cp-flow">
+                        <div class="cp-flow-step is-complete">1. Choose package ✓</div>
+                        <div class="cp-flow-step is-current">2. Enter phone & pay</div>
+                        <div class="cp-flow-step">3. Get connected</div>
                     </div>
-                @else
-                    <form method="POST" action="{{ route('wifi.pay') }}" id="cpPaymentForm" class="cp-payment-form">
+
+                    <button type="button" class="cp-back-btn" id="cpBackBtn">
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
+                        Back to packages
+                    </button>
+
+                    <h2 class="cp-section-title">Enter your number to pay</h2>
+                    <p class="cp-card-subtitle">An M-Pesa STK Push prompt will be sent to this number.</p>
+
+                    <div class="cp-pay-summary" id="cpPaySummary" style="margin-top:14px">
+                        <div class="cp-pay-summary-name" id="cpSummaryName">--</div>
+                        <div class="cp-pay-summary-price" id="cpSummaryPrice">--</div>
+                        <div class="cp-pay-summary-meta" id="cpSummaryMeta">--</div>
+                    </div>
+
+                    <form method="POST" action="{{ route('wifi.pay') }}" id="cpPaymentForm" class="cp-payment-form" style="margin-top:0">
                         @csrf
+                        <input type="hidden" name="package_id" id="cpPackageId" value="">
 
                         <div class="cp-field">
-                            <label for="cpPhone">M-Pesa Number</label>
+                            <label for="cpPhone">Safaricom M-Pesa Number</label>
                             <input
                                 id="cpPhone"
                                 type="tel"
@@ -120,47 +260,14 @@
                                 inputmode="tel">
                         </div>
 
-                        <input type="hidden" name="package_id" id="cpPackageId" value="{{ $selectedPackageId > 0 ? $selectedPackageId : '' }}">
-
-                        <div class="cp-grid cp-package-grid">
-                            @foreach($packages as $pkg)
-                                @php
-                                    $isSelected = $selectedPackageId === (int) $pkg->id;
-                                @endphp
-                                <button
-                                    type="button"
-                                    class="cp-package-card js-package-card{{ $isSelected ? ' is-selected' : '' }}"
-                                    data-package-id="{{ $pkg->id }}"
-                                    data-package-name="{{ $pkg->name }}"
-                                    data-package-price="KES {{ number_format((float) $pkg->price, 0) }}"
-                                    data-package-duration="{{ $pkg->duration_formatted }}"
-                                    data-package-speed="{{ $pkg->bandwidth_formatted }}"
-                                    aria-pressed="{{ $isSelected ? 'true' : 'false' }}">
-                                    <div class="cp-package-name">{{ $pkg->name }}</div>
-                                    <div class="cp-package-price">KES {{ number_format((float) $pkg->price, 0) }}</div>
-                                    <div class="cp-package-meta">{{ $pkg->duration_formatted }}</div>
-                                    <div class="cp-package-meta">{{ $pkg->bandwidth_formatted }}</div>
-                                </button>
-                            @endforeach
-                        </div>
-
-                        <div class="cp-selected-summary" id="cpSelectedSummary">
-                            @if($selectedPackage)
-                                Selected: {{ $selectedPackage->name }} - KES {{ number_format((float) $selectedPackage->price, 0) }}
-                            @else
-                                Select a package to continue.
-                            @endif
-                        </div>
-
                         <button
                             type="submit"
                             class="cp-btn cp-btn-primary cp-btn-block"
-                            id="cpPayButton"
-                            {{ $selectedPackage ? '' : 'disabled' }}>
+                            id="cpPayButton">
                             Pay and Connect
                         </button>
                     </form>
-                @endif
+                </div>
             </article>
 
             <article class="cp-card cp-card-compact">
@@ -180,48 +287,136 @@
         const packageCards = document.querySelectorAll('.js-package-card');
         const packageInput = document.getElementById('cpPackageId');
         const payButton = document.getElementById('cpPayButton');
-        const summaryNode = document.getElementById('cpSelectedSummary');
         const payForm = document.getElementById('cpPaymentForm');
+        const step1 = document.getElementById('cpStep1');
+        const step2 = document.getElementById('cpStep2');
+        const backBtn = document.getElementById('cpBackBtn');
+        const summaryName = document.getElementById('cpSummaryName');
+        const summaryPrice = document.getElementById('cpSummaryPrice');
+        const summaryMeta = document.getElementById('cpSummaryMeta');
+        const phoneInput = document.getElementById('cpPhone');
 
-        function setSelectedPackage(card) {
-            if (!card || !packageInput || !summaryNode || !payButton) {
-                return;
-            }
+        let currentSelectedCard = null;
 
+        function goToStep2(card) {
+            if (!step1 || !step2 || !card) return;
+
+            const pkgId = card.dataset.packageId || '';
+            const pkgName = card.dataset.packageName || 'Package';
+            const pkgPrice = card.dataset.packagePrice || '';
+            const pkgDuration = card.dataset.packageDuration || '';
+            const pkgSpeed = card.dataset.packageSpeed || '';
+
+            // Set hidden input
+            if (packageInput) packageInput.value = pkgId;
+
+            // Fill summary
+            if (summaryName) summaryName.textContent = pkgName;
+            if (summaryPrice) summaryPrice.textContent = pkgPrice;
+            if (summaryMeta) summaryMeta.textContent = [pkgDuration, pkgSpeed].filter(Boolean).join(' · ');
+
+            // Update pay button text
+            if (payButton) payButton.textContent = `Pay ${pkgPrice} and Connect`;
+
+            // Animate step transition
+            step1.classList.remove('is-active');
+            step1.classList.add('is-leaving');
+            step2.removeAttribute('hidden');
+
+            requestAnimationFrame(() => {
+                requestAnimationFrame(() => {
+                    step2.classList.add('is-active');
+                    step1.setAttribute('hidden', '');
+                    step1.classList.remove('is-leaving');
+                });
+            });
+
+            // Focus phone input
+            setTimeout(() => {
+                if (phoneInput && !phoneInput.value) phoneInput.focus();
+            }, 400);
+        }
+
+        function goToStep1() {
+            if (!step1 || !step2) return;
+
+            step2.classList.remove('is-active');
+            step2.classList.add('is-leaving');
+            step1.removeAttribute('hidden');
+
+            requestAnimationFrame(() => {
+                requestAnimationFrame(() => {
+                    step1.classList.add('is-active');
+                    step2.setAttribute('hidden', '');
+                    step2.classList.remove('is-leaving');
+                });
+            });
+
+            // Clear selection
+            currentSelectedCard = null;
             packageCards.forEach((node) => {
                 node.classList.remove('is-selected');
                 node.setAttribute('aria-pressed', 'false');
             });
-
-            card.classList.add('is-selected');
-            card.setAttribute('aria-pressed', 'true');
-
-            const packageId = card.dataset.packageId || '';
-            const packageName = card.dataset.packageName || 'Package';
-            const packagePrice = card.dataset.packagePrice || '';
-            const packageDuration = card.dataset.packageDuration || '';
-
-            packageInput.value = packageId;
-            summaryNode.textContent = `Selected: ${packageName} - ${packagePrice} (${packageDuration})`;
-            payButton.disabled = packageId === '';
         }
 
         packageCards.forEach((card) => {
-            card.addEventListener('click', () => setSelectedPackage(card));
+            card.addEventListener('click', () => {
+                if (currentSelectedCard === card) {
+                    // Second tap on same card → go to step 2
+                    goToStep2(card);
+                    return;
+                }
+
+                // First tap → select the card
+                packageCards.forEach((node) => {
+                    node.classList.remove('is-selected');
+                    node.setAttribute('aria-pressed', 'false');
+                });
+                card.classList.add('is-selected');
+                card.setAttribute('aria-pressed', 'true');
+                currentSelectedCard = card;
+
+                // On mobile, auto-advance after a brief delay for visual feedback
+                // On desktop, user can tap again or we auto-advance
+                setTimeout(() => {
+                    if (currentSelectedCard === card) {
+                        goToStep2(card);
+                    }
+                }, 600);
+            });
         });
 
-        if (packageInput && packageInput.value !== '') {
-            const preselectedCard = document.querySelector(`.js-package-card[data-package-id="${packageInput.value}"]`);
-            if (preselectedCard) {
-                setSelectedPackage(preselectedCard);
-            }
+        if (backBtn) {
+            backBtn.addEventListener('click', goToStep1);
         }
 
-        payForm?.addEventListener('submit', () => {
-            if (!payButton) {
-                return;
+        // If there were validation errors (old input exists), go straight to step 2
+        @if($selectedPackageId > 0 && $selectedPackage)
+        (function() {
+            const preselectedCard = document.querySelector('.js-package-card[data-package-id="{{ $selectedPackageId }}"]');
+            if (preselectedCard) {
+                currentSelectedCard = preselectedCard;
+                preselectedCard.classList.add('is-selected');
+                preselectedCard.setAttribute('aria-pressed', 'true');
+                // Jump immediately (no animation) on validation error redirect
+                if (step1 && step2) {
+                    step1.classList.remove('is-active');
+                    step1.setAttribute('hidden', '');
+                    step2.removeAttribute('hidden');
+                    step2.classList.add('is-active');
+                    if (packageInput) packageInput.value = '{{ $selectedPackageId }}';
+                    if (summaryName) summaryName.textContent = preselectedCard.dataset.packageName || '';
+                    if (summaryPrice) summaryPrice.textContent = preselectedCard.dataset.packagePrice || '';
+                    if (summaryMeta) summaryMeta.textContent = [preselectedCard.dataset.packageDuration, preselectedCard.dataset.packageSpeed].filter(Boolean).join(' · ');
+                    if (payButton) payButton.textContent = `Pay ${preselectedCard.dataset.packagePrice || ''} and Connect`;
+                }
             }
+        })();
+        @endif
 
+        payForm?.addEventListener('submit', () => {
+            if (!payButton) return;
             payButton.disabled = true;
             payButton.textContent = 'Sending M-Pesa Prompt...';
         });
@@ -230,9 +425,7 @@
         const expiresAt = new Date('{{ $activeSession->expires_at?->toIso8601String() ?? $activeSession->expires_at }}').getTime();
         function updateActiveCountdown() {
             const node = document.getElementById('timeLeft');
-            if (!node || !expiresAt) {
-                return;
-            }
+            if (!node || !expiresAt) return;
 
             const diff = expiresAt - Date.now();
             if (diff <= 0) {
@@ -251,5 +444,6 @@
         setInterval(updateActiveCountdown, 1000);
         @endif
     </script>
+
 </body>
 </html>

@@ -83,8 +83,8 @@ class CaptivePortalController extends Controller
         }
 
         $request->validate([
-            'phone' => 'required|regex:' . self::KENYA_PHONE_REGEX,
-            'package_id' => 'required|exists:packages,id'
+            'phone' => ['required', 'regex:' . self::KENYA_PHONE_REGEX],
+            'package_id' => ['required', 'exists:packages,id'],
         ]);
 
         $phone = $this->normalizePhoneForStorage((string) $request->phone);
@@ -304,8 +304,8 @@ class CaptivePortalController extends Controller
 
         if ($request->filled('voucher_code')) {
             $request->validate([
-                'voucher_code' => 'required|string|max:64',
-                'phone' => 'required|regex:' . self::KENYA_PHONE_REGEX,
+                'voucher_code' => ['required', 'string', 'max:64'],
+                'phone' => ['required', 'regex:' . self::KENYA_PHONE_REGEX],
             ]);
 
             $phone = $this->normalizePhoneForStorage((string) $request->phone);
@@ -422,8 +422,8 @@ class CaptivePortalController extends Controller
         }
 
         $request->validate([
-            'mpesa_code' => 'required|string|max:32',
-            'phone' => 'required|regex:' . self::KENYA_PHONE_REGEX
+            'mpesa_code' => ['required', 'string', 'max:32'],
+            'phone' => ['required', 'regex:' . self::KENYA_PHONE_REGEX],
         ]);
         
         $mpesaCode = strtoupper(trim($request->mpesa_code));
@@ -524,8 +524,8 @@ class CaptivePortalController extends Controller
         }
 
         $request->validate([
-            'phone' => 'required|regex:' . self::KENYA_PHONE_REGEX,
-            'package_id' => 'required|exists:packages,id'
+            'phone' => ['required', 'regex:' . self::KENYA_PHONE_REGEX],
+            'package_id' => ['required', 'exists:packages,id'],
         ]);
         
         $phone = $this->normalizePhoneForStorage((string) $request->phone);
