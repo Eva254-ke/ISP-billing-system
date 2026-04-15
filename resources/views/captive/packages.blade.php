@@ -3,622 +3,258 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <meta name="theme-color" content="#7C3AED">
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="theme-color" content="#155eef">
     <title>CloudBridge WiFi</title>
-    <style>
-        :root {
-            --primary: #7C3AED;
-            --primary-dark: #6D28D9;
-            --secondary: #06B6D4;
-            --bg: #0F172A;
-            --surface: #1E293B;
-            --surface-light: #334155;
-            --success: #10B981;
-            --error: #EF4444;
-            --text: #FFFFFF;
-            --text-muted: #94A3B8;
-            --border: #475569;
-            --modal-overlay: rgba(15, 23, 42, 0.8);
-        }
-
-        @media (prefers-color-scheme: light) {
-            :root {
-                --bg: #F8FAFC;
-                --surface: #FFFFFF;
-                --surface-light: #F1F5F9;
-                --text: #0F172A;
-                --text-muted: #64748B;
-                --border: #E2E8F0;
-                --modal-overlay: rgba(248, 250, 252, 0.9);
-            }
-        }
-
-        * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
-
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-            background: var(--bg);
-            min-height: 100vh;
-            color: var(--text);
-            padding: 0.75rem;
-            line-height: 1.5;
-            overflow-x: hidden;
-        }
-
-        .container { max-width: 480px; margin: 0 auto; padding-bottom: 3rem; }
-
-        .header {
-            text-align: center;
-            padding: 1rem 0;
-            margin-bottom: 0.75rem;
-        }
-
-        .header h1 {
-            font-size: 1.375rem;
-            font-weight: 700;
-            color: var(--text);
-            margin-bottom: 0.25rem;
-        }
-
-        .header p { color: var(--text-muted); font-size: 0.8125rem; }
-
-        .active-session {
-            background: var(--surface);
-            border: 1px solid var(--success);
-            border-radius: 12px;
-            padding: 1rem;
-            margin-bottom: 1rem;
-            text-align: center;
-        }
-
-        .active-session h2 {
-            color: var(--success);
-            font-size: 1rem;
-            margin-bottom: 0.25rem;
-            font-weight: 600;
-        }
-
-        .active-session .time-left {
-            font-size: 1.5rem;
-            font-weight: 700;
-            color: var(--secondary);
-            margin: 0.5rem 0;
-        }
-
-        .btn {
-            display: block;
-            width: 100%;
-            padding: 0.875rem;
-            border: none;
-            border-radius: 10px;
-            font-size: 0.9375rem;
-            font-weight: 600;
-            cursor: pointer;
-            text-decoration: none;
-            text-align: center;
-            transition: all 0.15s;
-            margin-bottom: 0.5rem;
-        }
-
-        .btn:active { transform: scale(0.98); }
-        .btn-primary { background: var(--primary); color: white; }
-        .btn-primary:hover { background: var(--primary-dark); }
-        .btn-secondary {
-            background: var(--surface-light);
-            color: var(--text);
-            border: 1px solid var(--border);
-        }
-        .btn-outline {
-            background: transparent;
-            color: var(--primary);
-            border: 1px solid var(--primary);
-        }
-        .btn-success { background: var(--success); color: white; }
-        .btn-ghost {
-            background: transparent;
-            color: var(--text-muted);
-            border: none;
-            font-size: 0.8125rem;
-            padding: 0.5rem;
-        }
-
-        /* Packages Grid */
-        .packages {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 0.5rem;
-            margin-bottom: 1rem;
-        }
-
-        .package-card {
-            background: var(--surface);
-            border-radius: 10px;
-            padding: 0.875rem;
-            border: 2px solid transparent;
-            cursor: pointer;
-            transition: border-color 0.15s;
-            text-align: center;
-        }
-
-        .package-card:hover, .package-card.selected {
-            border-color: var(--primary);
-        }
-
-        .package-card h3 {
-            font-size: 0.875rem;
-            font-weight: 600;
-            margin-bottom: 0.25rem;
-            color: var(--text);
-        }
-
-        .package-card .price {
-            font-size: 1.125rem;
-            font-weight: 700;
-            color: var(--secondary);
-            margin-bottom: 0.5rem;
-        }
-
-        .package-card .features {
-            list-style: none;
-            text-align: left;
-        }
-
-        .package-card .features li {
-            padding: 0.125rem 0;
-            color: var(--text-muted);
-            font-size: 0.6875rem;
-        }
-
-        /* Quick Actions */
-        .quick-actions {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 0.5rem;
-            margin: 1rem 0;
-        }
-
-        .action-card {
-            background: var(--surface);
-            border-radius: 10px;
-            padding: 0.875rem;
-            border: 1px solid var(--border);
-            text-align: center;
-        }
-
-        .action-card h4 {
-            font-size: 0.8125rem;
-            font-weight: 600;
-            margin-bottom: 0.5rem;
-            color: var(--text);
-        }
-
-        .action-card input {
-            width: 100%;
-            padding: 0.625rem;
-            background: var(--surface-light);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            color: var(--text);
-            font-size: 0.875rem;
-            margin-bottom: 0.5rem;
-            font-family: monospace;
-            text-transform: uppercase;
-        }
-
-        .action-card input:focus {
-            outline: none;
-            border-color: var(--secondary);
-        }
-
-        .action-card .btn {
-            padding: 0.625rem;
-            font-size: 0.8125rem;
-            margin-bottom: 0;
-        }
-
-        /* Modal Styles */
-        .modal-overlay {
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: var(--modal-overlay);
-            display: flex;
-            align-items: flex-end;
-            justify-content: center;
-            z-index: 1000;
-            opacity: 0;
-            visibility: hidden;
-            transition: opacity 0.2s, visibility 0.2s;
-        }
-
-        .modal-overlay.active {
-            opacity: 1;
-            visibility: visible;
-        }
-
-        .modal {
-            background: var(--surface);
-            border-radius: 20px 20px 0 0;
-            padding: 1.25rem;
-            width: 100%;
-            max-width: 480px;
-            max-height: 90vh;
-            overflow-y: auto;
-            transform: translateY(100%);
-            transition: transform 0.3s ease-out;
-        }
-
-        .modal-overlay.active .modal {
-            transform: translateY(0);
-        }
-
-        .modal-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 1rem;
-            padding-bottom: 0.75rem;
-            border-bottom: 1px solid var(--border);
-        }
-
-        .modal-header h3 {
-            font-size: 1.125rem;
-            font-weight: 600;
-            color: var(--text);
-        }
-
-        .modal-close {
-            background: none;
-            border: none;
-            color: var(--text-muted);
-            font-size: 1.5rem;
-            cursor: pointer;
-            padding: 0.25rem;
-            line-height: 1;
-        }
-
-        .modal-package {
-            background: var(--surface-light);
-            border-radius: 10px;
-            padding: 0.875rem;
-            margin-bottom: 1rem;
-            text-align: center;
-        }
-
-        .modal-package .name {
-            font-weight: 600;
-            color: var(--text);
-            margin-bottom: 0.25rem;
-        }
-
-        .modal-package .price {
-            font-size: 1.25rem;
-            font-weight: 700;
-            color: var(--secondary);
-        }
-
-        .modal-package .details {
-            font-size: 0.75rem;
-            color: var(--text-muted);
-            margin-top: 0.5rem;
-        }
-
-        .modal-form .form-group {
-            margin-bottom: 0.875rem;
-        }
-
-        .modal-form .form-group label {
-            display: block;
-            margin-bottom: 0.375rem;
-            color: var(--text-muted);
-            font-size: 0.8125rem;
-            font-weight: 500;
-        }
-
-        .modal-form .form-group input {
-            width: 100%;
-            padding: 0.875rem;
-            background: var(--surface-light);
-            border: 1px solid var(--border);
-            border-radius: 10px;
-            color: var(--text);
-            font-size: 1rem;
-        }
-
-        .modal-form .form-group input:focus {
-            outline: none;
-            border-color: var(--primary);
-        }
-
-        .modal-footer {
-            margin-top: 1rem;
-            padding-top: 0.75rem;
-            border-top: 1px solid var(--border);
-        }
-
-        .modal-footer .note {
-            font-size: 0.75rem;
-            color: var(--text-muted);
-            text-align: center;
-            margin-bottom: 0.75rem;
-        }
-
-        /* Footer */
-        .footer {
-            text-align: center;
-            padding: 1rem 0;
-            color: var(--text-muted);
-            font-size: 0.6875rem;
-            border-top: 1px solid var(--border);
-            margin-top: 1rem;
-            position: fixed;
-            bottom: 0;
-            left: 0;
-            right: 0;
-            background: var(--bg);
-        }
-
-        .footer a { color: var(--primary); text-decoration: none; }
-        .credit {
-            font-size: 0.625rem;
-            color: var(--text-muted);
-            margin-top: 0.25rem;
-            opacity: 0.8;
-        }
-        .credit span {
-            color: var(--primary);
-            font-weight: 600;
-        }
-
-        /* Utility */
-        .info {
-            background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: 10px;
-            padding: 0.75rem;
-            margin-bottom: 1rem;
-            font-size: 0.75rem;
-            color: var(--text-muted);
-            line-height: 1.5;
-        }
-        .info strong { color: var(--text); }
-        .error {
-            background: rgba(239, 68, 68, 0.1);
-            border: 1px solid rgba(239, 68, 68, 0.3);
-            color: var(--error);
-            padding: 0.625rem;
-            border-radius: 8px;
-            margin-bottom: 0.75rem;
-            font-size: 0.8125rem;
-        }
-        .success {
-            background: rgba(16, 185, 129, 0.1);
-            border: 1px solid rgba(16, 185, 129, 0.3);
-            color: var(--success);
-            padding: 0.625rem;
-            border-radius: 8px;
-            margin-bottom: 0.75rem;
-            font-size: 0.8125rem;
-        }
-        .hidden { display: none !important; }
-        .btn.loading {
-            opacity: 0.7;
-            pointer-events: none;
-            position: relative;
-        }
-        .btn.loading:after {
-            content: "";
-            position: absolute;
-            width: 14px;
-            height: 14px;
-            border: 2px solid rgba(255,255,255,0.3);
-            border-top-color: white;
-            border-radius: 50%;
-            animation: spin 0.6s linear infinite;
-            top: 50%;
-            left: 50%;
-            margin: -7px 0 0 -7px;
-        }
-        @keyframes spin { to { transform: rotate(360deg); } }
-
-        @media (max-width: 340px) {
-            .packages, .quick-actions { grid-template-columns: 1fr; }
-        }
-    </style>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&family=Plus+Jakarta+Sans:wght@500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ asset('css/captive-portal.css') }}">
 </head>
 <body>
-    <div class="container">
-        <div class="header">
-            <h1>CloudBridge WiFi</h1>
-            <p>Choose a package to connect</p>
+    <main class="cp-page">
+        <header class="cp-topbar">
+            <div class="cp-brand">
+                <div class="cp-brand-mark">CB</div>
+                <div class="cp-brand-text">
+                    <h1>{{ $tenant?->name ?: 'CloudBridge WiFi' }}</h1>
+                    <p>Fast, secure internet access</p>
+                </div>
+            </div>
+            <div class="cp-support">Support: <a href="tel:+254700000000">+254 700 000 000</a></div>
+        </header>
+
+        <section class="cp-stack">
+            <article class="cp-card">
+                @if(session('error'))
+                    <div class="cp-flash error">{{ session('error') }}</div>
+                @endif
+                @if(session('success'))
+                    <div class="cp-flash success">{{ session('success') }}</div>
+                @endif
+                @if(session('message'))
+                    <div class="cp-flash success">{{ session('message') }}</div>
+                @endif
+                @if(!empty($tenantResolutionError))
+                    <div class="cp-flash error">{{ $tenantResolutionError }}</div>
+                @endif
+                @if($errors->any())
+                    <div class="cp-flash error">{{ $errors->first() }}</div>
+                @endif
+
+                @if(isset($activeSession) && $activeSession)
+                    <h2>Session Active</h2>
+                    <p class="cp-card-subtitle">You are currently connected. You can restore status or buy additional access.</p>
+
+                    <div class="cp-facts" style="margin-top:12px;">
+                        <div class="cp-fact">
+                            <span>Phone</span>
+                            <span>{{ $activeSession->phone ?? ($phone ?: 'N/A') }}</span>
+                        </div>
+                        <div class="cp-fact">
+                            <span>Expires</span>
+                            <span id="activeExpires">{{ $activeSession->expires_at?->format('H:i') ?? 'N/A' }}</span>
+                        </div>
+                        <div class="cp-fact">
+                            <span>Time left</span>
+                            <span id="timeLeft">--:--</span>
+                        </div>
+                    </div>
+
+                    <div class="cp-actions">
+                        <a href="{{ route('wifi.status', ['phone' => $phone]) }}" class="cp-btn cp-btn-primary">View Connection Status</a>
+                        <a href="{{ route('wifi.packages', ['phone' => $phone]) }}" class="cp-btn cp-btn-soft">Buy More Time</a>
+                    </div>
+                @else
+                    <h2>Choose Your Package</h2>
+                    <p class="cp-card-subtitle">Select a plan, complete M-Pesa payment, and get online in seconds.</p>
+
+                    <div class="cp-trust-row">
+                        <div class="cp-trust-item"><strong>Secure Checkout</strong>M-Pesa PIN is only entered on your phone.</div>
+                        <div class="cp-trust-item"><strong>Instant Activation</strong>Access is enabled automatically after payment.</div>
+                        <div class="cp-trust-item"><strong>Reliable Support</strong>Help is available if anything delays.</div>
+                    </div>
+
+                    <div class="cp-grid cp-package-grid" style="margin-top:14px;">
+                        @forelse($packages as $pkg)
+                            <article class="cp-package">
+                                <div class="cp-package-title">
+                                    <h3>{{ $pkg->name }}</h3>
+                                    <div class="cp-price">KES {{ number_format((float) $pkg->price, 0) }}<small>/plan</small></div>
+                                </div>
+                                <div class="cp-meta">
+                                    <div class="cp-meta-line"><strong>Duration:</strong> {{ $pkg->duration_formatted }}</div>
+                                    <div class="cp-meta-line"><strong>Speed:</strong> {{ $pkg->bandwidth_formatted }}</div>
+                                </div>
+                                <button
+                                    type="button"
+                                    class="cp-btn cp-btn-primary cp-btn-block js-open-payment"
+                                    data-package-id="{{ $pkg->id }}"
+                                    data-package-name="{{ $pkg->name }}"
+                                    data-package-price="{{ number_format((float) $pkg->price, 0) }}"
+                                    data-package-duration="{{ $pkg->duration_formatted }}"
+                                    data-package-speed="{{ $pkg->bandwidth_formatted }}">
+                                    Pay With M-Pesa
+                                </button>
+                            </article>
+                        @empty
+                            <div class="cp-flash error">No packages are available right now for this location.</div>
+                        @endforelse
+                    </div>
+                @endif
+            </article>
+
+            <article id="reconnect" class="cp-card" data-reconnect-mode="{{ request('mode') === 'reconnect' ? '1' : '0' }}">
+                <h2>Already Paid? Restore Access</h2>
+                <p class="cp-card-subtitle">No separate page needed. Use your M-Pesa code or voucher right here.</p>
+
+                <div class="cp-form-grid">
+                    <section class="cp-form-card">
+                        <h4>Reconnect With M-Pesa Code</h4>
+                        <form method="POST" action="{{ route('wifi.reconnect') }}">
+                            @csrf
+                            <div class="cp-field">
+                                <label for="reconnectPhone">Phone Number</label>
+                                <input id="reconnectPhone" type="tel" name="phone" placeholder="0712345678" value="{{ $phone ?? '' }}" required pattern="0[17]\d{8}" autocomplete="tel" inputmode="tel">
+                            </div>
+                            <div class="cp-field">
+                                <label for="mpesaCode">M-Pesa Transaction Code</label>
+                                <input id="mpesaCode" type="text" name="mpesa_code" placeholder="QGH45XYZ" required maxlength="32" autocomplete="off">
+                            </div>
+                            <button type="submit" class="cp-btn cp-btn-soft cp-btn-block">Verify And Connect</button>
+                        </form>
+                    </section>
+
+                    <section class="cp-form-card">
+                        <h4>Redeem Voucher</h4>
+                        <form method="POST" action="{{ route('wifi.reconnect') }}">
+                            @csrf
+                            <div class="cp-field">
+                                <label for="voucherPhone">Phone Number</label>
+                                <input id="voucherPhone" type="tel" name="phone" placeholder="0712345678" value="{{ $phone ?? '' }}" required pattern="0[17]\d{8}" autocomplete="tel" inputmode="tel">
+                            </div>
+                            <div class="cp-field">
+                                <label for="voucherCode">Voucher Code</label>
+                                <input id="voucherCode" type="text" name="voucher_code" placeholder="CB-WIFI-1234" required maxlength="64" autocomplete="off">
+                            </div>
+                            <button type="submit" class="cp-btn cp-btn-soft cp-btn-block">Redeem Voucher</button>
+                        </form>
+                    </section>
+                </div>
+            </article>
+        </section>
+
+        <div class="cp-footer">
+            Need help? <a href="tel:+254700000000">Call support now</a>
         </div>
+    </main>
 
-        @if(session('error'))
-            <div class="error">{{ session('error') }}</div>
-        @endif
-        @if(session('success'))
-            <div class="success">{{ session('success') }}</div>
-        @endif
-        @if(!empty($tenantResolutionError))
-            <div class="error">{{ $tenantResolutionError }}</div>
-        @endif
-        @if($errors->any())
-            <div class="error">{{ $errors->first() }}</div>
-        @endif
-
-        @if(isset($activeSession) && $activeSession)
-            <div class="active-session">
-                <h2>Session Active</h2>
-                <div class="time-left" id="timeLeft">--:--</div>
-                <p style="color: var(--text-muted); font-size: 0.75rem;">Remaining</p>
-                <a href="{{ route('wifi.status', ['phone' => $phone]) }}" class="btn btn-success">Restore Connection</a>
-                <a href="{{ route('wifi.extend', ['phone' => $phone]) }}" class="btn btn-outline">Add Time</a>
-            </div>
-        @else
-            <div class="info">
-                <strong>Quick Start:</strong> Tap a package, enter your M-Pesa number, complete the prompt.
+    <div class="cp-modal-shell" id="paymentModal" aria-hidden="true">
+        <div class="cp-modal" role="dialog" aria-modal="true" aria-labelledby="paymentModalTitle">
+            <div class="cp-modal-head">
+                <h3 id="paymentModalTitle">Confirm Payment Details</h3>
+                <button type="button" class="cp-modal-close" id="closePaymentModal" aria-label="Close">&times;</button>
             </div>
 
-            {{-- Package Grid --}}
-            <div class="packages">
-                @forelse($packages as $pkg)
-                <div class="package-card" data-package-id="{{ $pkg->id }}" data-package-name="{{ $pkg->name }}" data-package-price="{{ $pkg->price }}" data-package-duration="{{ $pkg->duration_formatted }}" data-package-speed="{{ $pkg->download_limit_mbps ?? 'Unlimited' }}" tabindex="0">
-                    <h3>{{ $pkg->name }}</h3>
-                    <div class="price">KES {{ number_format($pkg->price) }}</div>
-                    <ul class="features">
-                        <li>{{ $pkg->duration_formatted }}</li>
-                        <li>{{ $pkg->bandwidth_formatted }}</li>
-                    </ul>
-                </div>
-                @empty
-                <div class="error" style="grid-column: 1/-1;">
-                    No packages available for {{ $tenant?->name ?? 'this tenant' }}{{ $tenant?->id ? ' (ID '.$tenant->id.')' : '' }}.
-                </div>
-                @endforelse
+            <div class="cp-selected-package">
+                <div class="name" id="modalPackageName">Package</div>
+                <div class="detail" id="modalPackageDetails">Details</div>
             </div>
 
-            {{-- Quick Actions - 2 Column --}}
-            <div class="quick-actions">
-                <div class="action-card">
-                    <h4>Voucher</h4>
-                    <form method="POST" action="{{ route('wifi.reconnect') }}">
-                        @csrf
-                        <input type="tel" name="phone" placeholder="0712345678" value="{{ $phone ?? '' }}" required pattern="0[17]\d{8}" autocomplete="tel" inputmode="tel">
-                        <input type="text" name="voucher_code" placeholder="Code" required maxlength="32" autocomplete="off">
-                        <button type="submit" class="btn btn-secondary">Apply</button>
-                    </form>
-                </div>
-                <div class="action-card">
-                    <h4>M-Pesa Code</h4>
-                    <form method="POST" action="{{ route('wifi.reconnect') }}">
-                        @csrf
-                        <input type="hidden" name="reconnect_type" value="mpesa_code">
-                        <input type="tel" name="phone" placeholder="0712345678" value="{{ $phone ?? '' }}" required pattern="0[17]\d{8}" autocomplete="tel" inputmode="tel">
-                        <input type="text" name="mpesa_code" placeholder="QGH45XYZ" required maxlength="32" autocomplete="off">
-                        <button type="submit" class="btn btn-secondary">Reconnect</button>
-                    </form>
-                </div>
-            </div>
-
-            <p style="text-align: center; color: var(--text-muted); font-size: 0.75rem; margin-top: 0.5rem;">
-                <a href="{{ route('wifi.reconnect.form') }}" style="color: var(--primary);">Full reconnect form →</a>
-            </p>
-        @endif
-    </div>
-
-    {{-- Payment Modal --}}
-    <div class="modal-overlay" id="paymentModal">
-        <div class="modal">
-            <div class="modal-header">
-                <h3>Complete Payment</h3>
-                <button class="modal-close" id="modalClose">&times;</button>
-            </div>
-
-            <div class="modal-package">
-                <div class="name" id="modalPackageName">Package Name</div>
-                <div class="price" id="modalPackagePrice">KES 0</div>
-                <div class="details" id="modalPackageDetails">0 min • 0 Mbps</div>
-            </div>
-
-            <form method="POST" action="{{ route('wifi.pay') }}" class="modal-form" id="modalPaymentForm">
+            <form method="POST" action="{{ route('wifi.pay') }}" id="paymentForm" style="margin-top:10px;">
                 @csrf
                 <input type="hidden" name="package_id" id="modalPackageId">
-
-                <div class="form-group">
+                <div class="cp-field">
                     <label for="modalPhone">M-Pesa Number</label>
-                    <input type="tel" id="modalPhone" name="phone" placeholder="0712345678" required pattern="0[17]\d{8}" autocomplete="tel" inputmode="tel" autofocus>
+                    <input id="modalPhone" type="tel" name="phone" placeholder="0712345678" value="{{ $phone ?? '' }}" required pattern="0[17]\d{8}" autocomplete="tel" inputmode="tel">
                 </div>
-
-                <div class="modal-footer">
-                    <p class="note">You will receive an M-Pesa prompt on this number</p>
-                    <button type="submit" class="btn btn-primary" id="modalPayBtn">Pay and Connect</button>
-                    <button type="button" class="btn btn-ghost" id="modalCancel">Cancel</button>
+                <p class="cp-small" style="margin:0 0 10px;">You will receive the M-Pesa prompt on this number.</p>
+                <div class="cp-actions" style="margin-top:0;">
+                    <button type="submit" class="cp-btn cp-btn-primary cp-btn-block" id="modalPayBtn">Pay And Connect</button>
+                    <button type="button" class="cp-btn cp-btn-outline cp-btn-block" id="cancelPaymentModal">Cancel</button>
                 </div>
             </form>
         </div>
     </div>
 
-    <div class="footer">
-        <p>Need help? <a href="tel:+254700000000">Call Support</a></p>
-        <p class="credit">Engineer <span>Omwenga Evans</span></p>
-    </div>
-
     <script>
-        // Modal logic
-        const modal = document.getElementById('paymentModal');
-        const modalClose = document.getElementById('modalClose');
-        const modalCancel = document.getElementById('modalCancel');
+        const paymentModal = document.getElementById('paymentModal');
+        const closePaymentModal = document.getElementById('closePaymentModal');
+        const cancelPaymentModal = document.getElementById('cancelPaymentModal');
+        const paymentForm = document.getElementById('paymentForm');
 
-        function openModal(pkg) {
+        function openPaymentModal(pkg) {
             document.getElementById('modalPackageId').value = pkg.id;
-            document.getElementById('modalPackageName').textContent = pkg.name;
-            document.getElementById('modalPackagePrice').textContent = 'KES ' + pkg.price;
-            document.getElementById('modalPackageDetails').textContent = pkg.duration + ' • ' + pkg.speed + (pkg.speed === 'Unlimited' ? '' : ' Mbps');
-            modal.classList.add('active');
+            document.getElementById('modalPackageName').textContent = `${pkg.name} - KES ${pkg.price}`;
+            document.getElementById('modalPackageDetails').textContent = `${pkg.duration} | ${pkg.speed}`;
+            paymentModal.classList.add('is-open');
+            paymentModal.setAttribute('aria-hidden', 'false');
             document.getElementById('modalPhone').focus();
         }
 
         function closeModal() {
-            modal.classList.remove('active');
+            paymentModal.classList.remove('is-open');
+            paymentModal.setAttribute('aria-hidden', 'true');
         }
 
-        modalClose.addEventListener('click', closeModal);
-        modalCancel.addEventListener('click', closeModal);
-        modal.addEventListener('click', function(e) {
-            if (e.target === modal) closeModal();
-        });
-
-        // Package selection opens modal
-        document.querySelectorAll('.package-card').forEach(card => {
-            const handler = function() {
-                const pkg = {
-                    id: card.dataset.packageId,
-                    name: card.dataset.packageName,
-                    price: card.dataset.packagePrice,
-                    duration: card.dataset.packageDuration,
-                    speed: card.dataset.packageSpeed
-                };
-                openModal(pkg);
-            };
-            card.addEventListener('click', handler);
-            card.addEventListener('keypress', function(e) {
-                if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
-                    handler();
-                }
+        document.querySelectorAll('.js-open-payment').forEach((button) => {
+            button.addEventListener('click', () => {
+                openPaymentModal({
+                    id: button.dataset.packageId,
+                    name: button.dataset.packageName,
+                    price: button.dataset.packagePrice,
+                    duration: button.dataset.packageDuration,
+                    speed: button.dataset.packageSpeed,
+                });
             });
         });
 
-        // Form submission
-        document.getElementById('modalPaymentForm')?.addEventListener('submit', function(e) {
-            const btn = document.getElementById('modalPayBtn');
-            btn.classList.add('loading');
-            btn.textContent = 'Processing';
+        closePaymentModal?.addEventListener('click', closeModal);
+        cancelPaymentModal?.addEventListener('click', closeModal);
+        paymentModal?.addEventListener('click', (event) => {
+            if (event.target === paymentModal) {
+                closeModal();
+            }
         });
 
-        // Active session countdown
+        paymentForm?.addEventListener('submit', () => {
+            const btn = document.getElementById('modalPayBtn');
+            btn.disabled = true;
+            btn.textContent = 'Sending M-Pesa Prompt...';
+        });
+
+        const reconnectPanel = document.getElementById('reconnect');
+        if (reconnectPanel?.dataset.reconnectMode === '1') {
+            reconnectPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+
         @if(isset($activeSession) && $activeSession)
-        const expiresAt = new Date('{{ $activeSession->expires_at }}').getTime();
-        function updateTimeLeft() {
-            const now = new Date().getTime();
-            const distance = expiresAt - now;
-            if (distance < 0) {
-                document.getElementById('timeLeft').innerHTML = 'Expired';
-                location.reload();
+        const expiresAt = new Date('{{ $activeSession->expires_at?->toIso8601String() ?? $activeSession->expires_at }}').getTime();
+        function updateActiveCountdown() {
+            const now = Date.now();
+            const diff = expiresAt - now;
+            if (diff <= 0) {
+                const node = document.getElementById('timeLeft');
+                if (node) node.textContent = 'Expired';
                 return;
             }
-            const minutes = Math.floor((distance % (1000 * 60 * 60)) / (1000 * 60));
-            const seconds = Math.floor((distance % (1000 * 60)) / 1000);
-            document.getElementById('timeLeft').innerHTML =
-                `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+            const totalSeconds = Math.floor(diff / 1000);
+            const hours = Math.floor(totalSeconds / 3600);
+            const minutes = Math.floor((totalSeconds % 3600) / 60);
+            const seconds = totalSeconds % 60;
+            const text = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+            const node = document.getElementById('timeLeft');
+            if (node) node.textContent = text;
         }
-        updateTimeLeft();
-        setInterval(updateTimeLeft, 1000);
+        updateActiveCountdown();
+        setInterval(updateActiveCountdown, 1000);
         @endif
+
+        const codeInputs = [document.getElementById('mpesaCode'), document.getElementById('voucherCode')];
+        codeInputs.forEach((input) => {
+            input?.addEventListener('input', function () {
+                this.value = this.value.toUpperCase().trimStart();
+            });
+        });
     </script>
 </body>
 </html>

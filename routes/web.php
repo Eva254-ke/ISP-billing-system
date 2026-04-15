@@ -107,7 +107,15 @@ Route::prefix('wifi')->name('wifi.')->group(function () {
     Route::get('/status/{phone}/check', [\App\Http\Controllers\CaptivePortalController::class, 'checkStatus'])->name('status.check');
     
     // Reconnection flows
-    Route::get('/reconnect', fn() => view('captive.reconnect'))->name('reconnect.form');
+    Route::get('/reconnect', function (Request $request) {
+        $params = array_filter([
+            'tenant_id' => $request->query('tenant_id'),
+            'phone' => $request->query('phone'),
+            'mode' => 'reconnect',
+        ], static fn ($value) => $value !== null && $value !== '');
+
+        return redirect()->route('wifi.packages', $params);
+    })->name('reconnect.form');
     Route::post('/reconnect', [\App\Http\Controllers\CaptivePortalController::class, 'reconnect'])->name('reconnect');
     
     // Session extension

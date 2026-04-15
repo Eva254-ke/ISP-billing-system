@@ -180,6 +180,9 @@ class CaptivePortalController extends Controller
             return redirect()->route('wifi.packages')
                 ->withErrors(['No payment found. Please start again.']);
         }
+
+        $this->reconcilePendingDarajaPayment($payment);
+        $payment = $payment->fresh();
         
         if (in_array($payment->status, ['completed', 'confirmed'], true)) {
             try {
@@ -492,7 +495,10 @@ class CaptivePortalController extends Controller
      */
     public function checkStatus($phone)
     {
+        $tenantId = (int) session('captive_tenant_id');
+
         $payment = Payment::where('phone', $phone)
+            ->when($tenantId > 0, fn ($query) => $query->where('tenant_id', $tenantId))
             ->where('payment_channel', 'captive_portal')
             ->orderBy('created_at', 'desc')
             ->first();
@@ -500,6 +506,9 @@ class CaptivePortalController extends Controller
         if (!$payment) {
             return response()->json(['status' => 'not_found']);
         }
+
+        $this->reconcilePendingDarajaPayment($payment);
+        $payment = $payment->fresh();
 
         if (in_array($payment->status, ['completed', 'confirmed'], true)) {
             $this->activatePaidAccess($payment);
@@ -611,6 +620,102 @@ class CaptivePortalController extends Controller
                 'daraja_failure_reason' => $reason,
             ]),
         ]);
+    }
+
+    private function reconcilePendingDarajaPayment(Payment $payment): void
+    {
+        if ($payment->status !== 'pending') {
+            return;
+        }
+
+        $checkoutRequestId = trim((string) $payment->mpesa_checkout_request_id);
+        if ($checkoutRequestId === '') {
+            return;
+        }
+
+        $metadata = is_array($payment->metadata) ? $payment->metadata : [];
+        $lastQueryAt = isset($metadata['daraja_last_query_at']) ? trim((string) $metadata['daraja_last_query_at']) : '';
+        if ($lastQueryAt !== '') {
+            try {
+                if (\Illuminate\Support\Carbon::parse($lastQueryAt)->gt(now()->subSeconds(15))) {
+                    return;
+                }
+            } catch (\Throwable) {
+                // Ignore parse errors and query again.
+            }
+        }
+
+        try {
+            $daraja = app(DarajaService::class);
+            $result = $daraja->queryStkStatus($checkoutRequestId);
+        } catch (\Throwable $e) {
+            Log::warning('Daraja pending reconciliation failed before query', [
+                'payment_id' => $payment->id,
+                'checkout_request_id' => $checkoutRequestId,
+                'error' => $e->getMessage(),
+            ]);
+            return;
+        }
+
+        $metadata = array_merge($metadata, [
+            'daraja_last_query_at' => now()->toIso8601String(),
+            'daraja_query_response_code' => $result['response_code'] ?? null,
+            'daraja_query_result_code' => $result['result_code'] ?? null,
+            'daraja_query_result_desc' => $result['result_desc'] ?? null,
+        ]);
+
+        if (!($result['success'] ?? false)) {
+            $payment->update(['metadata' => $metadata]);
+            Log::warning('Daraja STK query did not succeed for pending payment', [
+                'payment_id' => $payment->id,
+                'checkout_request_id' => $checkoutRequestId,
+                'error' => $result['error'] ?? null,
+            ]);
+            return;
+        }
+
+        if (($result['is_success'] ?? false) && ($result['final'] ?? false)) {
+            $payment->update([
+                'status' => 'confirmed',
+                'mpesa_receipt_number' => $result['receipt_number'] ?? $payment->mpesa_receipt_number,
+                'mpesa_phone' => $result['phone_number'] ?? $payment->mpesa_phone,
+                'amount' => $result['amount'] ?? $payment->amount,
+                'confirmed_at' => $payment->confirmed_at ?? now(),
+                'callback_data' => (array) ($result['raw'] ?? []),
+                'metadata' => array_merge($metadata, [
+                    'daraja_last_status' => 'confirmed_via_query',
+                ]),
+            ]);
+
+            Log::info('Pending payment reconciled via Daraja query', [
+                'payment_id' => $payment->id,
+                'checkout_request_id' => $checkoutRequestId,
+                'receipt' => $result['receipt_number'] ?? null,
+            ]);
+
+            return;
+        }
+
+        if (($result['is_failed'] ?? false) && ($result['final'] ?? false)) {
+            $payment->update([
+                'status' => 'failed',
+                'failed_at' => now(),
+                'callback_data' => (array) ($result['raw'] ?? []),
+                'metadata' => array_merge($metadata, [
+                    'daraja_last_status' => 'failed_via_query',
+                ]),
+            ]);
+
+            Log::warning('Pending payment marked failed via Daraja query', [
+                'payment_id' => $payment->id,
+                'checkout_request_id' => $checkoutRequestId,
+                'result_code' => $result['result_code'] ?? null,
+            ]);
+
+            return;
+        }
+
+        $payment->update(['metadata' => $metadata]);
     }
 
     private function activatePaidAccess(Payment $payment): ?UserSession

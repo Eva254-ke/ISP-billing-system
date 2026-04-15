@@ -191,6 +191,144 @@ class DarajaService
         }
     }
 
+    public function queryStkStatus(string $checkoutRequestId): array
+    {
+        $checkoutRequestId = trim($checkoutRequestId);
+        if ($checkoutRequestId === '') {
+            return [
+                'success' => false,
+                'final' => false,
+                'is_success' => false,
+                'is_failed' => false,
+                'response_code' => null,
+                'result_code' => null,
+                'result_desc' => '',
+                'merchant_request_id' => null,
+                'checkout_request_id' => null,
+                'receipt_number' => null,
+                'phone_number' => null,
+                'amount' => null,
+                'raw' => [],
+                'error' => 'CheckoutRequestID is required.',
+            ];
+        }
+
+        if (!$this->isConfigured()) {
+            return [
+                'success' => false,
+                'final' => false,
+                'is_success' => false,
+                'is_failed' => false,
+                'response_code' => null,
+                'result_code' => null,
+                'result_desc' => '',
+                'merchant_request_id' => null,
+                'checkout_request_id' => $checkoutRequestId,
+                'receipt_number' => null,
+                'phone_number' => null,
+                'amount' => null,
+                'raw' => [],
+                'error' => 'Daraja is not fully configured.',
+            ];
+        }
+
+        $token = $this->requestAccessToken();
+        if (!$token['success']) {
+            return [
+                'success' => false,
+                'final' => false,
+                'is_success' => false,
+                'is_failed' => false,
+                'response_code' => null,
+                'result_code' => null,
+                'result_desc' => '',
+                'merchant_request_id' => null,
+                'checkout_request_id' => $checkoutRequestId,
+                'receipt_number' => null,
+                'phone_number' => null,
+                'amount' => null,
+                'raw' => [],
+                'error' => (string) ($token['error'] ?? 'Failed to authenticate with Daraja'),
+            ];
+        }
+
+        $timestamp = now()->format('YmdHis');
+        $password = base64_encode($this->businessShortcode . $this->passkey . $timestamp);
+        $payload = [
+            'BusinessShortCode' => $this->businessShortcode,
+            'Password' => $password,
+            'Timestamp' => $timestamp,
+            'CheckoutRequestID' => $checkoutRequestId,
+        ];
+
+        try {
+            $response = Http::withToken((string) $token['access_token'])
+                ->acceptJson()
+                ->asJson()
+                ->timeout($this->timeout)
+                ->post($this->baseUrl . '/mpesa/stkpushquery/v1/query', $payload);
+
+            $result = $response->json() ?? [];
+            $responseCode = (string) ($result['ResponseCode'] ?? '');
+            $resultCodeRaw = $result['ResultCode'] ?? null;
+            $resultCode = is_numeric($resultCodeRaw) ? (int) $resultCodeRaw : null;
+            $accepted = $response->successful() && $responseCode === '0';
+            $isFinal = $accepted && $resultCode !== null;
+            $isSuccess = $isFinal && $resultCode === 0;
+            $isFailed = $isFinal && $resultCode !== 0;
+
+            Log::channel('payment')->info('Daraja STK query attempt', [
+                'environment' => $this->environment,
+                'checkout_request_id' => $checkoutRequestId,
+                'response_code' => $responseCode,
+                'result_code' => $resultCode,
+                'http_status' => $response->status(),
+            ]);
+
+            return [
+                'success' => $accepted,
+                'final' => $isFinal,
+                'is_success' => $isSuccess,
+                'is_failed' => $isFailed,
+                'response_code' => $responseCode !== '' ? $responseCode : null,
+                'result_code' => $resultCode,
+                'result_desc' => (string) ($result['ResultDesc'] ?? ''),
+                'merchant_request_id' => $result['MerchantRequestID'] ?? null,
+                'checkout_request_id' => $result['CheckoutRequestID'] ?? $checkoutRequestId,
+                'receipt_number' => !empty($result['MpesaReceiptNumber']) ? (string) $result['MpesaReceiptNumber'] : null,
+                'phone_number' => isset($result['PhoneNumber']) ? (string) $result['PhoneNumber'] : null,
+                'amount' => isset($result['Amount']) ? (float) $result['Amount'] : null,
+                'raw' => $result,
+                'error' => $accepted
+                    ? null
+                    : (string) ($result['errorMessage'] ?? $result['ResponseDescription'] ?? 'STK query failed'),
+            ];
+        } catch (\Throwable $e) {
+            Log::channel('payment')->error('Daraja STK query exception', [
+                'environment' => $this->environment,
+                'checkout_request_id' => $checkoutRequestId,
+                'error' => $e->getMessage(),
+            ]);
+
+            return [
+                'success' => false,
+                'final' => false,
+                'is_success' => false,
+                'is_failed' => false,
+                'response_code' => null,
+                'result_code' => null,
+                'result_desc' => '',
+                'merchant_request_id' => null,
+                'checkout_request_id' => $checkoutRequestId,
+                'receipt_number' => null,
+                'phone_number' => null,
+                'amount' => null,
+                'raw' => [],
+                'error' => 'Connection error: ' . $e->getMessage(),
+            ];
+        }
+    }
+
     private function requestAccessToken(): array
     {
         try {
