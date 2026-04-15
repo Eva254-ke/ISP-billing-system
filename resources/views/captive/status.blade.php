@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <meta name="theme-color" content="#0e7490">
-    @if(in_array($statusView, ['pending', 'paid']))
+    @if(in_array($statusView, ['pending', 'paid', 'verifying']))
         <meta http-equiv="refresh" content="10">
     @endif
     <title>Connection Status - CloudBridge WiFi</title>
@@ -23,17 +23,48 @@
         $statusRoute = route('wifi.status', array_filter([
             'phone' => $phone,
             'tenant_id' => $tenantId > 0 ? $tenantId : null,
+            'payment' => $payment->id,
         ], static fn ($value) => $value !== null && $value !== ''));
         $statusCheckRoute = route('wifi.status.check', array_filter([
             'phone' => $phone,
             'tenant_id' => $tenantId > 0 ? $tenantId : null,
+            'payment' => $payment->id,
         ], static fn ($value) => $value !== null && $value !== ''));
-        $shouldAutoPoll = in_array($statusView, ['pending', 'paid'], true)
-            || ($statusView === 'failed' && optional($payment->failed_at)->gt(now()->subMinutes(20)));
+        $shouldAutoPoll = in_array($statusView, ['pending', 'paid', 'verifying'], true);
         $packagesParams = array_filter([
             'phone' => $phone,
             'tenant_id' => $tenantId > 0 ? $tenantId : null,
         ], static fn ($value) => $value !== null && $value !== '');
+        $paymentMeta = is_array($payment->metadata) ? $payment->metadata : [];
+        $gatewayStatus = trim((string) ($paymentMeta['daraja_last_status'] ?? ''));
+        $failureReason = trim((string) (
+            $payment->reconciliation_notes
+            ?? ($paymentMeta['daraja_failure_reason'] ?? null)
+            ?? ($payment->callback_payload['reason'] ?? null)
+            ?? ($payment->callback_data['ResultDesc'] ?? null)
+            ?? ''
+        ));
+        if ($failureReason === '') {
+            $failureReason = 'The transaction did not complete.';
+        }
+        $lastQueryAt = $paymentMeta['daraja_last_query_at'] ?? null;
+        $lastCheckedLabel = null;
+        if (!empty($lastQueryAt)) {
+            try {
+                $lastCheckedLabel = \Illuminate\Support\Carbon::parse($lastQueryAt)
+                    ->timezone(config('app.timezone'))
+                    ->format('d M, H:i:s');
+            } catch (\Throwable) {
+                $lastCheckedLabel = null;
+            }
+        }
+        $statusLabel = match ($statusView) {
+            'activated' => 'Connected',
+            'paid' => 'Paid',
+            'verifying' => 'Verifying',
+            'failed' => 'Failed',
+            default => 'Pending',
+        };
     @endphp
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -53,13 +84,29 @@
             <div class="cp-support"><a class="cp-link-support" href="{{ $supportTelHref }}">Call support</a></div>
         </header>
 
+        @if(session('message'))
+            <div class="cp-flash success">{{ session('message') }}</div>
+        @endif
+        @if(session('success'))
+            <div class="cp-flash success">{{ session('success') }}</div>
+        @endif
+        @if($errors->any())
+            <div class="cp-flash error">{{ $errors->first() }}</div>
+        @endif
+
         <article class="cp-card">
             @if($statusView === 'pending')
                 <div class="cp-status-head">
                     <div>
-                        <span class="cp-status-pill warning">Waiting for payment</span>
-                        <h2 class="cp-section-title">Confirm the M-Pesa prompt</h2>
-                        <p class="cp-card-subtitle">Use phone <strong>{{ $phone }}</strong> and enter your PIN to continue.</p>
+                        <span class="cp-status-pill warning">{{ $gatewayStatus === 'pending_verification' ? 'Verifying with M-Pesa' : 'Waiting for payment' }}</span>
+                        <h2 class="cp-section-title">{{ $gatewayStatus === 'pending_verification' ? 'We are confirming your payment request' : 'Confirm the M-Pesa prompt' }}</h2>
+                        <p class="cp-card-subtitle">
+                            @if($gatewayStatus === 'pending_verification')
+                                If the prompt appears or money is deducted, do not pay again. Keep this page open while we check.
+                            @else
+                                Use phone <strong>{{ $phone }}</strong> and enter your PIN to continue.
+                            @endif
+                        </p>
                     </div>
                     <div class="cp-spinner" aria-hidden="true"></div>
                 </div>
@@ -72,10 +119,19 @@
 
                 <div class="cp-panel">
                     <h3>What happens next</h3>
-                    <p>After payment confirmation, your internet access will activate automatically.</p>
+                    <p>
+                        @if($gatewayStatus === 'pending_verification')
+                            We will keep checking automatically. If you already received the M-Pesa SMS, you can also use the reconnect option below.
+                        @else
+                            After payment confirmation, your internet access will activate automatically.
+                        @endif
+                    </p>
                 </div>
 
-                <a href="{{ $statusRoute }}" class="cp-btn cp-btn-primary cp-btn-block">Check Status Now</a>
+                <div class="cp-actions">
+                    <a href="{{ $statusRoute }}" class="cp-btn cp-btn-primary">Refresh Status</a>
+                    <a href="{{ route('wifi.reconnect.form', $packagesParams) }}" class="cp-btn cp-btn-soft">Use M-Pesa Code</a>
+                </div>
 
             @elseif($statusView === 'paid')
                 <div class="cp-status-head">
@@ -102,6 +158,32 @@
 
                 <a href="{{ $statusRoute }}" class="cp-btn cp-btn-primary cp-btn-block">Check Status Now</a>
 
+            @elseif($statusView === 'verifying')
+                <div class="cp-status-head">
+                    <div>
+                        <span class="cp-status-pill warning">Payment under review</span>
+                        <h2 class="cp-section-title">We are verifying your payment</h2>
+                        <p class="cp-card-subtitle">If M-Pesa already deducted money, do not initiate a second payment. We are still checking for confirmation.</p>
+                    </div>
+                    <div class="cp-spinner" aria-hidden="true"></div>
+                </div>
+
+                <div class="cp-flow cp-flow-compact">
+                    <div class="cp-flow-step is-complete">Package selected</div>
+                    <div class="cp-flow-step is-current">Payment verification</div>
+                    <div class="cp-flow-step">Internet activation</div>
+                </div>
+
+                <div class="cp-panel">
+                    <h3>What you should do</h3>
+                    <p>Wait for automatic confirmation, tap recheck if you have already been charged, or reconnect using the M-Pesa SMS code.</p>
+                </div>
+
+                <div class="cp-actions">
+                    <a href="{{ route('wifi.status', array_filter(['phone' => $phone, 'tenant_id' => $tenantId > 0 ? $tenantId : null, 'payment' => $payment->id, 'recheck' => 1], static fn ($value) => $value !== null && $value !== '')) }}" class="cp-btn cp-btn-primary">Recheck Payment</a>
+                    <a href="{{ route('wifi.reconnect.form', $packagesParams) }}" class="cp-btn cp-btn-soft">Use M-Pesa Code</a>
+                </div>
+
             @elseif($statusView === 'activated')
                 <span class="cp-status-pill success">Connected</span>
                 <h2 class="cp-section-title">You are connected to the internet</h2>
@@ -120,6 +202,12 @@
                         <span>Duration</span>
                         <span>{{ $payment->package->duration_formatted ?? (($payment->package->duration_in_minutes ?? 0) . ' min') }}</span>
                     </div>
+                    @if(!empty($payment->mpesa_receipt_number))
+                        <div class="cp-fact">
+                            <span>M-Pesa Receipt</span>
+                            <span>{{ $payment->mpesa_receipt_number }}</span>
+                        </div>
+                    @endif
                     <div class="cp-fact">
                         <span>Expires</span>
                         <span id="expiresAt">--:--</span>
@@ -132,16 +220,16 @@
 
             @elseif($statusView === 'failed')
                 <span class="cp-status-pill error">Payment not completed</span>
-                <h2 class="cp-section-title">We could not complete payment</h2>
-                <p class="cp-card-subtitle">{{ $payment->callback_payload['reason'] ?? $payment->callback_data['ResultDesc'] ?? 'The transaction did not complete.' }}</p>
+                <h2 class="cp-section-title">This payment attempt did not go through</h2>
+                <p class="cp-card-subtitle">{{ $failureReason }}</p>
 
                 <div class="cp-panel">
-                    <h3>Next step</h3>
-                    <p>Try payment again or reconnect if M-Pesa already charged you.</p>
+                    <h3>Safe next step</h3>
+                    <p>If M-Pesa already deducted money, recheck first or use the SMS transaction code. Only retry payment when you are sure this attempt failed.</p>
                 </div>
 
                 <div class="cp-actions">
-                    <a href="{{ route('wifi.status', array_filter(['phone' => $phone, 'tenant_id' => $tenantId > 0 ? $tenantId : null, 'recheck' => 1], static fn ($value) => $value !== null && $value !== '')) }}" class="cp-btn cp-btn-outline">I Was Charged, Recheck</a>
+                    <a href="{{ route('wifi.status', array_filter(['phone' => $phone, 'tenant_id' => $tenantId > 0 ? $tenantId : null, 'payment' => $payment->id, 'recheck' => 1], static fn ($value) => $value !== null && $value !== '')) }}" class="cp-btn cp-btn-outline">I Was Charged, Recheck</a>
                     <a href="{{ route('wifi.packages', $packagesParams) }}" class="cp-btn cp-btn-primary">Try Payment Again</a>
                     <a href="{{ route('wifi.reconnect.form', $packagesParams) }}" class="cp-btn cp-btn-soft">Reconnect with Code</a>
                 </div>
@@ -153,6 +241,37 @@
 
                 <a href="{{ $statusRoute }}" class="cp-btn cp-btn-primary cp-btn-block">Refresh</a>
             @endif
+
+            @if($statusView !== 'activated')
+                <div class="cp-facts">
+                    <div class="cp-fact">
+                        <span>Status</span>
+                        <span>{{ $statusLabel }}</span>
+                    </div>
+                    <div class="cp-fact">
+                        <span>Phone</span>
+                        <span>{{ $payment->phone ?: $phone }}</span>
+                    </div>
+                    <div class="cp-fact">
+                        <span>Package</span>
+                        <span>{{ $payment->package->name ?? ($payment->package_name ?? 'N/A') }}</span>
+                    </div>
+                    <div class="cp-fact">
+                        <span>Amount</span>
+                        <span>{{ $payment->currency ?? 'KES' }} {{ number_format((float) $payment->amount, 2) }}</span>
+                    </div>
+                    <div class="cp-fact">
+                        <span>Reference</span>
+                        <span>{{ $payment->mpesa_receipt_number ?: $payment->mpesa_checkout_request_id }}</span>
+                    </div>
+                    @if($lastCheckedLabel)
+                        <div class="cp-fact">
+                            <span>Last checked</span>
+                            <span>{{ $lastCheckedLabel }}</span>
+                        </div>
+                    @endif
+                </div>
+            @endif
         </article>
 
         <footer class="cp-footer">
@@ -163,6 +282,7 @@
 
     <script>
         @if($shouldAutoPoll)
+        const currentStatus = @json($statusView);
         setInterval(async () => {
             try {
                 const response = await fetch('{{ $statusCheckRoute }}', {
@@ -179,12 +299,14 @@
                 }
 
                 if (payload.session_active === true) {
-                    window.location.reload();
+                    if (currentStatus !== 'activated') {
+                        window.location.reload();
+                    }
                     return;
                 }
 
                 const nextStatus = (payload.status || '').toLowerCase();
-                if (['completed', 'confirmed', 'failed', 'activated'].includes(nextStatus)) {
+                if (nextStatus !== '' && nextStatus !== currentStatus) {
                     window.location.reload();
                 }
             } catch (error) {

@@ -7,6 +7,10 @@ use Illuminate\Support\Facades\Schema;
 return new class extends Migration {
     public function up(): void
     {
+        if (!(bool) config('radius.enabled', false)) {
+            return;
+        }
+
         $schema = Schema::connection('radius');
 
         if (!$schema->hasTable('radcheck')) {
@@ -61,6 +65,10 @@ return new class extends Migration {
 
     public function down(): void
     {
+        if (!(bool) config('radius.enabled', false)) {
+            return;
+        }
+
         $schema = Schema::connection('radius');
 
         if ($schema->hasTable('radacct')) {

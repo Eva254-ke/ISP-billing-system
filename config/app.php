@@ -57,6 +57,8 @@ return [
 
     'asset_url' => env('ASSET_URL', env('APP_URL')),
 
+    'vite_build_only' => (bool) env('VITE_USE_BUILD_ONLY', false),
+
     /*
     |--------------------------------------------------------------------------
     | Application Timezone

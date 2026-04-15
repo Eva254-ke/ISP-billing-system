@@ -19,6 +19,7 @@ class CaptivePortalController extends Controller
     private const STATUS_CHANNELS = ['captive_portal', 'session_extension', 'voucher'];
     private const STATUS_PRIORITIES = ['initiated', 'pending', 'confirmed', 'completed', 'activated'];
     private const KENYA_PHONE_REGEX = '/^(?:0[17]\d{8}|(?:\+?254)[17]\d{8})$/';
+    private const VERIFICATION_WINDOW_MINUTES = 20;
 
     /**
      * Show package selection page (public, no auth required)
@@ -132,6 +133,7 @@ class CaptivePortalController extends Controller
         session([
             'captive_phone' => $phone,
             'captive_tenant_id' => $package->tenant_id,
+            'captive_payment_id' => $payment->id,
         ]);
         
         try {
@@ -143,11 +145,21 @@ class CaptivePortalController extends Controller
             );
 
             if ($response['success']) {
-                return redirect()->route('wifi.status', [
-                        'phone' => $phone,
-                        'tenant_id' => $package->tenant_id,
-                    ])
+                return redirect()->route('wifi.status', $this->buildStatusRouteParameters(
+                        phone: $phone,
+                        payment: $payment,
+                        tenantId: $package->tenant_id
+                    ))
                     ->with('message', (string) ($response['user_message'] ?? 'Check your phone to complete payment'));
+            }
+
+            if ($response['redirect_to_status'] ?? false) {
+                return redirect()->route('wifi.status', $this->buildStatusRouteParameters(
+                        phone: $phone,
+                        payment: $payment,
+                        tenantId: $package->tenant_id
+                    ))
+                    ->with('message', (string) ($response['user_message'] ?? 'We are verifying your payment request.'));
             }
 
             return back()->withErrors([(string) ($response['error'] ?? 'Payment initiation failed. Try again.')]);
@@ -216,6 +228,110 @@ class CaptivePortalController extends Controller
             ->whereIn('payment_channel', self::STATUS_CHANNELS)
             ->when($tenantId > 0, fn ($query) => $query->where('tenant_id', $tenantId));
     }
+
+    private function buildStatusRouteParameters(string $phone, Payment $payment, ?int $tenantId = null, array $extra = []): array
+    {
+        return array_filter(array_merge([
+            'phone' => $phone,
+            'tenant_id' => ($tenantId ?? (int) $payment->tenant_id) > 0 ? ($tenantId ?? (int) $payment->tenant_id) : null,
+            'payment' => $payment->id,
+        ], $extra), static fn ($value) => $value !== null && $value !== '');
+    }
+
+    private function resolveRequestedStatusPayment(Request $request, string $phone, int $tenantId): ?Payment
+    {
+        $paymentQuery = $this->buildStatusPaymentQuery($phone, $tenantId);
+
+        $requestedPaymentId = (int) $request->query('payment', 0);
+        if ($requestedPaymentId > 0) {
+            return (clone $paymentQuery)
+                ->whereKey($requestedPaymentId)
+                ->first();
+        }
+
+        $sessionPaymentId = (int) session('captive_payment_id', 0);
+        if ($sessionPaymentId > 0) {
+            return (clone $paymentQuery)
+                ->whereKey($sessionPaymentId)
+                ->first();
+        }
+
+        return null;
+    }
+
+    private function resolveStatusPayment(Request $request, string $phone, int $tenantId): ?Payment
+    {
+        $requestedPayment = $this->resolveRequestedStatusPayment($request, $phone, $tenantId);
+        if ($requestedPayment) {
+            return $requestedPayment;
+        }
+
+        $paymentQuery = $this->buildStatusPaymentQuery($phone, $tenantId);
+
+        $payment = (clone $paymentQuery)
+            ->whereIn('status', self::STATUS_PRIORITIES)
+            ->orderBy('created_at', 'desc')
+            ->first();
+
+        if ($payment) {
+            return $payment;
+        }
+
+        return (clone $paymentQuery)
+            ->orderBy('created_at', 'desc')
+            ->first();
+    }
+
+    private function paymentNeedsVerification(Payment $payment): bool
+    {
+        if ((string) $payment->status !== 'failed') {
+            return false;
+        }
+
+        if (!empty($payment->mpesa_receipt_number)) {
+            return false;
+        }
+
+        $metadata = is_array($payment->metadata) ? $payment->metadata : [];
+        $lastStatus = trim((string) ($metadata['daraja_last_status'] ?? ''));
+        $callbackResultCode = data_get($payment->callback_data, 'ResultCode');
+        $hasFinalFailureFromCallback = is_numeric($callbackResultCode) && (int) $callbackResultCode !== 0;
+        $recentFailure = $payment->failed_at?->gt(now()->subMinutes(self::VERIFICATION_WINDOW_MINUTES)) ?? false;
+
+        if ($hasFinalFailureFromCallback || in_array($lastStatus, ['failed_via_query', 'rejected_by_gateway'], true)) {
+            return false;
+        }
+
+        return $recentFailure;
+    }
+
+    private function deriveStatusView(Payment $payment, ?UserSession $session = null): string
+    {
+        $statusView = (string) $payment->status;
+        $metadata = is_array($payment->metadata) ? $payment->metadata : [];
+
+        if ($statusView === 'initiated') {
+            $statusView = 'pending';
+        }
+
+        if ($statusView === 'pending' && trim((string) ($metadata['daraja_last_status'] ?? '')) === 'pending_verification') {
+            $statusView = 'verifying';
+        }
+
+        if ($statusView === 'failed' && $this->paymentNeedsVerification($payment)) {
+            $statusView = 'verifying';
+        }
+
+        if ($session && in_array($statusView, ['completed', 'confirmed', 'paid', 'activated'], true)) {
+            return 'activated';
+        }
+
+        if (in_array($statusView, ['completed', 'confirmed'], true) && !$session) {
+            return 'paid';
+        }
+
+        return $statusView;
+    }
     
     /**
      * Check payment status
@@ -225,8 +341,9 @@ class CaptivePortalController extends Controller
         $phone = $this->normalizePhoneForStorage((string) $phone) ?? (string) $phone;
         $tenantId = $this->resolveTenantId($request);
         $paymentQuery = $this->buildStatusPaymentQuery($phone, $tenantId);
+        $requestedPayment = $this->resolveRequestedStatusPayment($request, $phone, $tenantId);
 
-        if ($tenantId === 0) {
+        if ($tenantId === 0 && !$requestedPayment) {
             $tenantMatches = (clone $paymentQuery)->select('tenant_id')->distinct()->count('tenant_id');
             if ($tenantMatches > 1) {
                 return redirect()->route('wifi.packages')
@@ -234,21 +351,17 @@ class CaptivePortalController extends Controller
             }
         }
 
-        $payment = (clone $paymentQuery)
-            ->whereIn('status', self::STATUS_PRIORITIES)
-            ->orderBy('created_at', 'desc')
-            ->first();
-
-        if (!$payment) {
-            $payment = (clone $paymentQuery)
-                ->orderBy('created_at', 'desc')
-                ->first();
-        }
+        $payment = $requestedPayment ?? $this->resolveStatusPayment($request, $phone, $tenantId);
 
         if (!$payment) {
             return redirect()->route('wifi.packages')
                 ->withErrors(['No payment found. Please start again.']);
         }
+
+        session([
+            'captive_phone' => $phone,
+            'captive_payment_id' => $payment->id,
+        ]);
 
         $this->reconcileDarajaPaymentIfNeeded($payment, $request->boolean('recheck'));
         $payment = $payment->fresh();
@@ -269,16 +382,7 @@ class CaptivePortalController extends Controller
             ->active()
             ->first();
 
-        $statusView = (string) $payment->status;
-        if ($statusView === 'initiated') {
-            $statusView = 'pending';
-        }
-
-        if ($activeSession && in_array($statusView, ['completed', 'confirmed', 'paid', 'activated'], true)) {
-            $statusView = 'activated';
-        } elseif (in_array($statusView, ['completed', 'confirmed'], true) && !$activeSession) {
-            $statusView = 'paid';
-        }
+        $statusView = $this->deriveStatusView($payment, $activeSession);
 
         $radiusFallback = null;
         if ($statusView === 'paid' && !$activeSession && (bool) config('radius.enabled', false)) {
@@ -361,7 +465,7 @@ class CaptivePortalController extends Controller
             }
 
             try {
-                DB::transaction(function () use ($voucher, $phone, $routerId) {
+                $payment = DB::transaction(function () use ($voucher, $phone, $routerId) {
                     $payment = Payment::create([
                         'tenant_id' => $voucher->tenant_id,
                         'phone' => $phone,
@@ -404,11 +508,18 @@ class CaptivePortalController extends Controller
                         'redeemed_at' => now(),
                         'redemption_count' => (int) ($voucher->redemption_count ?? 0) + 1,
                     ]);
+
+                    return $payment;
                 });
 
                 session(['captive_phone' => $phone]);
+                session(['captive_payment_id' => $payment->id]);
 
-                return redirect()->route('wifi.status', ['phone' => $phone, 'tenant_id' => $voucher->tenant_id])
+                return redirect()->route('wifi.status', $this->buildStatusRouteParameters(
+                    phone: $phone,
+                    payment: $payment,
+                    tenantId: $voucher->tenant_id
+                ))
                     ->with('success', 'Voucher redeemed successfully!');
             } catch (\Throwable $e) {
                 Log::error('Voucher redemption failed', [
@@ -464,7 +575,13 @@ class CaptivePortalController extends Controller
             ->first();
         
         if ($activeSession) {
-            return redirect()->route('wifi.status', ['phone' => $phone, 'tenant_id' => $payment->tenant_id])
+            session(['captive_payment_id' => $payment->id]);
+
+            return redirect()->route('wifi.status', $this->buildStatusRouteParameters(
+                phone: $phone,
+                payment: $payment,
+                tenantId: $payment->tenant_id
+            ))
                 ->with('success', 'Session already active. You are connected.');
         }
         
@@ -496,7 +613,13 @@ class CaptivePortalController extends Controller
                 'payment_id' => $payment->id
             ]);
             
-            return redirect()->route('wifi.status', ['phone' => $phone, 'tenant_id' => $payment->tenant_id])
+            session(['captive_payment_id' => $payment->id]);
+
+            return redirect()->route('wifi.status', $this->buildStatusRouteParameters(
+                phone: $phone,
+                payment: $payment,
+                tenantId: $payment->tenant_id
+            ))
                 ->with('success', 'Reconnected successfully!');
                 
         } catch (\Exception $e) {
@@ -587,8 +710,25 @@ class CaptivePortalController extends Controller
                     'gateway' => $gateway,
                 ]);
 
-                return redirect()->route('wifi.status', ['phone' => $phone, 'tenant_id' => $package->tenant_id])
+                session(['captive_payment_id' => $payment->id]);
+
+                return redirect()->route('wifi.status', $this->buildStatusRouteParameters(
+                    phone: $phone,
+                    payment: $payment,
+                    tenantId: $package->tenant_id
+                ))
                     ->with('message', (string) ($response['user_message'] ?? 'Complete STK Push to extend your session'));
+            }
+
+            if ($response['redirect_to_status'] ?? false) {
+                session(['captive_payment_id' => $payment->id]);
+
+                return redirect()->route('wifi.status', $this->buildStatusRouteParameters(
+                    phone: $phone,
+                    payment: $payment,
+                    tenantId: $package->tenant_id
+                ))
+                    ->with('message', (string) ($response['user_message'] ?? 'We are verifying your payment request.'));
             }
 
             return back()->withErrors([(string) ($response['error'] ?? 'STK Push failed. Try again.')]);
@@ -611,8 +751,9 @@ class CaptivePortalController extends Controller
         $phone = $this->normalizePhoneForStorage((string) $phone) ?? (string) $phone;
         $tenantId = $this->resolveTenantId($request);
         $paymentQuery = $this->buildStatusPaymentQuery($phone, $tenantId);
+        $requestedPayment = $this->resolveRequestedStatusPayment($request, $phone, $tenantId);
 
-        if ($tenantId === 0) {
+        if ($tenantId === 0 && !$requestedPayment) {
             $tenantMatches = (clone $paymentQuery)->select('tenant_id')->distinct()->count('tenant_id');
             if ($tenantMatches > 1) {
                 return response()->json([
@@ -622,45 +763,40 @@ class CaptivePortalController extends Controller
                 ], 409);
             }
         }
-        $payment = (clone $paymentQuery)
-            ->whereIn('status', self::STATUS_PRIORITIES)
-            ->orderBy('created_at', 'desc')
-            ->first();
-
-        if (!$payment) {
-            $payment = (clone $paymentQuery)
-                ->orderBy('created_at', 'desc')
-                ->first();
-        }
+        $payment = $requestedPayment ?? $this->resolveStatusPayment($request, $phone, $tenantId);
         
         if (!$payment) {
             return response()->json(['status' => 'not_found']);
         }
 
+        session([
+            'captive_phone' => $phone,
+            'captive_payment_id' => $payment->id,
+        ]);
+
         $this->reconcileDarajaPaymentIfNeeded($payment, $request->boolean('recheck'));
         $payment = $payment->fresh();
 
         if (in_array($payment->status, ['completed', 'confirmed'], true)) {
-            $this->activatePaidAccess($payment);
+            try {
+                $this->activatePaidAccess($payment);
+            } catch (\Throwable $e) {
+                Log::error('Automatic activation failed during status poll', [
+                    'payment_id' => $payment->id,
+                    'error' => $e->getMessage(),
+                ]);
+            }
         }
         
         $session = UserSession::where('payment_id', $payment->id)
             ->active()
             ->first();
-        
-        $status = (string) $payment->status;
-        if ($status === 'initiated') {
-            $status = 'pending';
-        }
 
-        if ($session && in_array($status, ['completed', 'confirmed', 'paid', 'activated'], true)) {
-            $status = 'activated';
-        } elseif (in_array($status, ['completed', 'confirmed'], true) && !$session) {
-            $status = 'paid';
-        }
+        $status = $this->deriveStatusView($payment, $session);
 
         return response()->json([
             'status' => $status,
+            'payment_id' => $payment->id,
             'session_active' => $session ? true : false,
             'expires_at' => $session ? $session->expires_at->toIso8601String() : null,
             'package' => $payment->package ? [
@@ -704,14 +840,16 @@ class CaptivePortalController extends Controller
 
         $newCheckoutId = (string) ($response['checkout_request_id'] ?? '');
         $newMerchantId = (string) ($response['merchant_request_id'] ?? '');
+        $metadata = is_array($payment->metadata) ? $payment->metadata : [];
 
         $updates = [
-            'metadata' => array_merge($payment->metadata ?? [], [
+            'metadata' => array_merge($metadata, [
                 'gateway' => 'daraja',
                 'daraja_response_code' => $response['response_code'] ?? null,
                 'daraja_response_description' => $response['response_description'] ?? null,
                 'daraja_merchant_request_id' => $newMerchantId !== '' ? $newMerchantId : null,
                 'daraja_last_request_at' => now()->toIso8601String(),
+                'daraja_last_status' => ($response['success'] ?? false) ? 'pending_customer_confirmation' : ($metadata['daraja_last_status'] ?? null),
             ]),
         ];
 
@@ -724,13 +862,32 @@ class CaptivePortalController extends Controller
         if ($response['success']) {
             return [
                 'success' => true,
+                'redirect_to_status' => false,
                 'user_message' => (string) ($response['customer_message'] ?: 'STK Push sent. Complete payment on your phone.'),
                 'error' => null,
             ];
         }
 
         $error = (string) ($response['error'] ?? 'STK Push failed');
-        $this->markPaymentFailedFromDaraja($payment, $response['raw'] ?? [], $error);
+
+        if ($this->shouldKeepDarajaPaymentPending($response)) {
+            $this->markPaymentPendingVerificationFromDaraja($payment, (array) ($response['raw'] ?? []), $error);
+
+            Log::warning('Daraja STK push needs verification before final status', [
+                'payment_id' => $payment->id,
+                'error' => $error,
+                'flow' => $flow,
+            ]);
+
+            return [
+                'success' => false,
+                'redirect_to_status' => true,
+                'user_message' => 'We are verifying this payment request with M-Pesa. If the prompt appears or money is deducted, do not pay again.',
+                'error' => null,
+            ];
+        }
+
+        $this->markPaymentFailedFromDaraja($payment, (array) ($response['raw'] ?? []), $error);
 
         Log::warning('Daraja STK push failed', [
             'payment_id' => $payment->id,
@@ -740,9 +897,47 @@ class CaptivePortalController extends Controller
 
         return [
             'success' => false,
+            'redirect_to_status' => false,
             'user_message' => null,
             'error' => 'STK Push failed. Try again.',
         ];
+    }
+
+    private function shouldKeepDarajaPaymentPending(array $response): bool
+    {
+        if (($response['success'] ?? false) === true) {
+            return false;
+        }
+
+        if ((string) ($response['stage'] ?? '') !== 'stk_push') {
+            return false;
+        }
+
+        $responseCode = trim((string) ($response['response_code'] ?? ''));
+        $hasRawPayload = !empty((array) ($response['raw'] ?? []));
+
+        return !$hasRawPayload || $responseCode === '';
+    }
+
+    private function markPaymentPendingVerificationFromDaraja(Payment $payment, array $payload, string $reason): void
+    {
+        if ($payment->status === 'completed') {
+            return;
+        }
+
+        $payment->update([
+            'status' => 'pending',
+            'callback_data' => $payload !== [] ? $payload : $payment->callback_data,
+            'failed_at' => null,
+            'reconciliation_notes' => $reason,
+            'metadata' => array_merge($payment->metadata ?? [], [
+                'gateway' => 'daraja',
+                'daraja_last_status' => 'pending_verification',
+                'daraja_failure_reason' => $reason,
+                'daraja_verification_required' => true,
+                'daraja_last_uncertain_at' => now()->toIso8601String(),
+            ]),
+        ]);
     }
 
     private function markPaymentFailedFromDaraja(Payment $payment, array $payload, string $reason): void
@@ -755,10 +950,12 @@ class CaptivePortalController extends Controller
             'status' => 'failed',
             'callback_data' => $payload,
             'failed_at' => now(),
+            'reconciliation_notes' => $reason,
             'metadata' => array_merge($payment->metadata ?? [], [
                 'gateway' => 'daraja',
-                'daraja_last_status' => 'failed',
+                'daraja_last_status' => 'rejected_by_gateway',
                 'daraja_failure_reason' => $reason,
+                'daraja_verification_required' => false,
             ]),
         ]);
     }
@@ -772,6 +969,10 @@ class CaptivePortalController extends Controller
 
         $checkoutRequestId = trim((string) $payment->mpesa_checkout_request_id);
         if ($checkoutRequestId === '') {
+            return;
+        }
+
+        if (preg_match('/^(CP|EXT|VCH)-/i', $checkoutRequestId) === 1) {
             return;
         }
 
@@ -790,12 +991,16 @@ class CaptivePortalController extends Controller
         }
 
         if ($status === 'failed' && !$force) {
-            $recentFailure = $payment->failed_at?->gt(now()->subMinutes(20)) ?? false;
+            $recentFailure = $payment->failed_at?->gt(now()->subMinutes(self::VERIFICATION_WINDOW_MINUTES)) ?? false;
             $callbackResultCode = data_get($payment->callback_data, 'ResultCode');
             $lastStatus = trim((string) ($metadata['daraja_last_status'] ?? ''));
 
             $hasFinalFailureFromCallback = is_numeric($callbackResultCode) && (int) $callbackResultCode !== 0;
-            if (!$recentFailure || $hasFinalFailureFromCallback || $lastStatus === 'failed_via_query') {
+            if (
+                !$recentFailure
+                || $hasFinalFailureFromCallback
+                || in_array($lastStatus, ['failed_via_query', 'rejected_by_gateway'], true)
+            ) {
                 return;
             }
         }
@@ -842,6 +1047,7 @@ class CaptivePortalController extends Controller
                 'callback_data' => (array) ($result['raw'] ?? []),
                 'metadata' => array_merge($metadata, [
                     'daraja_last_status' => 'confirmed_via_query',
+                    'daraja_verification_required' => false,
                 ]),
             ]);
 
@@ -862,6 +1068,7 @@ class CaptivePortalController extends Controller
                 'callback_data' => (array) ($result['raw'] ?? []),
                 'metadata' => array_merge($metadata, [
                     'daraja_last_status' => 'failed_via_query',
+                    'daraja_verification_required' => false,
                 ]),
             ]);
 

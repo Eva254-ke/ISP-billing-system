@@ -95,6 +95,8 @@ class DarajaService
         if (!$this->isConfigured()) {
             return [
                 'success' => false,
+                'stage' => 'configuration',
+                'http_status' => null,
                 'error' => 'Daraja is not fully configured (consumer credentials, passkey, shortcode, callback URL).',
                 'raw' => [],
             ];
@@ -104,6 +106,8 @@ class DarajaService
         if (!$token['success']) {
             return [
                 'success' => false,
+                'stage' => 'oauth',
+                'http_status' => $token['http_status'] ?? null,
                 'error' => (string) ($token['error'] ?? 'Failed to authenticate with Daraja'),
                 'raw' => [],
             ];
@@ -118,6 +122,8 @@ class DarajaService
         if ($stkCallbackUrl === '') {
             return [
                 'success' => false,
+                'stage' => 'configuration',
+                'http_status' => null,
                 'error' => 'Daraja callback URL is required.',
                 'raw' => [],
             ];
@@ -161,6 +167,8 @@ class DarajaService
 
             return [
                 'success' => $success,
+                'stage' => 'stk_push',
+                'http_status' => $response->status(),
                 'response_code' => $responseCode !== '' ? $responseCode : null,
                 'response_description' => (string) ($result['ResponseDescription'] ?? ''),
                 'customer_message' => (string) ($result['CustomerMessage'] ?? ''),
@@ -180,6 +188,8 @@ class DarajaService
 
             return [
                 'success' => false,
+                'stage' => 'stk_push',
+                'http_status' => null,
                 'response_code' => null,
                 'response_description' => '',
                 'customer_message' => '',
