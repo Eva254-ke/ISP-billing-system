@@ -264,9 +264,13 @@ class Package extends Model
         $params = [
             'name' => $username,
             'password' => $password,
-            'profile' => $this->mikrotik_profile_name ?? 'default',
             'limit-uptime' => $this->duration_in_minutes . 'm',
         ];
+
+        $profile = trim((string) ($this->mikrotik_profile_name ?? ''));
+        if ($profile !== '') {
+            $params['profile'] = $profile;
+        }
 
         if ($this->data_limit_mb) {
             $params['limit-bytes-total'] = (string)($this->data_limit_mb * 1024 * 1024);

@@ -162,6 +162,21 @@
                 <button type="button" class="btn-close" data-bs-dismiss="modal" data-dismiss="modal"></button>
             </div>
             <div class="modal-body">
+                @if(!empty($isSuperAdmin))
+                <div class="mb-3">
+                    <label class="form-label">Tenant</label>
+                    <select class="form-select" id="packageTenantId">
+                        <option value="">Select tenant</option>
+                        @foreach(($tenants ?? collect()) as $tenantOption)
+                            <option value="{{ $tenantOption->id }}" {{ ((int) ($selectedTenantId ?? 0) === (int) $tenantOption->id) ? 'selected' : '' }}>
+                                {{ $tenantOption->name }} (ID {{ $tenantOption->id }})
+                            </option>
+                        @endforeach
+                    </select>
+                    <small class="text-muted">Required when using super admin account.</small>
+                </div>
+                @endif
+
                 <form id="addPackageForm">
                     <div class="row">
                         <div class="col-md-6 mb-3">
@@ -342,6 +357,28 @@ input:checked + .slider:before { transform: translateX(26px); }
 </style>
 
 <script>
+function getScopedTenantId() {
+    const tenantSelect = document.getElementById('packageTenantId');
+    const fromSelect = tenantSelect ? Number(tenantSelect.value || 0) : 0;
+    if (fromSelect > 0) {
+        return fromSelect;
+    }
+
+    const params = new URLSearchParams(window.location.search);
+    const fromQuery = Number(params.get('tenant_id') || 0);
+    return fromQuery > 0 ? fromQuery : 0;
+}
+
+function withTenantScope(url) {
+    const tenantId = getScopedTenantId();
+    if (tenantId <= 0) {
+        return url;
+    }
+
+    const glue = url.includes('?') ? '&' : '?';
+    return `${url}${glue}tenant_id=${tenantId}`;
+}
+
 // Custom profile name toggle
 document.querySelector('select[name="mikrotik_profile"]').addEventListener('change', function() {
     const customInput = document.querySelector('input[name="custom_profile"]');
@@ -354,8 +391,9 @@ function buildPackagePayload(form) {
     const customProfile = form.querySelector('input[name="custom_profile"]')?.value?.trim() || '';
     const rawProfile = profileSelect ? profileSelect.value : (form.querySelector('input[name="mikrotik_profile"]')?.value || '');
     const selectedProfile = rawProfile === 'custom' ? customProfile : rawProfile;
+    const tenantId = getScopedTenantId();
 
-    return {
+    const payload = {
         name: form.querySelector('input[name="name"]').value.trim(),
         description: form.querySelector('input[name="description"]').value.trim(),
         duration_value: Number(form.querySelector('input[name="duration"]').value || 0),
@@ -366,10 +404,16 @@ function buildPackagePayload(form) {
         mikrotik_profile_name: selectedProfile || null,
         is_active: !!form.querySelector('input[name="is_active"]')?.checked,
     };
+
+    if (tenantId > 0) {
+        payload.tenant_id = tenantId;
+    }
+
+    return payload;
 }
 
 function packageRequest(url, method, payload) {
-    return fetch(url, {
+    return fetch(withTenantScope(url), {
         method,
         headers: {
             'Accept': 'application/json',
@@ -388,6 +432,12 @@ function packageRequest(url, method, payload) {
 
 function savePackage() {
     const form = document.getElementById('addPackageForm');
+    const tenantSelect = document.getElementById('packageTenantId');
+    if (tenantSelect && getScopedTenantId() <= 0) {
+        Swal.fire('Tenant Required', 'Select a tenant before creating a package.', 'warning');
+        return;
+    }
+
     const payload = buildPackagePayload(form);
 
     Swal.fire({
@@ -461,7 +511,7 @@ function confirmDelete(packageId, packageName) {
                 didOpen: () => { Swal.showLoading(); }
             });
 
-            fetch(`/admin/api/packages/${packageId}`, {
+            fetch(withTenantScope(`/admin/api/packages/${packageId}`), {
                 method: 'DELETE',
                 headers: {
                     'Accept': 'application/json',
@@ -647,8 +697,8 @@ document.addEventListener('DOMContentLoaded', function() {
     async function loadPackages() {
         try {
             const [rowsPayload, statsPayload] = await Promise.all([
-                getJson('/admin/api/packages'),
-                getJson('/admin/api/packages/stats')
+                getJson(withTenantScope('/admin/api/packages')),
+                getJson(withTenantScope('/admin/api/packages/stats'))
             ]);
 
             renderRows(Array.isArray(rowsPayload?.data) ? rowsPayload.data : []);

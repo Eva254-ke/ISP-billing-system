@@ -94,6 +94,12 @@ class AdminPageController extends Controller
     public function packages(): View
     {
         $tenant = $this->resolveTenant();
+        $user = Auth::user();
+        $isSuperAdmin = (($user?->role ?? null) === 'super_admin');
+        $selectedTenantId = (int) request()->query('tenant_id', 0);
+        $tenants = $isSuperAdmin
+            ? Tenant::query()->active()->orderBy('name')->get(['id', 'name'])
+            : collect();
 
         $packages = Package::query();
         $payments = Payment::query();
@@ -119,6 +125,9 @@ class AdminPageController extends Controller
             'tenant' => $tenant,
             'stats' => $stats,
             'packages' => $rows,
+            'isSuperAdmin' => $isSuperAdmin,
+            'tenants' => $tenants,
+            'selectedTenantId' => $selectedTenantId,
         ]);
     }
 

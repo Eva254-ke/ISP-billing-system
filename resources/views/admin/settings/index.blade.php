@@ -584,6 +584,17 @@ Thank you for choosing CloudBridge Networks.</textarea>
             <!-- ======================================================================= -->
             <div class="tab-pane fade" id="tab-router">
                 <h5 class="mb-4"><i class="fas fa-server me-2"></i>MikroTik Global Configuration</h5>
+
+                <div class="alert alert-info">
+                    <div><strong>First Router Setup Checklist</strong></div>
+                    <ol class="mb-0 mt-2">
+                        <li>Add your router under <strong>Admin &gt; Routers</strong> with IP, API port, username, and password.</li>
+                        <li>Set <strong>RADIUS Server</strong> to your FreeRADIUS host IP (do not use <code>127.0.0.1</code> unless RADIUS is on the same host).</li>
+                        <li>Use the same <strong>RADIUS Secret</strong> here and on your FreeRADIUS client/router config.</li>
+                        <li>Copy the generated RouterOS commands and run them on the MikroTik terminal.</li>
+                        <li>Click <strong>Test MikroTik Connection</strong> to confirm the app can reach your router.</li>
+                    </ol>
+                </div>
                 
                 <div class="row">
                     <div class="col-md-6">
@@ -645,8 +656,8 @@ Thank you for choosing CloudBridge Networks.</textarea>
 
                 <div class="form-group mb-3">
                     <label class="form-label">User Profile Template</label>
-                    <textarea class="form-control" id="mikrotik_profile_template" rows="3">/ppp profile add name={name} rate-limit={download}M/{upload}M session-timeout={timeout}</textarea>
-                    <small class="text-muted">Variables: {name}, {download}, {upload}, {timeout}</small>
+                    <textarea class="form-control" id="mikrotik_profile_template" rows="3" placeholder="/ppp profile add name={name} rate-limit={download}M/{upload}M session-timeout={timeout}"></textarea>
+                    <small class="text-muted">Optional. Leave empty if you do not want a global hardcoded profile template.</small>
                 </div>
 
                 <div class="form-group mb-3">
@@ -990,10 +1001,16 @@ function setMikrotikCommands(commands) {
 }
 
 function buildMikrotikCommandsFromInputs() {
-    const radiusServer = document.getElementById('radius_server')?.value?.trim() || 'YOUR_RADIUS_SERVER_IP';
+    const radiusServerRaw = document.getElementById('radius_server')?.value?.trim() || '';
+    const radiusServer = radiusServerRaw !== '' && !['127.0.0.1', 'localhost', '::1'].includes(radiusServerRaw.toLowerCase())
+        ? radiusServerRaw
+        : 'YOUR_RADIUS_SERVER_IP';
     const radiusPort = Number(document.getElementById('radius_port')?.value || 1812);
     const radiusAcctPort = Number(document.getElementById('radius_acct_port')?.value || 1813);
-    const radiusSecret = document.getElementById('radius_secret')?.value?.trim() || 'YOUR_SHARED_SECRET';
+    const radiusSecretRaw = document.getElementById('radius_secret')?.value?.trim() || '';
+    const radiusSecret = radiusSecretRaw !== '' && radiusSecretRaw.toLowerCase() !== 'your-radius-secret'
+        ? radiusSecretRaw
+        : 'YOUR_SHARED_SECRET';
 
     return [
         `/radius add service=hotspot,ppp address=${radiusServer} protocol=udp authentication-port=${radiusPort} accounting-port=${radiusAcctPort} secret=${radiusSecret} timeout=300ms`,

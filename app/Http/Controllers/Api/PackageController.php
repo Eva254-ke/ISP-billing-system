@@ -96,6 +96,7 @@ class PackageController extends Controller
             'download_limit_mbps' => 'nullable|integer|min:1',
             'upload_limit_mbps' => 'nullable|integer|min:1',
             'data_limit_mb' => 'nullable|integer|min:1',
+            'mikrotik_profile_name' => 'nullable|string|max:120',
         ]);
 
         $user = $request->user();
@@ -120,7 +121,9 @@ class PackageController extends Controller
             'download_limit_mbps' => $request->download_limit_mbps,
             'upload_limit_mbps' => $request->upload_limit_mbps,
             'data_limit_mb' => $request->data_limit_mb,
-            'mikrotik_profile_name' => 'profile-' . strtolower(str_replace(' ', '-', $request->name)),
+            'mikrotik_profile_name' => $request->filled('mikrotik_profile_name')
+                ? trim((string) $request->mikrotik_profile_name)
+                : null,
             'is_active' => $request->boolean('is_active', true),
             'is_featured' => $request->boolean('is_featured', false),
             'sort_order' => ((int) Package::where('tenant_id', $tenant->id)->max('sort_order')) + 1,
@@ -177,6 +180,7 @@ class PackageController extends Controller
             'name' => 'sometimes|required|string|max:255',
             'price' => 'sometimes|required|numeric|min:0',
             'is_active' => 'sometimes|boolean',
+            'mikrotik_profile_name' => 'sometimes|nullable|string|max:120',
         ]);
 
         $package->update($request->only([
@@ -186,6 +190,7 @@ class PackageController extends Controller
             'download_limit_mbps',
             'upload_limit_mbps',
             'data_limit_mb',
+            'mikrotik_profile_name',
             'is_active',
             'is_featured',
             'sort_order',

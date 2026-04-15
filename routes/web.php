@@ -249,8 +249,11 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
             $radiusAcctPort = (int) ($settings['radius_acct_port'] ?? config('radius.acct_port', 1813));
             $radiusSecret = trim((string) ($settings['radius_secret'] ?? config('radius.shared_secret', '')));
 
-            $safeServer = $radiusServer !== '' ? $radiusServer : 'YOUR_RADIUS_SERVER_IP';
-            $safeSecret = $radiusSecret !== '' ? $radiusSecret : 'YOUR_SHARED_SECRET';
+            $isLoopbackServer = in_array(strtolower($radiusServer), ['127.0.0.1', 'localhost', '::1'], true);
+            $safeServer = ($radiusServer !== '' && !$isLoopbackServer) ? $radiusServer : 'YOUR_RADIUS_SERVER_IP';
+            $safeSecret = ($radiusSecret !== '' && strtolower($radiusSecret) !== 'your-radius-secret')
+                ? $radiusSecret
+                : 'YOUR_SHARED_SECRET';
 
             return [
                 '/radius add service=hotspot,ppp address=' . $safeServer . ' protocol=udp authentication-port=' . max(1, $radiusAuthPort) . ' accounting-port=' . max(1, $radiusAcctPort) . ' secret=' . $safeSecret . ' timeout=300ms',
@@ -585,6 +588,37 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
             ]);
         })->name('dashboard.summary');
 
+        $resolveTenantForPackageWrite = function (Request $request) use ($resolveTenant): ?Tenant {
+            $tenant = $resolveTenant();
+            if ($tenant) {
+                return $tenant;
+            }
+
+            $user = Auth::user();
+            if (($user?->role ?? null) !== 'super_admin') {
+                return null;
+            }
+
+            $requestedTenantId = (int) $request->input('tenant_id', $request->query('tenant_id', 0));
+            if ($requestedTenantId > 0) {
+                return Tenant::query()->active()->find($requestedTenantId);
+            }
+
+            $activeTenants = Tenant::query()->active()->select('id')->limit(2)->get();
+            if ($activeTenants->count() === 1) {
+                return Tenant::query()->find((int) $activeTenants->first()->id);
+            }
+
+            return null;
+        };
+
+        $tenantScopeError = function () {
+            return response()->json([
+                'success' => false,
+                'message' => 'Tenant not found. For super admin, select a tenant first.',
+            ], 422);
+        };
+
         Route::get('/packages', function () use ($resolveTenant) {
             $tenant = $resolveTenant();
 
@@ -615,14 +649,11 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
             ]);
         })->name('packages.index');
 
-        Route::post('/packages', function (Request $request) use ($resolveTenant) {
-            $tenant = $resolveTenant();
+        Route::post('/packages', function (Request $request) use ($resolveTenantForPackageWrite, $tenantScopeError) {
+            $tenant = $resolveTenantForPackageWrite($request);
 
             if (!$tenant) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Tenant not found',
-                ], 404);
+                return $tenantScopeError();
             }
 
             $validated = $request->validate([
@@ -680,10 +711,14 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
             ], 201);
         })->name('packages.create');
 
-        Route::put('/packages/{package}', function (Request $request, Package $package) use ($resolveTenant) {
-            $tenant = $resolveTenant();
+        Route::put('/packages/{package}', function (Request $request, Package $package) use ($resolveTenantForPackageWrite, $tenantScopeError) {
+            $tenant = $resolveTenantForPackageWrite($request);
 
-            if (!$tenant || (int) $package->tenant_id !== (int) $tenant->id) {
+            if (!$tenant) {
+                return $tenantScopeError();
+            }
+
+            if ((int) $package->tenant_id !== (int) $tenant->id) {
                 return response()->json([
                     'success' => false,
                     'message' => 'Package not found',
@@ -720,10 +755,14 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
             ]);
         })->name('packages.update');
 
-        Route::patch('/packages/{package}/status', function (Request $request, Package $package) use ($resolveTenant) {
-            $tenant = $resolveTenant();
+        Route::patch('/packages/{package}/status', function (Request $request, Package $package) use ($resolveTenantForPackageWrite, $tenantScopeError) {
+            $tenant = $resolveTenantForPackageWrite($request);
 
-            if (!$tenant || (int) $package->tenant_id !== (int) $tenant->id) {
+            if (!$tenant) {
+                return $tenantScopeError();
+            }
+
+            if ((int) $package->tenant_id !== (int) $tenant->id) {
                 return response()->json([
                     'success' => false,
                     'message' => 'Package not found',
@@ -744,10 +783,14 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
             ]);
         })->name('packages.status');
 
-        Route::delete('/packages/{package}', function (Package $package) use ($resolveTenant) {
-            $tenant = $resolveTenant();
+        Route::delete('/packages/{package}', function (Request $request, Package $package) use ($resolveTenantForPackageWrite, $tenantScopeError) {
+            $tenant = $resolveTenantForPackageWrite($request);
 
-            if (!$tenant || (int) $package->tenant_id !== (int) $tenant->id) {
+            if (!$tenant) {
+                return $tenantScopeError();
+            }
+
+            if ((int) $package->tenant_id !== (int) $tenant->id) {
                 return response()->json([
                     'success' => false,
                     'message' => 'Package not found',

@@ -67,7 +67,7 @@
                         @csrf
                         <div class="cp-field">
                             <label for="reconnectPhone">Phone Number</label>
-                            <input id="reconnectPhone" type="tel" name="phone" placeholder="0712345678" value="{{ old('phone', $phone ?? '') }}" required pattern="0[17]\d{8}" autocomplete="tel" inputmode="tel">
+                            <input id="reconnectPhone" type="tel" name="phone" placeholder="0712345678 or 0112345678" value="{{ old('phone', $phone ?? '') }}" required pattern="(?:0[17]\d{8}|(?:\+?254)[17]\d{8})" autocomplete="tel" inputmode="tel">
                         </div>
                         <div class="cp-field">
                             <label for="mpesaCode">M-Pesa Transaction Code</label>
@@ -83,7 +83,7 @@
                         @csrf
                         <div class="cp-field">
                             <label for="voucherPhone">Phone Number</label>
-                            <input id="voucherPhone" type="tel" name="phone" placeholder="0712345678" value="{{ old('phone', $phone ?? '') }}" required pattern="0[17]\d{8}" autocomplete="tel" inputmode="tel">
+                            <input id="voucherPhone" type="tel" name="phone" placeholder="0712345678 or 0112345678" value="{{ old('phone', $phone ?? '') }}" required pattern="(?:0[17]\d{8}|(?:\+?254)[17]\d{8})" autocomplete="tel" inputmode="tel">
                         </div>
                         <div class="cp-field">
                             <label for="voucherCode">Voucher Code</label>

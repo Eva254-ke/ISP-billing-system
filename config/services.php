@@ -181,7 +181,8 @@ return [
         
         // Hotspot configuration defaults
         'hotspot' => [
-            'profile_name' => 'cloudbridge-profile',
+            // Optional router profile fallback. Leave empty to let RouterOS/default package setting decide.
+            'profile_name' => env('MIKROTIK_HOTSPOT_PROFILE', ''),
             'address_pool' => 'cloudbridge-pool',
             'pool_range' => env('MIKROTIK_POOL_RANGE', '10.5.50.100-10.5.50.200'),
             'idle_timeout' => env('MIKROTIK_IDLE_TIMEOUT', '5m'),

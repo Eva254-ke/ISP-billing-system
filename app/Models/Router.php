@@ -365,7 +365,7 @@ class Router extends Model
                 'router_name' => $this->name,
                 'username' => $username,
                 'package' => $package->name,
-                'profile' => $params['profile'],
+                'profile' => $params['profile'] ?? null,
             ]);
             
             return true;

@@ -18,6 +18,7 @@ class CaptivePortalController extends Controller
 {
     private const STATUS_CHANNELS = ['captive_portal', 'session_extension', 'voucher'];
     private const STATUS_PRIORITIES = ['initiated', 'pending', 'confirmed', 'completed', 'activated'];
+    private const KENYA_PHONE_REGEX = '/^(?:0[17]\d{8}|(?:\+?254)[17]\d{8})$/';
 
     /**
      * Show package selection page (public, no auth required)
@@ -25,7 +26,10 @@ class CaptivePortalController extends Controller
     public function packages(Request $request)
     {
         $tenant = $this->resolveTenant($request);
-        $phone = session('captive_phone') ?? $request->query('phone');
+        $phoneInput = session('captive_phone') ?? $request->query('phone');
+        $phone = $phoneInput !== null
+            ? ($this->normalizePhoneForStorage((string) $phoneInput) ?? trim((string) $phoneInput))
+            : null;
         $mode = strtolower(trim((string) $request->query('mode', '')));
         $showReconnectScreen = $mode === 'reconnect';
 
@@ -79,9 +83,16 @@ class CaptivePortalController extends Controller
         }
 
         $request->validate([
-            'phone' => 'required|regex:/^0[17]\d{8}$/',
+            'phone' => 'required|regex:' . self::KENYA_PHONE_REGEX,
             'package_id' => 'required|exists:packages,id'
         ]);
+
+        $phone = $this->normalizePhoneForStorage((string) $request->phone);
+        if ($phone === null) {
+            return back()
+                ->withErrors(['Use a valid Safaricom number: 07XXXXXXXX, 01XXXXXXXX, +2547XXXXXXXX or +2541XXXXXXXX.'])
+                ->withInput();
+        }
 
         $package = Package::query()
             ->when($tenantId > 0, fn ($query) => $query->where('tenant_id', $tenantId))
@@ -92,10 +103,10 @@ class CaptivePortalController extends Controller
             return back()->withErrors(['Payment gateway is not configured. Please contact support.']);
         }
         
-        $payment = DB::transaction(function () use ($request, $package, $gateway) {
+        $payment = DB::transaction(function () use ($phone, $package, $gateway) {
             return Payment::create([
                 'tenant_id' => $package->tenant_id,
-                'phone' => $request->phone,
+                'phone' => $phone,
                 'package_id' => $package->id,
                 'package_name' => $package->name,
                 'amount' => $package->price,
@@ -112,14 +123,14 @@ class CaptivePortalController extends Controller
         });
         
         Log::info('Captive payment initiated', [
-            'phone' => $request->phone,
+            'phone' => $phone,
             'package' => $package->name,
             'amount' => $package->price,
             'reference' => $payment->mpesa_checkout_request_id,
         ]);
         
         session([
-            'captive_phone' => $request->phone,
+            'captive_phone' => $phone,
             'captive_tenant_id' => $package->tenant_id,
         ]);
         
@@ -127,13 +138,13 @@ class CaptivePortalController extends Controller
             $response = $this->initiateStkPush(
                 payment: $payment,
                 package: $package,
-                phone: (string) $request->phone,
+                phone: $phone,
                 flow: 'captive_portal'
             );
 
             if ($response['success']) {
                 return redirect()->route('wifi.status', [
-                        'phone' => $request->phone,
+                        'phone' => $phone,
                         'tenant_id' => $package->tenant_id,
                     ])
                     ->with('message', (string) ($response['user_message'] ?? 'Check your phone to complete payment'));
@@ -144,7 +155,7 @@ class CaptivePortalController extends Controller
         } catch (\Exception $e) {
             Log::error('Captive portal STK initiation exception', [
                 'error' => $e->getMessage(),
-                'phone' => $request->phone,
+                'phone' => $phone,
                 'gateway' => $gateway,
             ]);
             return back()->withErrors(['Payment service unavailable. Please try again.']);
@@ -211,8 +222,9 @@ class CaptivePortalController extends Controller
      */
     public function status(Request $request, $phone)
     {
+        $phone = $this->normalizePhoneForStorage((string) $phone) ?? (string) $phone;
         $tenantId = $this->resolveTenantId($request);
-        $paymentQuery = $this->buildStatusPaymentQuery((string) $phone, $tenantId);
+        $paymentQuery = $this->buildStatusPaymentQuery($phone, $tenantId);
 
         if ($tenantId === 0) {
             $tenantMatches = (clone $paymentQuery)->select('tenant_id')->distinct()->count('tenant_id');
@@ -293,10 +305,15 @@ class CaptivePortalController extends Controller
         if ($request->filled('voucher_code')) {
             $request->validate([
                 'voucher_code' => 'required|string|max:64',
-                'phone' => 'required|regex:/^0[17]\d{8}$/',
+                'phone' => 'required|regex:' . self::KENYA_PHONE_REGEX,
             ]);
 
-            $phone = trim($request->phone);
+            $phone = $this->normalizePhoneForStorage((string) $request->phone);
+            if ($phone === null) {
+                return redirect()->back()
+                    ->withErrors(['Use a valid Safaricom number: 07XXXXXXXX, 01XXXXXXXX, +2547XXXXXXXX or +2541XXXXXXXX.'])
+                    ->withInput();
+            }
             $voucherInput = strtoupper(trim((string) $request->voucher_code));
             $codeCandidate = strtoupper(substr($voucherInput, strrpos('-' . $voucherInput, '-') + 1));
 
@@ -406,11 +423,16 @@ class CaptivePortalController extends Controller
 
         $request->validate([
             'mpesa_code' => 'required|string|max:32',
-            'phone' => 'required|regex:/^0[17]\d{8}$/'
+            'phone' => 'required|regex:' . self::KENYA_PHONE_REGEX
         ]);
         
         $mpesaCode = strtoupper(trim($request->mpesa_code));
-        $phone = trim($request->phone);
+        $phone = $this->normalizePhoneForStorage((string) $request->phone);
+        if ($phone === null) {
+            return redirect()->back()
+                ->withErrors(['Use a valid Safaricom number: 07XXXXXXXX, 01XXXXXXXX, +2547XXXXXXXX or +2541XXXXXXXX.'])
+                ->withInput();
+        }
         
         $payment = Payment::where(function($query) use ($mpesaCode) {
                 $query->where('mpesa_transaction_id', $mpesaCode)
@@ -502,11 +524,16 @@ class CaptivePortalController extends Controller
         }
 
         $request->validate([
-            'phone' => 'required|regex:/^0[17]\d{8}$/',
+            'phone' => 'required|regex:' . self::KENYA_PHONE_REGEX,
             'package_id' => 'required|exists:packages,id'
         ]);
         
-        $phone = trim($request->phone);
+        $phone = $this->normalizePhoneForStorage((string) $request->phone);
+        if ($phone === null) {
+            return back()
+                ->withErrors(['Use a valid Safaricom number: 07XXXXXXXX, 01XXXXXXXX, +2547XXXXXXXX or +2541XXXXXXXX.'])
+                ->withInput();
+        }
         $package = Package::query()
             ->when($tenantId > 0, fn ($query) => $query->where('tenant_id', $tenantId))
             ->findOrFail($request->package_id);
@@ -581,8 +608,9 @@ class CaptivePortalController extends Controller
      */
     public function checkStatus(Request $request, $phone)
     {
+        $phone = $this->normalizePhoneForStorage((string) $phone) ?? (string) $phone;
         $tenantId = $this->resolveTenantId($request);
-        $paymentQuery = $this->buildStatusPaymentQuery((string) $phone, $tenantId);
+        $paymentQuery = $this->buildStatusPaymentQuery($phone, $tenantId);
 
         if ($tenantId === 0) {
             $tenantMatches = (clone $paymentQuery)->select('tenant_id')->distinct()->count('tenant_id');
@@ -982,17 +1010,48 @@ class CaptivePortalController extends Controller
 
     private function normalizePhoneForStk(string $phone): string
     {
-        $digits = preg_replace('/\D+/', '', $phone);
-
-        if (str_starts_with($digits, '0')) {
-            return '254' . substr($digits, 1);
+        $storedPhone = $this->normalizePhoneForStorage($phone);
+        if ($storedPhone !== null) {
+            return '254' . substr($storedPhone, 1);
         }
 
-        if (str_starts_with($digits, '254')) {
+        $digits = preg_replace('/\D+/', '', $phone);
+        if (is_string($digits) && str_starts_with($digits, '254')) {
             return $digits;
         }
 
-        return $digits;
+        return is_string($digits) ? $digits : '';
+    }
+
+    private function normalizePhoneForStorage(string $phone): ?string
+    {
+        $digits = preg_replace('/\D+/', '', $phone);
+        if (!is_string($digits) || $digits === '') {
+            return null;
+        }
+
+        if (str_starts_with($digits, '254') && strlen($digits) === 12) {
+            $mobilePrefix = substr($digits, 3, 1);
+            if (in_array($mobilePrefix, ['1', '7'], true)) {
+                return '0' . substr($digits, 3);
+            }
+        }
+
+        if (str_starts_with($digits, '0') && strlen($digits) === 10) {
+            $mobilePrefix = substr($digits, 1, 1);
+            if (in_array($mobilePrefix, ['1', '7'], true)) {
+                return $digits;
+            }
+        }
+
+        if (strlen($digits) === 9) {
+            $mobilePrefix = substr($digits, 0, 1);
+            if (in_array($mobilePrefix, ['1', '7'], true)) {
+                return '0' . $digits;
+            }
+        }
+
+        return null;
     }
 
     private function resolveRadiusUsernameFromPhone(string $phone, ?int $paymentId = null): string
