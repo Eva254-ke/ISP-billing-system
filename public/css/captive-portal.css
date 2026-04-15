@@ -1,4 +1,5 @@
 :root {
+    color-scheme: light dark;
     --cp-bg: #f5f8fc;
     --cp-surface: #ffffff;
     --cp-surface-soft: #f2f6fb;
@@ -14,6 +15,23 @@
     --cp-radius-lg: 18px;
     --cp-radius-md: 12px;
     --cp-radius-sm: 10px;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        --cp-bg: #081322;
+        --cp-surface: #0f2137;
+        --cp-surface-soft: #132a45;
+        --cp-border: #28486c;
+        --cp-text: #ecf4ff;
+        --cp-muted: #9ab2d2;
+        --cp-primary: #4fb8f1;
+        --cp-primary-strong: #2f8fcd;
+        --cp-success: #52c484;
+        --cp-warning: #f4b35e;
+        --cp-error: #ff8b8b;
+        --cp-shadow: 0 16px 42px rgba(0, 0, 0, 0.42);
+    }
 }
 
 * {
@@ -97,10 +115,16 @@ a {
     white-space: nowrap;
 }
 
+.cp-link-support,
 .cp-support a {
     color: var(--cp-primary);
     text-decoration: none;
     font-weight: 800;
+}
+
+.cp-link-support:hover,
+.cp-support a:hover {
+    text-decoration: underline;
 }
 
 .cp-card {

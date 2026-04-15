@@ -16,6 +16,9 @@ use Illuminate\Support\Facades\DB;
 
 class CaptivePortalController extends Controller
 {
+    private const STATUS_CHANNELS = ['captive_portal', 'session_extension', 'voucher'];
+    private const STATUS_PRIORITIES = ['initiated', 'pending', 'confirmed', 'completed', 'activated'];
+
     /**
      * Show package selection page (public, no auth required)
      */
@@ -68,8 +71,12 @@ class CaptivePortalController extends Controller
      */
     public function pay(Request $request)
     {
-        $tenantId = (int) session('captive_tenant_id');
+        $tenantId = $this->resolveTenantId($request);
         $gateway = $this->resolvePaymentGateway();
+
+        if ($tenantId <= 0) {
+            return back()->withErrors(['Tenant portal not resolved. Reopen your WiFi portal and try again.']);
+        }
 
         $request->validate([
             'phone' => 'required|regex:/^0[17]\d{8}$/',
@@ -111,7 +118,10 @@ class CaptivePortalController extends Controller
             'reference' => $payment->mpesa_checkout_request_id,
         ]);
         
-        session(['captive_phone' => $request->phone]);
+        session([
+            'captive_phone' => $request->phone,
+            'captive_tenant_id' => $package->tenant_id,
+        ]);
         
         try {
             $response = $this->initiateStkPush(
@@ -122,7 +132,10 @@ class CaptivePortalController extends Controller
             );
 
             if ($response['success']) {
-                return redirect()->route('wifi.status', ['phone' => $request->phone])
+                return redirect()->route('wifi.status', [
+                        'phone' => $request->phone,
+                        'tenant_id' => $package->tenant_id,
+                    ])
                     ->with('message', (string) ($response['user_message'] ?? 'Check your phone to complete payment'));
             }
 
@@ -168,28 +181,66 @@ class CaptivePortalController extends Controller
         // Production safety: never fall back to session/arbitrary tenant/admin auth user.
         return null;
     }
+
+    private function resolveTenantId(Request $request): int
+    {
+        $tenant = $this->resolveTenant($request);
+        if ($tenant) {
+            session(['captive_tenant_id' => $tenant->id]);
+            return (int) $tenant->id;
+        }
+
+        $sessionTenantId = (int) session('captive_tenant_id', 0);
+        if ($sessionTenantId > 0 && Tenant::active()->whereKey($sessionTenantId)->exists()) {
+            return $sessionTenantId;
+        }
+
+        return 0;
+    }
+
+    private function buildStatusPaymentQuery(string $phone, int $tenantId)
+    {
+        return Payment::query()
+            ->where('phone', $phone)
+            ->whereIn('payment_channel', self::STATUS_CHANNELS)
+            ->when($tenantId > 0, fn ($query) => $query->where('tenant_id', $tenantId));
+    }
     
     /**
      * Check payment status
      */
-    public function status($phone)
+    public function status(Request $request, $phone)
     {
-        $tenantId = (int) session('captive_tenant_id');
+        $tenantId = $this->resolveTenantId($request);
+        $paymentQuery = $this->buildStatusPaymentQuery((string) $phone, $tenantId);
 
-        $payment = Payment::where('phone', $phone)
-            ->when($tenantId > 0, fn ($query) => $query->where('tenant_id', $tenantId))
-            ->whereIn('payment_channel', ['captive_portal', 'voucher'])
+        if ($tenantId === 0) {
+            $tenantMatches = (clone $paymentQuery)->select('tenant_id')->distinct()->count('tenant_id');
+            if ($tenantMatches > 1) {
+                return redirect()->route('wifi.packages')
+                    ->withErrors(['Unable to determine this hotspot portal. Reopen WiFi portal and try again.']);
+            }
+        }
+
+        $payment = (clone $paymentQuery)
+            ->whereIn('status', self::STATUS_PRIORITIES)
             ->orderBy('created_at', 'desc')
             ->first();
-        
+
+        if (!$payment) {
+            $payment = (clone $paymentQuery)
+                ->orderBy('created_at', 'desc')
+                ->first();
+        }
+
         if (!$payment) {
             return redirect()->route('wifi.packages')
                 ->withErrors(['No payment found. Please start again.']);
         }
 
-        $this->reconcilePendingDarajaPayment($payment);
+        $this->reconcileDarajaPaymentIfNeeded($payment, $request->boolean('recheck'));
         $payment = $payment->fresh();
-        
+
         if (in_array($payment->status, ['completed', 'confirmed'], true)) {
             try {
                 $this->activatePaidAccess($payment);
@@ -207,6 +258,10 @@ class CaptivePortalController extends Controller
             ->first();
 
         $statusView = (string) $payment->status;
+        if ($statusView === 'initiated') {
+            $statusView = 'pending';
+        }
+
         if ($activeSession && in_array($statusView, ['completed', 'confirmed', 'paid', 'activated'], true)) {
             $statusView = 'activated';
         } elseif (in_array($statusView, ['completed', 'confirmed'], true) && !$activeSession) {
@@ -229,7 +284,11 @@ class CaptivePortalController extends Controller
      */
     public function reconnect(Request $request)
     {
-        $tenantId = (int) session('captive_tenant_id');
+        $tenantId = $this->resolveTenantId($request);
+
+        if ($tenantId <= 0) {
+            return back()->withErrors(['Tenant portal not resolved. Reopen your WiFi portal and try again.']);
+        }
 
         if ($request->filled('voucher_code')) {
             $request->validate([
@@ -265,9 +324,12 @@ class CaptivePortalController extends Controller
                     ->withInput();
             }
 
-            $activeSession = UserSession::where('phone', $phone)->active()->first();
+            $activeSession = UserSession::where('phone', $phone)
+                ->when($tenantId > 0, fn ($query) => $query->where('tenant_id', $tenantId))
+                ->active()
+                ->first();
             if ($activeSession) {
-                return redirect()->route('wifi.status', ['phone' => $phone])
+                return redirect()->route('wifi.status', ['phone' => $phone, 'tenant_id' => $voucher->tenant_id])
                     ->with('success', 'Session already active. You are connected.');
             }
 
@@ -329,7 +391,7 @@ class CaptivePortalController extends Controller
 
                 session(['captive_phone' => $phone]);
 
-                return redirect()->route('wifi.status', ['phone' => $phone])
+                return redirect()->route('wifi.status', ['phone' => $phone, 'tenant_id' => $voucher->tenant_id])
                     ->with('success', 'Voucher redeemed successfully!');
             } catch (\Throwable $e) {
                 Log::error('Voucher redemption failed', [
@@ -356,21 +418,31 @@ class CaptivePortalController extends Controller
             })
             ->when($tenantId > 0, fn ($query) => $query->where('tenant_id', $tenantId))
             ->where('phone', $phone)
-            ->whereIn('status', ['completed', 'confirmed'])
+            ->whereIn('payment_channel', self::STATUS_CHANNELS)
             ->first();
-        
+
         if (!$payment) {
             return redirect()->back()
                 ->withErrors(['Invalid M-Pesa code or phone number. Please check and try again.'])
                 ->withInput();
         }
+
+        $this->reconcileDarajaPaymentIfNeeded($payment, true);
+        $payment = $payment->fresh();
+
+        if (!in_array((string) $payment->status, ['completed', 'confirmed'], true)) {
+            return redirect()->back()
+                ->withErrors(['Payment found but not yet confirmed. Tap "Recheck Payment" on status screen in 10-20 seconds.'])
+                ->withInput();
+        }
         
         $activeSession = UserSession::where('phone', $phone)
+            ->when($tenantId > 0, fn ($query) => $query->where('tenant_id', $tenantId))
             ->active()
             ->first();
         
         if ($activeSession) {
-            return redirect()->route('wifi.status', ['phone' => $phone])
+            return redirect()->route('wifi.status', ['phone' => $phone, 'tenant_id' => $payment->tenant_id])
                 ->with('success', 'Session already active. You are connected.');
         }
         
@@ -402,7 +474,7 @@ class CaptivePortalController extends Controller
                 'payment_id' => $payment->id
             ]);
             
-            return redirect()->route('wifi.status', ['phone' => $phone])
+            return redirect()->route('wifi.status', ['phone' => $phone, 'tenant_id' => $payment->tenant_id])
                 ->with('success', 'Reconnected successfully!');
                 
         } catch (\Exception $e) {
@@ -422,7 +494,12 @@ class CaptivePortalController extends Controller
      */
     public function extend(Request $request)
     {
+        $tenantId = $this->resolveTenantId($request);
         $gateway = $this->resolvePaymentGateway();
+
+        if ($tenantId <= 0) {
+            return back()->withErrors(['Tenant portal not resolved. Reopen your WiFi portal and try again.']);
+        }
 
         $request->validate([
             'phone' => 'required|regex:/^0[17]\d{8}$/',
@@ -430,13 +507,16 @@ class CaptivePortalController extends Controller
         ]);
         
         $phone = trim($request->phone);
-        $package = Package::findOrFail($request->package_id);
+        $package = Package::query()
+            ->when($tenantId > 0, fn ($query) => $query->where('tenant_id', $tenantId))
+            ->findOrFail($request->package_id);
 
         if (!$this->isGatewayConfigured($gateway)) {
             return back()->withErrors(['Payment gateway is not configured. Please contact support.']);
         }
         
         $activeSession = UserSession::where('phone', $phone)
+            ->when($tenantId > 0, fn ($query) => $query->where('tenant_id', $tenantId))
             ->active()
             ->first();
         
@@ -480,7 +560,7 @@ class CaptivePortalController extends Controller
                     'gateway' => $gateway,
                 ]);
 
-                return redirect()->route('wifi.status', ['phone' => $phone])
+                return redirect()->route('wifi.status', ['phone' => $phone, 'tenant_id' => $package->tenant_id])
                     ->with('message', (string) ($response['user_message'] ?? 'Complete STK Push to extend your session'));
             }
 
@@ -499,21 +579,37 @@ class CaptivePortalController extends Controller
     /**
      * AJAX endpoint to check session status (for polling)
      */
-    public function checkStatus($phone)
+    public function checkStatus(Request $request, $phone)
     {
-        $tenantId = (int) session('captive_tenant_id');
+        $tenantId = $this->resolveTenantId($request);
+        $paymentQuery = $this->buildStatusPaymentQuery((string) $phone, $tenantId);
 
-        $payment = Payment::where('phone', $phone)
-            ->when($tenantId > 0, fn ($query) => $query->where('tenant_id', $tenantId))
-            ->where('payment_channel', 'captive_portal')
+        if ($tenantId === 0) {
+            $tenantMatches = (clone $paymentQuery)->select('tenant_id')->distinct()->count('tenant_id');
+            if ($tenantMatches > 1) {
+                return response()->json([
+                    'status' => 'ambiguous_tenant',
+                    'session_active' => false,
+                    'expires_at' => null,
+                ], 409);
+            }
+        }
+        $payment = (clone $paymentQuery)
+            ->whereIn('status', self::STATUS_PRIORITIES)
             ->orderBy('created_at', 'desc')
             ->first();
+
+        if (!$payment) {
+            $payment = (clone $paymentQuery)
+                ->orderBy('created_at', 'desc')
+                ->first();
+        }
         
         if (!$payment) {
             return response()->json(['status' => 'not_found']);
         }
 
-        $this->reconcilePendingDarajaPayment($payment);
+        $this->reconcileDarajaPaymentIfNeeded($payment, $request->boolean('recheck'));
         $payment = $payment->fresh();
 
         if (in_array($payment->status, ['completed', 'confirmed'], true)) {
@@ -524,8 +620,19 @@ class CaptivePortalController extends Controller
             ->active()
             ->first();
         
+        $status = (string) $payment->status;
+        if ($status === 'initiated') {
+            $status = 'pending';
+        }
+
+        if ($session && in_array($status, ['completed', 'confirmed', 'paid', 'activated'], true)) {
+            $status = 'activated';
+        } elseif (in_array($status, ['completed', 'confirmed'], true) && !$session) {
+            $status = 'paid';
+        }
+
         return response()->json([
-            'status' => $payment->status,
+            'status' => $status,
             'session_active' => $session ? true : false,
             'expires_at' => $session ? $session->expires_at->toIso8601String() : null,
             'package' => $payment->package ? [
@@ -628,9 +735,10 @@ class CaptivePortalController extends Controller
         ]);
     }
 
-    private function reconcilePendingDarajaPayment(Payment $payment): void
+    private function reconcileDarajaPaymentIfNeeded(Payment $payment, bool $force = false): void
     {
-        if ($payment->status !== 'pending') {
+        $status = (string) $payment->status;
+        if (!in_array($status, ['initiated', 'pending', 'failed'], true)) {
             return;
         }
 
@@ -640,14 +748,27 @@ class CaptivePortalController extends Controller
         }
 
         $metadata = is_array($payment->metadata) ? $payment->metadata : [];
-        $lastQueryAt = isset($metadata['daraja_last_query_at']) ? trim((string) $metadata['daraja_last_query_at']) : '';
-        if ($lastQueryAt !== '') {
-            try {
-                if (\Illuminate\Support\Carbon::parse($lastQueryAt)->gt(now()->subSeconds(15))) {
-                    return;
+        if (!$force) {
+            $lastQueryAt = isset($metadata['daraja_last_query_at']) ? trim((string) $metadata['daraja_last_query_at']) : '';
+            if ($lastQueryAt !== '') {
+                try {
+                    if (\Illuminate\Support\Carbon::parse($lastQueryAt)->gt(now()->subSeconds(15))) {
+                        return;
+                    }
+                } catch (\Throwable) {
+                    // Ignore parse errors and continue.
                 }
-            } catch (\Throwable) {
-                // Ignore parse errors and query again.
+            }
+        }
+
+        if ($status === 'failed' && !$force) {
+            $recentFailure = $payment->failed_at?->gt(now()->subMinutes(20)) ?? false;
+            $callbackResultCode = data_get($payment->callback_data, 'ResultCode');
+            $lastStatus = trim((string) ($metadata['daraja_last_status'] ?? ''));
+
+            $hasFinalFailureFromCallback = is_numeric($callbackResultCode) && (int) $callbackResultCode !== 0;
+            if (!$recentFailure || $hasFinalFailureFromCallback || $lastStatus === 'failed_via_query') {
+                return;
             }
         }
 
@@ -655,9 +776,10 @@ class CaptivePortalController extends Controller
             $daraja = app(DarajaService::class);
             $result = $daraja->queryStkStatus($checkoutRequestId);
         } catch (\Throwable $e) {
-            Log::warning('Daraja pending reconciliation failed before query', [
+            Log::warning('Daraja reconciliation failed before query', [
                 'payment_id' => $payment->id,
                 'checkout_request_id' => $checkoutRequestId,
+                'status' => $status,
                 'error' => $e->getMessage(),
             ]);
             return;
@@ -672,9 +794,10 @@ class CaptivePortalController extends Controller
 
         if (!($result['success'] ?? false)) {
             $payment->update(['metadata' => $metadata]);
-            Log::warning('Daraja STK query did not succeed for pending payment', [
+            Log::warning('Daraja STK query did not succeed for payment', [
                 'payment_id' => $payment->id,
                 'checkout_request_id' => $checkoutRequestId,
+                'status' => $status,
                 'error' => $result['error'] ?? null,
             ]);
             return;
@@ -687,16 +810,18 @@ class CaptivePortalController extends Controller
                 'mpesa_phone' => $result['phone_number'] ?? $payment->mpesa_phone,
                 'amount' => $result['amount'] ?? $payment->amount,
                 'confirmed_at' => $payment->confirmed_at ?? now(),
+                'failed_at' => null,
                 'callback_data' => (array) ($result['raw'] ?? []),
                 'metadata' => array_merge($metadata, [
                     'daraja_last_status' => 'confirmed_via_query',
                 ]),
             ]);
 
-            Log::info('Pending payment reconciled via Daraja query', [
+            Log::info('Payment reconciled via Daraja query', [
                 'payment_id' => $payment->id,
                 'checkout_request_id' => $checkoutRequestId,
                 'receipt' => $result['receipt_number'] ?? null,
+                'status_before' => $status,
             ]);
 
             return;
@@ -705,17 +830,18 @@ class CaptivePortalController extends Controller
         if (($result['is_failed'] ?? false) && ($result['final'] ?? false)) {
             $payment->update([
                 'status' => 'failed',
-                'failed_at' => now(),
+                'failed_at' => $payment->failed_at ?? now(),
                 'callback_data' => (array) ($result['raw'] ?? []),
                 'metadata' => array_merge($metadata, [
                     'daraja_last_status' => 'failed_via_query',
                 ]),
             ]);
 
-            Log::warning('Pending payment marked failed via Daraja query', [
+            Log::warning('Payment marked failed via Daraja query', [
                 'payment_id' => $payment->id,
                 'checkout_request_id' => $checkoutRequestId,
                 'result_code' => $result['result_code'] ?? null,
+                'status_before' => $status,
             ]);
 
             return;

@@ -8,10 +8,19 @@
     @php
         $captiveCssPath = public_path('css/captive-portal.css');
         $captiveCssVersion = file_exists($captiveCssPath) ? filemtime($captiveCssPath) : time();
+        $tenantId = (int) ($tenant?->id ?? request()->query('tenant_id', 0));
+        $supportPhoneRaw = trim((string) ($tenant?->captive_portal_support_phone ?? ''));
+        $supportDigits = preg_replace('/\D+/', '', $supportPhoneRaw);
+        if (is_string($supportDigits) && str_starts_with($supportDigits, '0')) {
+            $supportDigits = '254' . substr($supportDigits, 1);
+        }
+        $supportTelHref = (is_string($supportDigits) && $supportDigits !== '')
+            ? 'tel:+' . ltrim($supportDigits, '+')
+            : 'tel:+254742939094';
         $selectedPackageId = (int) old('package_id', 0);
         $selectedPackage = $packages->firstWhere('id', $selectedPackageId);
         $reconnectParams = array_filter([
-            'tenant_id' => request()->query('tenant_id'),
+            'tenant_id' => $tenantId > 0 ? $tenantId : request()->query('tenant_id'),
             'phone' => old('phone', $phone ?? ''),
         ], static fn ($value) => $value !== null && $value !== '');
     @endphp
@@ -30,7 +39,7 @@
                     <p>Secure internet in minutes</p>
                 </div>
             </div>
-            <div class="cp-support">Call support: <a href="tel:+254742939094">0742939094</a></div>
+            <div class="cp-support"><a class="cp-link-support" href="{{ $supportTelHref }}">Call support</a></div>
         </header>
 
         @if(session('error'))
@@ -74,7 +83,7 @@
                 </div>
 
                 @if($statusPhone)
-                    <a href="{{ route('wifi.status', ['phone' => $statusPhone]) }}" class="cp-btn cp-btn-primary cp-btn-block">View Connection Status</a>
+                    <a href="{{ route('wifi.status', array_filter(['phone' => $statusPhone, 'tenant_id' => $tenantId > 0 ? $tenantId : null], static fn ($value) => $value !== null && $value !== '')) }}" class="cp-btn cp-btn-primary cp-btn-block">View Connection Status</a>
                 @endif
             </article>
         @else
@@ -162,7 +171,7 @@
         @endif
 
         <footer class="cp-footer">
-            <p>Call support: <a href="tel:+254742939094">0742939094</a></p>
+            <p><a class="cp-link-support" href="{{ $supportTelHref }}">Call support</a></p>
             <p>Engineered by Engineer Omwenga Evans</p>
         </footer>
     </main>

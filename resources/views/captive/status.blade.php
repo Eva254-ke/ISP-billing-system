@@ -11,9 +11,28 @@
     @php
         $captiveCssPath = public_path('css/captive-portal.css');
         $captiveCssVersion = file_exists($captiveCssPath) ? filemtime($captiveCssPath) : time();
+        $tenantId = (int) ($payment->tenant_id ?? request()->query('tenant_id', 0));
+        $supportPhoneRaw = trim((string) ($payment->tenant?->captive_portal_support_phone ?? ''));
+        $supportDigits = preg_replace('/\D+/', '', $supportPhoneRaw);
+        if (is_string($supportDigits) && str_starts_with($supportDigits, '0')) {
+            $supportDigits = '254' . substr($supportDigits, 1);
+        }
+        $supportTelHref = (is_string($supportDigits) && $supportDigits !== '')
+            ? 'tel:+' . ltrim($supportDigits, '+')
+            : 'tel:+254742939094';
+        $statusRoute = route('wifi.status', array_filter([
+            'phone' => $phone,
+            'tenant_id' => $tenantId > 0 ? $tenantId : null,
+        ], static fn ($value) => $value !== null && $value !== ''));
+        $statusCheckRoute = route('wifi.status.check', array_filter([
+            'phone' => $phone,
+            'tenant_id' => $tenantId > 0 ? $tenantId : null,
+        ], static fn ($value) => $value !== null && $value !== ''));
+        $shouldAutoPoll = in_array($statusView, ['pending', 'paid'], true)
+            || ($statusView === 'failed' && optional($payment->failed_at)->gt(now()->subMinutes(20)));
         $packagesParams = array_filter([
             'phone' => $phone,
-            'tenant_id' => $payment->tenant_id ?? null,
+            'tenant_id' => $tenantId > 0 ? $tenantId : null,
         ], static fn ($value) => $value !== null && $value !== '');
     @endphp
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -31,7 +50,7 @@
                     <p>Connection progress</p>
                 </div>
             </div>
-            <div class="cp-support">Call support: <a href="tel:+254742939094">0742939094</a></div>
+            <div class="cp-support"><a class="cp-link-support" href="{{ $supportTelHref }}">Call support</a></div>
         </header>
 
         <article class="cp-card">
@@ -56,7 +75,7 @@
                     <p>After payment confirmation, your internet access will activate automatically.</p>
                 </div>
 
-                <a href="{{ url()->current() }}" class="cp-btn cp-btn-primary cp-btn-block">Check Status Now</a>
+                <a href="{{ $statusRoute }}" class="cp-btn cp-btn-primary cp-btn-block">Check Status Now</a>
 
             @elseif($statusView === 'paid')
                 <div class="cp-status-head">
@@ -81,7 +100,7 @@
                     </div>
                 @endif
 
-                <a href="{{ url()->current() }}" class="cp-btn cp-btn-primary cp-btn-block">Check Status Now</a>
+                <a href="{{ $statusRoute }}" class="cp-btn cp-btn-primary cp-btn-block">Check Status Now</a>
 
             @elseif($statusView === 'activated')
                 <span class="cp-status-pill success">Connected</span>
@@ -122,6 +141,7 @@
                 </div>
 
                 <div class="cp-actions">
+                    <a href="{{ route('wifi.status', array_filter(['phone' => $phone, 'tenant_id' => $tenantId > 0 ? $tenantId : null, 'recheck' => 1], static fn ($value) => $value !== null && $value !== '')) }}" class="cp-btn cp-btn-outline">I Was Charged, Recheck</a>
                     <a href="{{ route('wifi.packages', $packagesParams) }}" class="cp-btn cp-btn-primary">Try Payment Again</a>
                     <a href="{{ route('wifi.reconnect.form', $packagesParams) }}" class="cp-btn cp-btn-soft">Reconnect with Code</a>
                 </div>
@@ -131,21 +151,21 @@
                 <h2 class="cp-section-title">Status update in progress</h2>
                 <p class="cp-card-subtitle">Current state: {{ $payment->status }}</p>
 
-                <a href="{{ url()->current() }}" class="cp-btn cp-btn-primary cp-btn-block">Refresh</a>
+                <a href="{{ $statusRoute }}" class="cp-btn cp-btn-primary cp-btn-block">Refresh</a>
             @endif
         </article>
 
         <footer class="cp-footer">
-            <p>Call support: <a href="tel:+254742939094">0742939094</a></p>
+            <p><a class="cp-link-support" href="{{ $supportTelHref }}">Call support</a></p>
             <p>Engineered by Engineer Omwenga Evans</p>
         </footer>
     </main>
 
     <script>
-        @if(in_array($statusView, ['pending', 'paid']))
+        @if($shouldAutoPoll)
         setInterval(async () => {
             try {
-                const response = await fetch('{{ route('wifi.status.check', ['phone' => $phone]) }}', {
+                const response = await fetch('{{ $statusCheckRoute }}', {
                     headers: { 'Accept': 'application/json' }
                 });
 
