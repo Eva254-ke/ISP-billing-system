@@ -283,6 +283,59 @@ class CaptivePortalPaymentStatusTest extends TestCase
         $this->assertSame(1, Payment::query()->count());
     }
 
+    public function test_pay_creates_new_attempt_when_recent_payment_failed_hard(): void
+    {
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant);
+
+        $failed = $this->createPayment($tenant, $package, [
+            'status' => 'failed',
+            'mpesa_checkout_request_id' => 'CP-HARD-FAILED-001',
+            'failed_at' => now()->subMinute(),
+            'callback_data' => [
+                'ResultCode' => 1032,
+            ],
+            'metadata' => [
+                'daraja_last_status' => 'failed_callback',
+            ],
+        ]);
+
+        $daraja = Mockery::mock(DarajaService::class);
+        $daraja->shouldReceive('isConfigured')->once()->andReturn(true);
+        $daraja->shouldReceive('stkPush')->once()->andReturn([
+            'success' => true,
+            'stage' => 'stk_push',
+            'http_status' => 200,
+            'response_code' => '0',
+            'response_description' => 'Success. Request accepted for processing',
+            'customer_message' => 'Success. Request accepted for processing',
+            'checkout_request_id' => 'ws_CO_fresh_new_001',
+            'merchant_request_id' => '29115-11111-1',
+            'raw' => [
+                'ResponseCode' => '0',
+                'CheckoutRequestID' => 'ws_CO_fresh_new_001',
+                'MerchantRequestID' => '29115-11111-1',
+            ],
+            'error' => null,
+        ]);
+        $this->app->instance(DarajaService::class, $daraja);
+
+        $response = $this->post(route('wifi.pay', ['tenant_id' => $tenant->id]), [
+            'phone' => '0712345678',
+            'package_id' => $package->id,
+        ]);
+
+        $latest = Payment::query()->latest('id')->firstOrFail();
+        $this->assertNotSame($failed->id, $latest->id);
+        $this->assertSame(2, Payment::query()->count());
+
+        $response->assertRedirect(route('wifi.status', [
+            'phone' => '0712345678',
+            'tenant_id' => $tenant->id,
+            'payment' => $latest->id,
+        ]));
+    }
+
     public function test_status_ignores_stale_failed_payment_from_session_when_newer_payment_exists(): void
     {
         $tenant = $this->createTenant();

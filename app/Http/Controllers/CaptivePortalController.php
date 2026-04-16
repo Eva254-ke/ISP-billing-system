@@ -120,7 +120,7 @@ class CaptivePortalController extends Controller
         }
 
         if ($lock && !$lock->get()) {
-            $existing = $this->findRecentCaptivePortalPayment($tenantId, $phone, (int) $package->id);
+            $existing = $this->findReusableCaptivePaymentAttempt($tenantId, $phone, (int) $package->id);
             if ($existing) {
                 session([
                     'captive_phone' => $phone,
@@ -135,12 +135,12 @@ class CaptivePortalController extends Controller
                 ))->with('message', 'A payment request is already being processed. Please wait for confirmation.');
             }
 
-            return back()->withErrors(['Payment request is already in progress. Please try again in a few seconds.']);
+            return back()->withErrors(['Payment request is being processed. Wait for the STK prompt, then check status.']);
         }
 
         try {
-            $existing = $this->findRecentCaptivePortalPayment($tenantId, $phone, (int) $package->id);
-            if ($existing) {
+            $existing = $this->findReusableCaptivePaymentAttempt($tenantId, $phone, (int) $package->id);
+            if ($existing && $this->shouldReuseCaptivePaymentAttempt($existing)) {
                 $this->reconcileDarajaPaymentIfNeeded($existing, false);
                 $existing = $existing->fresh();
 
@@ -1404,9 +1404,9 @@ class CaptivePortalController extends Controller
         return 'daraja';
     }
 
-    private function findRecentCaptivePortalPayment(int $tenantId, string $phone, int $packageId): ?Payment
+    private function findReusableCaptivePaymentAttempt(int $tenantId, string $phone, int $packageId): ?Payment
     {
-        return Payment::query()
+        $candidates = Payment::query()
             ->where('tenant_id', $tenantId)
             ->where('phone', $phone)
             ->where('package_id', $packageId)
@@ -1415,7 +1415,16 @@ class CaptivePortalController extends Controller
             ->where('created_at', '>=', now()->subMinutes(self::DUPLICATE_PAYMENT_WINDOW_MINUTES))
             ->orderByDesc('created_at')
             ->orderByDesc('id')
-            ->first();
+            ->limit(6)
+            ->get();
+
+        foreach ($candidates as $candidate) {
+            if ($this->shouldReuseCaptivePaymentAttempt($candidate)) {
+                return $candidate;
+            }
+        }
+
+        return null;
     }
 
     private function shouldReuseCaptivePaymentAttempt(Payment $payment): bool
