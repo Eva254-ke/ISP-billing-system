@@ -7,10 +7,10 @@
 <div class="d-flex justify-content-between align-items-center mb-4">
     <h2>Payment Reports</h2>
     <div>
-        <button class="btn btn-outline-secondary me-2" onclick="exportPayments('csv')">
+        <button type="button" class="btn btn-outline-secondary me-2" onclick="exportPayments('csv')">
             <i class="fas fa-file-csv me-1"></i>Export CSV
         </button>
-        <button class="btn btn-outline-primary" onclick="exportPayments('pdf')">
+        <button type="button" class="btn btn-outline-primary" onclick="exportPayments('pdf')">
             <i class="fas fa-file-pdf me-1"></i>Export PDF
         </button>
     </div>
@@ -25,7 +25,7 @@
                 <p>Total Revenue</p>
             </div>
             <div class="icon"><i class="fas fa-money-bill-wave"></i></div>
-            <a href="#" class="small-box-footer">This Week <i class="fas fa-arrow-circle-right"></i></a>
+            <div class="small-box-footer">Selected range total</div>
         </div>
     </div>
     <div class="col-md-3">
@@ -35,7 +35,7 @@
                 <p>Today</p>
             </div>
             <div class="icon"><i class="fas fa-chart-line"></i></div>
-            <a href="#" class="small-box-footer">View Details <i class="fas fa-arrow-circle-right"></i></a>
+            <div class="small-box-footer">Confirmed payments</div>
         </div>
     </div>
     <div class="col-md-3">
@@ -45,7 +45,7 @@
                 <p>Pending</p>
             </div>
             <div class="icon"><i class="fas fa-clock"></i></div>
-            <a href="#" class="small-box-footer">Review <i class="fas fa-arrow-circle-right"></i></a>
+            <div class="small-box-footer">Awaiting confirmation</div>
         </div>
     </div>
     <div class="col-md-3">
@@ -55,7 +55,7 @@
                 <p>Failed</p>
             </div>
             <div class="icon"><i class="fas fa-times-circle"></i></div>
-            <a href="#" class="small-box-footer">Investigate <i class="fas fa-arrow-circle-right"></i></a>
+            <div class="small-box-footer">Needs review</div>
         </div>
     </div>
 </div>
@@ -101,11 +101,6 @@
                 <label class="form-label">Package</label>
                 <select class="form-select" id="packageFilter">
                     <option value="all">All Packages</option>
-                    <option value="1hour">1 Hour</option>
-                    <option value="3hours">3 Hours</option>
-                    <option value="24hours">24 Hours</option>
-                    <option value="weekly">Weekly</option>
-                    <option value="monthly">Monthly</option>
                 </select>
             </div>
             <div class="col-md-2 d-flex align-items-end">
@@ -142,7 +137,7 @@
                     <th>Amount (KES)</th>
                     <th>M-Pesa Ref</th>
                     <th>Status</th>
-                    <th>Actions</th>
+                    <th class="action-col">Actions</th>
                 </tr>
             </thead>
             <tbody>
@@ -169,12 +164,12 @@
                         <td><strong>KES {{ number_format((float) ($payment->amount ?? 0), 0) }}</strong></td>
                         <td><code class="text-primary">{{ $reference }}</code></td>
                         <td><span class="badge {{ $statusBadge }}">{{ ucfirst($status) }}</span></td>
-                        <td>
+                        <td class="action-col">
                             <div class="btn-group">
-                                <button class="btn btn-sm btn-outline-primary" title="View Details" onclick="viewPaymentDetails('{{ $reference }}')">
+                                <button type="button" class="btn btn-sm btn-outline-primary" title="View Details" onclick="viewPaymentDetails({{ (int) $payment->id }})">
                                     <i class="fas fa-eye"></i>
                                 </button>
-                                <button class="btn btn-sm btn-outline-secondary" title="Resend SMS" onclick="resendReceipt('{{ $payment->phone ?? '' }}', '{{ $reference }}')">
+                                <button type="button" class="btn btn-sm btn-outline-secondary" title="Resend SMS" onclick="resendReceipt('{{ $payment->phone ?? '' }}', '{{ $reference }}')">
                                     <i class="fas fa-sms"></i>
                                 </button>
                             </div>
@@ -291,12 +286,12 @@
                 
                 <div class="mb-3">
                     <label class="form-label text-muted">Router Assigned</label>
-                    <p class="mb-0">Main Hotspot (192.168.88.1)</p>
+                    <p class="mb-0" id="detailRouter">-</p>
                 </div>
                 
                 <div class="mb-3">
                     <label class="form-label text-muted">Session Duration</label>
-                    <p class="mb-0">60 minutes (expires: 2026-03-19 11:45:23)</p>
+                    <p class="mb-0" id="detailSession">-</p>
                 </div>
             </div>
             <div class="modal-footer">
@@ -571,64 +566,16 @@ document.getElementById('selectAll').addEventListener('change', function() {
     });
 });
 
-// Revenue Chart
-document.addEventListener('DOMContentLoaded', function() {
-    var options = {
-        chart: {
-            type: 'bar',
-            height: 300,
-            toolbar: { show: false },
-            stacked: false
-        },
-        series: [{
-            name: 'Revenue (KES)',
-            data: [2500, 4200, 3100, 5800, 4500, 6200, 12500]
-        }],
-        colors: ['#2563EB'],
-        xaxis: {
-            categories: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
-            labels: { style: { colors: '#64748b', fontSize: '11px' } }
-        },
-        yaxis: {
-            labels: {
-                formatter: function(val) { return 'KES ' + val.toLocaleString(); },
-                style: { colors: '#64748b', fontSize: '11px' }
-            }
-        },
-        plotOptions: {
-            bar: {
-                borderRadius: 4,
-                columnWidth: '60%'
-            }
-        },
-        grid: { borderColor: '#e2e8f0', strokeDashArray: 3 },
-        tooltip: {
-            theme: 'light',
-            y: { formatter: val => 'KES ' + val.toLocaleString() }
-        }
-    };
-    new ApexCharts(document.querySelector("#revenueChart"), options).render();
-});
-
-// Initialize DataTable
-$(document).ready(function() {
-    $('.data-table').DataTable({
-        responsive: true,
-        autoWidth: false,
-        paging: true,
-        searching: true,
-        order: [[0, 'desc']]
-    });
-});
 </script>
 @endpush
 
 @push('scripts')
 <script>
 document.addEventListener('DOMContentLoaded', function() {
-    const tableEl = $('.data-table');
+    const tableEl = window.jQuery ? window.jQuery('.data-table') : null;
     const tbody = document.querySelector('.data-table tbody');
     const statsBoxes = document.querySelectorAll('.row.mb-4 .small-box .inner h3');
+    let paymentRows = [];
 
     function money(value) {
         return `KES ${Number(value || 0).toLocaleString()}`;
@@ -644,9 +591,145 @@ document.addEventListener('DOMContentLoaded', function() {
 
     function mapStatus(raw) {
         const normalized = String(raw || '').toLowerCase();
-        if (normalized === 'success') return 'completed';
+        if (normalized === 'success') return 'success';
         if (normalized === 'all') return '';
         return normalized;
+    }
+
+    function escapeHtml(value) {
+        return String(value ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    function formatDateTime(value) {
+        if (!value) {
+            return '-';
+        }
+
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) {
+            return value;
+        }
+
+        return date.toLocaleString('en-KE', {
+            year: 'numeric',
+            month: 'short',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+        });
+    }
+
+    function rowMatchesStatus(row, filterStatus) {
+        const normalized = String(row.status || '').toLowerCase();
+        if (!filterStatus) {
+            return true;
+        }
+        if (filterStatus === 'success') {
+            return ['completed', 'confirmed', 'activated'].includes(normalized);
+        }
+        return normalized === filterStatus;
+    }
+
+    function rowMatchesDate(row, range, customFrom, customTo) {
+        if (!range) {
+            return true;
+        }
+
+        const createdAt = row.created_at ? new Date(row.created_at) : null;
+        if (!createdAt || Number.isNaN(createdAt.getTime())) {
+            return false;
+        }
+
+        const paymentDate = new Date(createdAt.getFullYear(), createdAt.getMonth(), createdAt.getDate());
+        const today = new Date();
+        const todayDate = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+
+        if (range === 'week') {
+            const day = todayDate.getDay();
+            const diffToMonday = day === 0 ? -6 : 1 - day;
+            const weekStart = new Date(todayDate);
+            weekStart.setDate(todayDate.getDate() + diffToMonday);
+            return paymentDate >= weekStart && paymentDate <= todayDate;
+        }
+
+        if (range === 'today') {
+            return paymentDate.getTime() === todayDate.getTime();
+        }
+
+        if (range === 'yesterday') {
+            const yesterday = new Date(todayDate);
+            yesterday.setDate(yesterday.getDate() - 1);
+            return paymentDate.getTime() === yesterday.getTime();
+        }
+
+        if (range === 'month') {
+            return paymentDate.getFullYear() === todayDate.getFullYear()
+                && paymentDate.getMonth() === todayDate.getMonth();
+        }
+
+        if (range === 'custom') {
+            const fromDate = customFrom ? new Date(customFrom) : null;
+            const toDate = customTo ? new Date(customTo) : null;
+
+            if (fromDate && !Number.isNaN(fromDate.getTime()) && paymentDate < fromDate) {
+                return false;
+            }
+            if (toDate && !Number.isNaN(toDate.getTime())) {
+                const inclusiveTo = new Date(toDate);
+                inclusiveTo.setHours(23, 59, 59, 999);
+                if (createdAt > inclusiveTo) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    function filterRows(rows) {
+        const status = mapStatus(document.getElementById('statusFilter')?.value || '');
+        const search = document.getElementById('paymentSearch')?.value?.trim().toLowerCase() || '';
+        const packageFilter = document.getElementById('packageFilter');
+        const packageLabel = packageFilter && packageFilter.value !== 'all'
+            ? packageFilter.options[packageFilter.selectedIndex]?.textContent?.trim().toLowerCase() || ''
+            : '';
+        const dateRange = document.getElementById('dateRange')?.value || 'week';
+        const customFrom = document.getElementById('dateFrom')?.value || '';
+        const customTo = document.getElementById('dateTo')?.value || '';
+
+        return rows.filter((row) => {
+            const reference = String(row.reference || '').toLowerCase();
+            const phone = String(row.phone || '').toLowerCase();
+            const customer = String(row.customer_name || '').toLowerCase();
+            const packageName = String(row.package_name || '').toLowerCase();
+
+            if (!rowMatchesStatus(row, status)) {
+                return false;
+            }
+
+            if (packageLabel && !packageName.includes(packageLabel.replace(' pass', ''))) {
+                return false;
+            }
+
+            if (!rowMatchesDate(row, dateRange, customFrom, customTo)) {
+                return false;
+            }
+
+            if (!search) {
+                return true;
+            }
+
+            return phone.includes(search)
+                || reference.includes(search)
+                || customer.includes(search)
+                || packageName.includes(search);
+        });
     }
 
     function statusBadge(status) {
@@ -687,25 +770,26 @@ document.addEventListener('DOMContentLoaded', function() {
             const dt = row.created_at ? new Date(row.created_at) : null;
             const date = dt ? dt.toLocaleDateString('en-CA') : '-';
             const time = dt ? dt.toLocaleTimeString('en-GB') : '-';
-            const phone = row.phone || '-';
-            const packageName = row.package_name || 'Package';
+            const phone = escapeHtml(row.phone || '-');
+            const customer = escapeHtml(row.customer_name || '-');
+            const packageName = escapeHtml(row.package_name || 'Package');
             const amount = Number(row.amount || 0);
-            const reference = row.reference || `PAY-${row.id}`;
+            const reference = escapeHtml(row.reference || `PAY-${row.id}`);
 
             return `
                 <tr>
                     <td><input type="checkbox" class="payment-checkbox" value="${row.id || i + 1}"></td>
                     <td><div><strong>${date}</strong></div><small class="text-muted">${time}</small></td>
                     <td><code>${phone}</code></td>
-                    <td>-</td>
+                    <td>${customer}</td>
                     <td><span class="badge bg-secondary">${packageName}</span></td>
                     <td><strong>${money(amount)}</strong></td>
                     <td><code class="text-primary">${reference}</code></td>
                     <td>${statusBadge(row.status)}</td>
-                    <td>
+                    <td class="action-col">
                         <div class="btn-group">
-                            <button class="btn btn-sm btn-outline-primary" title="View Details" onclick="viewPaymentDetails('${reference}')"><i class="fas fa-eye"></i></button>
-                            <button class="btn btn-sm btn-outline-secondary" title="Resend SMS" onclick="resendReceipt('${phone}', '${reference}')"><i class="fas fa-sms"></i></button>
+                            <button type="button" class="btn btn-sm btn-outline-primary" title="View Details" onclick="viewPaymentDetails(${row.id || 0})"><i class="fas fa-eye"></i></button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" title="Resend SMS" onclick="resendReceipt('${String(row.phone || '').replace(/'/g, "\\'")}', '${String(row.reference || `PAY-${row.id}`).replace(/'/g, "\\'")}')"><i class="fas fa-sms"></i></button>
                         </div>
                     </td>
                 </tr>
@@ -742,36 +826,84 @@ document.addEventListener('DOMContentLoaded', function() {
 
     async function loadPayments() {
         try {
-            const status = mapStatus(document.getElementById('statusFilter')?.value || '');
-            const search = document.getElementById('paymentSearch')?.value?.trim() || '';
-
-            const paymentsUrl = `/admin/api/payments?limit=200${status ? `&status=${encodeURIComponent(status)}` : ''}`;
             const [paymentsPayload, statsPayload] = await Promise.all([
-                getJson(paymentsUrl),
+                getJson('/admin/api/payments?limit=300'),
                 getJson('/admin/api/payments/stats')
             ]);
 
-            let rows = Array.isArray(paymentsPayload?.data) ? paymentsPayload.data : [];
-            if (search) {
-                const q = search.toLowerCase();
-                rows = rows.filter(row =>
-                    String(row.phone || '').toLowerCase().includes(q)
-                    || String(row.reference || '').toLowerCase().includes(q)
-                    || String(row.package_name || '').toLowerCase().includes(q)
-                );
-            }
+            paymentRows = Array.isArray(paymentsPayload?.data) ? paymentsPayload.data : [];
+            const rows = filterRows(paymentRows);
 
             renderRows(rows);
             renderStats(statsPayload?.data || {});
 
-            if ($.fn.DataTable.isDataTable(tableEl)) {
+            if (tableEl && $.fn.DataTable.isDataTable(tableEl)) {
                 tableEl.DataTable().destroy();
             }
-            tableEl.DataTable({ responsive: true, autoWidth: false, paging: true, searching: false, order: [[0, 'desc']] });
+            if (tableEl) {
+                tableEl.DataTable({ responsive: true, autoWidth: false, paging: true, searching: false, order: [[0, 'desc']] });
+            }
+
+            const footerCount = document.querySelector('.card-footer .float-end');
+            if (footerCount) {
+                footerCount.textContent = `Showing ${rows.length.toLocaleString()} payments`;
+            }
         } catch (error) {
             console.error('Failed to load payments:', error);
         }
     }
+
+    window.viewPaymentDetails = async function viewPaymentDetails(paymentId) {
+        if (!paymentId) {
+            Swal.fire('Unavailable', 'Payment details could not be loaded for this row.', 'info');
+            return;
+        }
+
+        try {
+            const payload = await getJson(`/admin/api/payments/${paymentId}`);
+            const row = payload?.data || {};
+            const status = String(row.status || 'unknown').toLowerCase();
+            const statusClasses = {
+                completed: 'bg-success',
+                confirmed: 'bg-success',
+                activated: 'bg-success',
+                pending: 'bg-warning text-dark',
+                failed: 'bg-danger',
+            };
+            const sessionBits = [];
+
+            if (row.session_duration_label) {
+                sessionBits.push(row.session_duration_label);
+            }
+            if (row.session_expires_at) {
+                sessionBits.push(`expires ${formatDateTime(row.session_expires_at)}`);
+            }
+
+            document.getElementById('detailRef').textContent = row.reference || `PAY-${paymentId}`;
+            const statusEl = document.getElementById('detailStatus');
+            statusEl.className = `badge fs-6 ${statusClasses[status] || 'bg-secondary'}`;
+            statusEl.textContent = status.charAt(0).toUpperCase() + status.slice(1);
+            document.getElementById('detailDateTime').textContent = formatDateTime(row.created_at || row.initiated_at);
+            document.getElementById('detailAmount').textContent = money(row.amount || 0);
+            document.getElementById('detailPhone').textContent = row.phone || '-';
+            document.getElementById('detailCustomer').textContent = row.customer_name || '-';
+            document.getElementById('detailPackage').className = 'badge bg-secondary';
+            document.getElementById('detailPackage').textContent = row.package_name || '-';
+            document.getElementById('detailResponse').textContent = JSON.stringify(row.callback_payload || {}, null, 2);
+            document.getElementById('detailRouter').textContent = row.router_label || '-';
+            document.getElementById('detailSession').textContent = sessionBits.length ? sessionBits.join(' | ') : '-';
+
+            if (window.CBModal && window.CBModal.showById) {
+                window.CBModal.showById('paymentDetailsModal');
+            } else if (window.bootstrap && window.bootstrap.Modal) {
+                new bootstrap.Modal(document.getElementById('paymentDetailsModal')).show();
+            } else if (window.jQuery && window.jQuery.fn && window.jQuery.fn.modal) {
+                window.jQuery('#paymentDetailsModal').modal('show');
+            }
+        } catch (error) {
+            Swal.fire('Error', error.message || 'Failed to load payment details', 'error');
+        }
+    };
 
     window.applyFilters = loadPayments;
     window.searchPayments = loadPayments;
@@ -782,6 +914,12 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         Swal.fire('Unavailable', 'PDF export is not configured yet. Use CSV export.', 'info');
     };
+
+    document.getElementById('dateRange')?.addEventListener('change', loadPayments);
+    document.getElementById('statusFilter')?.addEventListener('change', loadPayments);
+    document.getElementById('packageFilter')?.addEventListener('change', loadPayments);
+    document.getElementById('dateFrom')?.addEventListener('change', loadPayments);
+    document.getElementById('dateTo')?.addEventListener('change', loadPayments);
 
     loadPayments();
 });

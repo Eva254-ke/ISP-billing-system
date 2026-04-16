@@ -138,7 +138,7 @@
                     @endphp
                     <tr class="{{ $isOnline ? '' : 'text-muted' }}">
                         <td><input type="checkbox" class="customer-checkbox" value="{{ $session->id }}"></td>
-                        <td class="action-col">
+                        <td>
                             <strong>{{ $username }}</strong>
                             <div class="text-muted small">{{ $session->phone ?? '-' }} - {{ $username }}</div>
                         </td>
@@ -157,9 +157,9 @@
                             <span class="status-dot {{ $isOnline ? 'online' : 'offline' }}"></span>
                             <span class="{{ $isOnline ? 'text-success' : 'text-muted' }}">{{ $isOnline ? 'Online' : 'Offline' }}</span>
                         </td>
-                        <td>
+                        <td class="action-col">
                             <div class="btn-group">
-                                <button class="btn btn-sm btn-outline-primary"
+                                <button type="button" class="btn btn-sm btn-outline-primary"
                                         onclick="viewCustomerDetails(this)"
                                         data-name="{{ $username }}"
                                         data-phone="{{ $session->phone ?? '-' }}"
@@ -173,10 +173,10 @@
                                         data-router="{{ optional($session->router)->name ?? '-' }}">
                                     <i class="fas fa-eye"></i>
                                 </button>
-                                <button class="btn btn-sm btn-outline-warning" onclick="toggleCustomerStatus('{{ $username }}', 'suspend')">
+                                <button type="button" class="btn btn-sm btn-outline-warning" onclick="toggleCustomerStatus('{{ $username }}', 'suspend')">
                                     <i class="fas fa-user-slash"></i>
                                 </button>
-                                <button class="btn btn-sm btn-outline-secondary" onclick="resetCustomerPassword('{{ $username }}')">
+                                <button type="button" class="btn btn-sm btn-outline-secondary" onclick="resetCustomerPassword('{{ $username }}')">
                                     <i class="fas fa-key"></i>
                                 </button>
                             </div>
@@ -455,8 +455,6 @@ $(document).ready(function() {
     }
     const table = tableEl.DataTable({
         responsive: false,
-        scrollX: true,
-        scrollCollapse: true,
         autoWidth: false,
         paging: true,
         searching: true,
@@ -549,11 +547,11 @@ document.addEventListener('DOMContentLoaded', function() {
                     <td><div class="fw-semibold">${expiry}</div></td>
                     <td>${lastOnline}</td>
                     <td><span class="status-dot ${online ? 'online' : 'offline'}"></span><span class="${online ? 'text-success' : 'text-muted'}">${online ? 'Online' : 'Offline'}</span></td>
-                    <td>
+                    <td class="action-col">
                         <div class="btn-group">
-                            <button class="btn btn-sm btn-outline-primary" onclick="viewCustomerDetails(this)" data-name="${username}" data-phone="${row.phone || '-'}" data-username="${username}" data-type="${type}" data-package="${packageName}" data-status="${status}" data-last-online="${lastOnline}" data-expiry="${expiry}" data-last-payment="${lastOnline}" data-router="${row.router || '-'}"><i class="fas fa-eye"></i></button>
-                            <button class="btn btn-sm btn-outline-warning" onclick="toggleCustomerStatus('${username}', 'suspend')"><i class="fas fa-user-slash"></i></button>
-                            <button class="btn btn-sm btn-outline-secondary" onclick="resetCustomerPassword('${username}')"><i class="fas fa-key"></i></button>
+                            <button type="button" class="btn btn-sm btn-outline-primary" onclick="viewCustomerDetails(this)" data-name="${username}" data-phone="${row.phone || '-'}" data-username="${username}" data-type="${type}" data-package="${packageName}" data-status="${status}" data-last-online="${lastOnline}" data-expiry="${expiry}" data-last-payment="${lastOnline}" data-router="${row.router || '-'}"><i class="fas fa-eye"></i></button>
+                            <button type="button" class="btn btn-sm btn-outline-warning" onclick="toggleCustomerStatus('${username}', 'suspend')"><i class="fas fa-user-slash"></i></button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" onclick="resetCustomerPassword('${username}')"><i class="fas fa-key"></i></button>
                         </div>
                     </td>
                 </tr>
@@ -573,7 +571,7 @@ document.addEventListener('DOMContentLoaded', function() {
             if ($.fn.DataTable.isDataTable(tableEl)) {
                 tableEl.DataTable().destroy();
             }
-            tableEl.DataTable({ responsive: false, scrollX: true, scrollCollapse: true, autoWidth: false, paging: true, searching: false, order: [[7, 'desc']], columnDefs: [{ targets: [0, -1], orderable: false, searchable: false }] });
+            tableEl.DataTable({ responsive: false, autoWidth: false, paging: true, searching: false, order: [[7, 'desc']], columnDefs: [{ targets: [0, -1], orderable: false, searchable: false }] });
         } catch (error) {
             console.error('Failed to load customers:', error);
         }

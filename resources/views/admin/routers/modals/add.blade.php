@@ -1,10 +1,10 @@
 <!-- Add Router Modal -->
 <div class="modal fade" id="addRouterModal" tabindex="-1">
-    <div class="modal-dialog modal-lg">
+    <div class="modal-dialog modal-lg modal-dialog-centered">
         <div class="modal-content">
             <div class="modal-header">
                 <h5 class="modal-title">Add New Router</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal" data-dismiss="modal"></button>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" data-dismiss="modal" aria-label="Close"></button>
             </div>
             <div class="modal-body">
                 <form id="addRouterForm">
@@ -61,24 +61,3 @@
         </div>
     </div>
 </div>
-
-@push('scripts')
-<script>
-    document.getElementById('saveRouter').addEventListener('click', function() {
-        // Mock save - in production, this would submit to backend
-        Swal.fire({
-            title: 'Saving...',
-            text: 'Testing connection to router',
-            allowOutsideClick: false,
-            didOpen: () => { Swal.showLoading(); }
-        });
-        
-        setTimeout(() => {
-            Swal.fire('Success!', 'Router added successfully', 'success')
-                .then(() => {
-                    location.reload();
-                });
-        }, 2000);
-    });
-</script>
-@endpush

@@ -4,22 +4,45 @@
  */
 
 document.addEventListener('DOMContentLoaded', function () {
-    
-    // ──────────────────────────────────────────────────────────────────────
-    // Flatpickr Date Picker Initialization
-    // ──────────────────────────────────────────────────────────────────────
+    const body = document.body;
+    const sidebarToggleClasses = ['sidebar-collapsed', 'sidebar-collapse'];
+
+    function notifyLayoutChanged() {
+        setTimeout(() => {
+            window.dispatchEvent(new Event('resize'));
+            document.dispatchEvent(new Event('cb:layout-changed'));
+
+            if (window.jQuery) {
+                window.jQuery(window).trigger('resize');
+            }
+        }, 260);
+    }
+
+    function setSidebarCollapsed(collapsed) {
+        sidebarToggleClasses.forEach(className => body.classList.toggle(className, collapsed));
+        if (toggleBtn) {
+            toggleBtn.setAttribute('aria-expanded', String(!collapsed));
+        }
+        notifyLayoutChanged();
+    }
+
+    function isSidebarCollapsed() {
+        return sidebarToggleClasses.some(className => body.classList.contains(className));
+    }
+
     if (window.flatpickr) {
         flatpickr('.date-picker', {
             dateFormat: 'Y-m-d',
-            allowInput: true
+            allowInput: true,
         });
     }
 
-    // User menu dropdown fallback (if Bootstrap JS isn't loaded)
     const userDropdownToggle = document.querySelector('.js-user-dropdown-toggle');
     const hasBootstrapDropdown = window.bootstrap && window.bootstrap.Dropdown;
+
     if (userDropdownToggle && !hasBootstrapDropdown) {
         const dropdownMenu = userDropdownToggle.nextElementSibling;
+
         const closeUserMenu = () => {
             if (!dropdownMenu) return;
             dropdownMenu.classList.remove('show');
@@ -30,8 +53,10 @@ document.addEventListener('DOMContentLoaded', function () {
         userDropdownToggle.addEventListener('click', function (e) {
             e.preventDefault();
             if (!dropdownMenu) return;
+
             const isOpen = dropdownMenu.classList.contains('show');
             closeUserMenu();
+
             if (!isOpen) {
                 dropdownMenu.classList.add('show');
                 userDropdownToggle.classList.add('show');
@@ -46,9 +71,6 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
-    // ──────────────────────────────────────────────────────────────────────
-    // Auto-dismiss Alerts
-    // ──────────────────────────────────────────────────────────────────────
     document.querySelectorAll('.alert-auto-dismiss').forEach(function (alert) {
         setTimeout(function () {
             alert.classList.add('fade');
@@ -56,62 +78,67 @@ document.addEventListener('DOMContentLoaded', function () {
         }, 5000);
     });
 
-    // ──────────────────────────────────────────────────────────────────────
-    // Sidebar Toggle Functionality
-    // ──────────────────────────────────────────────────────────────────────
     const toggleBtn = document.getElementById('sidebarToggle');
-    const body = document.body;
-    
-    // Create overlay for mobile
     const overlay = document.createElement('div');
     overlay.className = 'sidebar-overlay';
     document.body.appendChild(overlay);
-    
+
     if (toggleBtn) {
         toggleBtn.addEventListener('click', function () {
             const isMobile = window.innerWidth <= 992;
-            
+
             if (isMobile) {
-                // Mobile: toggle overlay + sidebar slide
                 body.classList.toggle('sidebar-mobile-open');
                 overlay.classList.toggle('active');
-            } else {
-                // Desktop: toggle sidebar collapse on body class
-                body.classList.toggle('sidebar-collapsed');
+                toggleBtn.setAttribute('aria-expanded', String(body.classList.contains('sidebar-mobile-open')));
+                notifyLayoutChanged();
+                return;
             }
-            
-            // Trigger resize for charts/tables after transition
-            setTimeout(() => {
-                $(window).trigger('resize');
-            }, 300);
+
+            setSidebarCollapsed(!isSidebarCollapsed());
         });
     }
-    
-    // Close sidebar when clicking overlay (mobile)
+
     overlay.addEventListener('click', function () {
         body.classList.remove('sidebar-mobile-open');
         overlay.classList.remove('active');
+        if (toggleBtn) {
+            toggleBtn.setAttribute('aria-expanded', 'false');
+        }
+        notifyLayoutChanged();
     });
-    
-    // Handle window resize
+
     window.addEventListener('resize', function () {
         if (window.innerWidth > 992) {
             overlay.classList.remove('active');
             body.classList.remove('sidebar-mobile-open');
+            if (toggleBtn) {
+                toggleBtn.setAttribute('aria-expanded', String(!isSidebarCollapsed()));
+            }
         }
     });
-    
-    // Auto-close treeview on mobile
+
+    document.querySelectorAll('.btn-close').forEach(button => {
+        if (!button.getAttribute('aria-label')) {
+            button.setAttribute('aria-label', 'Close');
+        }
+
+        if (!button.getAttribute('title')) {
+            button.setAttribute('title', 'Close');
+        }
+    });
+
     if (window.innerWidth <= 992) {
         document.querySelectorAll('.nav-treeview').forEach(menu => {
             menu.style.display = 'none';
         });
-        
-        document.querySelectorAll('.nav-link[data-widget="treeview"]').forEach(link => {
+
+        document.querySelectorAll('.has-treeview > .nav-link').forEach(link => {
             link.addEventListener('click', function (e) {
-                e.preventDefault();
                 const treeview = this.nextElementSibling;
+
                 if (treeview && treeview.classList.contains('nav-treeview')) {
+                    e.preventDefault();
                     treeview.style.display = treeview.style.display === 'block' ? 'none' : 'block';
                     this.parentElement.classList.toggle('menu-open');
                 }
@@ -119,19 +146,27 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
-    // Card collapse toggle (AdminLTE compatibility)
     document.querySelectorAll('[data-card-widget="collapse"]').forEach(button => {
         button.addEventListener('click', function () {
             const card = this.closest('.card');
             if (!card) return;
+
             card.classList.toggle('collapsed-card');
-            const body = card.querySelector('.card-body');
+
+            const cardBody = card.querySelector('.card-body');
             const footer = card.querySelector('.card-footer');
-            if (body) body.classList.toggle('d-none');
+            const icon = this.querySelector('i');
+            const isCollapsed = card.classList.contains('collapsed-card');
+
+            if (cardBody) cardBody.classList.toggle('d-none');
             if (footer) footer.classList.toggle('d-none');
+
+            if (icon) {
+                icon.classList.toggle('fa-minus', !isCollapsed);
+                icon.classList.toggle('fa-plus', isCollapsed);
+            }
+
+            notifyLayoutChanged();
         });
     });
-
 });
-
-

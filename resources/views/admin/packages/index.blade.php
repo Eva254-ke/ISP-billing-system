@@ -75,7 +75,7 @@
                     <th>MikroTik Profile</th>
                     <th>Status</th>
                     <th>Sales</th>
-                    <th>Actions</th>
+                    <th class="action-col">Actions</th>
                 </tr>
             </thead>
             <tbody>
@@ -104,12 +104,18 @@
                             </label>
                         </td>
                         <td>{{ number_format((int) ($package->total_sales ?? 0)) }}</td>
-                        <td>
+                        <td class="action-col">
                             <div class="btn-group">
                                 <button
-                                    class="btn btn-sm btn-outline-primary"
+                                    type="button"
+                                    class="btn btn-sm btn-outline-primary js-package-edit"
                                     title="Edit"
-                                    onclick="openEditPackageFromButton(this)"
+                                    aria-label="Edit package"
+                                    data-bs-toggle="modal"
+                                    data-bs-target="#editPackageModal"
+                                    data-toggle="modal"
+                                    data-target="#editPackageModal"
+                                    onclick="window.openEditPackageFromButton(this)"
                                     data-id="{{ $package->id }}"
                                     data-name="{{ $package->name }}"
                                     data-description="{{ $package->description ?? '' }}"
@@ -123,7 +129,7 @@
                                 >
                                     <i class="fas fa-edit"></i>
                                 </button>
-                                <button class="btn btn-sm btn-outline-danger" title="Delete" onclick="confirmDelete({{ (int) $package->id }}, '{{ addslashes($package->name) }}')">
+                                <button type="button" class="btn btn-sm btn-outline-danger" title="Delete" onclick="confirmDelete({{ (int) $package->id }}, '{{ addslashes($package->name) }}')">
                                     <i class="fas fa-trash"></i>
                                 </button>
                             </div>
@@ -430,7 +436,7 @@ function packageRequest(url, method, payload) {
     });
 }
 
-function savePackage() {
+window.savePackage = function savePackage() {
     const form = document.getElementById('addPackageForm');
     const tenantSelect = document.getElementById('packageTenantId');
     if (tenantSelect && getScopedTenantId() <= 0) {
@@ -460,9 +466,9 @@ function savePackage() {
         .catch((error) => {
             Swal.fire('Error', error.message || 'Failed to create package', 'error');
         });
-}
+};
 
-function updatePackage() {
+window.updatePackage = function updatePackage() {
     const form = document.getElementById('editPackageForm');
     const packageId = Number(form.querySelector('input[name="id"]').value || 0);
     if (!packageId) {
@@ -492,10 +498,10 @@ function updatePackage() {
         .catch((error) => {
             Swal.fire('Error', error.message || 'Failed to update package', 'error');
         });
-}
+};
 
 // Confirm delete
-function confirmDelete(packageId, packageName) {
+window.confirmDelete = function confirmDelete(packageId, packageName) {
     Swal.fire({
         title: 'Delete Package?',
         text: `Are you sure you want to delete "${packageName}"? This cannot be undone.`,
@@ -533,9 +539,9 @@ function confirmDelete(packageId, packageName) {
             });
         }
     });
-}
+};
 
-function openEditPackageFromButton(button) {
+window.openEditPackageFromButton = function openEditPackageFromButton(button) {
     const form = document.getElementById('editPackageForm');
     if (!form) return;
 
@@ -549,15 +555,7 @@ function openEditPackageFromButton(button) {
     form.querySelector('input[name="upload_speed"]').value = button.dataset.upload || '';
     form.querySelector('input[name="mikrotik_profile"]').value = button.dataset.profile || '';
     form.querySelector('input[name="is_active"]').checked = String(button.dataset.active || '0') === '1';
-
-    if (window.CBModal && window.CBModal.showById) {
-        window.CBModal.showById('editPackageModal');
-    } else if (window.bootstrap && window.bootstrap.Modal) {
-        new bootstrap.Modal(document.getElementById('editPackageModal')).show();
-    } else if (window.jQuery && window.jQuery.fn && window.jQuery.fn.modal) {
-        window.jQuery('#editPackageModal').modal('show');
-    }
-}
+};
 
 function bindStatusToggles() {
     document.querySelectorAll('.switch input[data-id]').forEach(toggle => {
@@ -592,7 +590,7 @@ bindStatusToggles();
 @push('scripts')
 <script>
 document.addEventListener('DOMContentLoaded', function() {
-    const tableEl = $('.data-table');
+    const tableEl = window.jQuery ? window.jQuery('.data-table') : null;
     const tbody = document.querySelector('.data-table tbody');
     const statsBoxes = document.querySelectorAll('.row.mb-4 .small-box .inner h3');
 
@@ -620,14 +618,6 @@ document.addEventListener('DOMContentLoaded', function() {
             .replace(/>/g, '&gt;');
     }
 
-    function bindEditButtons() {
-        document.querySelectorAll('.edit-package-btn').forEach((btn) => {
-            btn.addEventListener('click', function() {
-                openEditPackageFromButton(this);
-            });
-        });
-    }
-
     function renderRows(rows) {
         if (!tbody) return;
         if (!rows.length) {
@@ -647,12 +637,15 @@ document.addEventListener('DOMContentLoaded', function() {
         }
 
         tbody.innerHTML = rows.map((row, index) => `
-            <tr>
-                <td><strong>${row.name || '-'}</strong></td>
+            <tr class="${row.is_active ? '' : 'text-muted'}">
+                <td>
+                    <strong>${escapeAttr(row.name || '-')}</strong>
+                    <div class="text-muted small">${escapeAttr(row.description || 'No description')}</div>
+                </td>
                 <td>${formatDuration(row)}</td>
                 <td><strong>KES ${Number(row.price || 0).toLocaleString()}</strong></td>
                 <td><span class="text-muted">${Number(row.download_limit_mbps || 0) || '∞'} Mbps ↓ / ${Number(row.upload_limit_mbps || 0) || '∞'} Mbps ↑</span></td>
-                <td><code>${row.mikrotik_profile_name || '-'}</code></td>
+                <td><code>${escapeAttr(row.mikrotik_profile_name || '-')}</code></td>
                 <td>
                     <label class="switch">
                         <input type="checkbox" data-id="${row.id || 0}" ${row.is_active ? 'checked' : ''}>
@@ -660,10 +653,18 @@ document.addEventListener('DOMContentLoaded', function() {
                     </label>
                 </td>
                 <td>${Number(row.total_sales || 0).toLocaleString()}</td>
-                <td>
+                <td class="action-col">
                     <div class="btn-group">
                         <button
-                            class="btn btn-sm btn-outline-primary edit-package-btn"
+                            type="button"
+                            class="btn btn-sm btn-outline-primary js-package-edit"
+                            title="Edit"
+                            aria-label="Edit package"
+                            data-bs-toggle="modal"
+                            data-bs-target="#editPackageModal"
+                            data-toggle="modal"
+                            data-target="#editPackageModal"
+                            onclick="window.openEditPackageFromButton(this)"
                             data-id="${row.id || 0}"
                             data-name="${escapeAttr(row.name)}"
                             data-description="${escapeAttr(row.description)}"
@@ -675,14 +676,13 @@ document.addEventListener('DOMContentLoaded', function() {
                             data-profile="${escapeAttr(row.mikrotik_profile_name)}"
                             data-active="${row.is_active ? 1 : 0}"
                         ><i class="fas fa-edit"></i></button>
-                        <button class="btn btn-sm btn-outline-danger" onclick="confirmDelete(${row.id || 0}, '${(row.name || '').replace(/'/g, "\\'")}')"><i class="fas fa-trash"></i></button>
+                        <button type="button" class="btn btn-sm btn-outline-danger" title="Delete" onclick="confirmDelete(${row.id || 0}, '${(row.name || '').replace(/'/g, "\\'")}')"><i class="fas fa-trash"></i></button>
                     </div>
                 </td>
             </tr>
         `).join('');
 
         bindStatusToggles();
-        bindEditButtons();
     }
 
     function renderStats(stats) {
@@ -704,10 +704,12 @@ document.addEventListener('DOMContentLoaded', function() {
             renderRows(Array.isArray(rowsPayload?.data) ? rowsPayload.data : []);
             renderStats(statsPayload || {});
 
-            if ($.fn.DataTable.isDataTable(tableEl)) {
+            if (tableEl && $.fn.DataTable.isDataTable(tableEl)) {
                 tableEl.DataTable().destroy();
             }
-            tableEl.DataTable({ responsive: true, autoWidth: false, paging: true, searching: true, order: [[2, 'asc']] });
+            if (tableEl) {
+                tableEl.DataTable({ responsive: true, autoWidth: false, paging: true, searching: true, order: [[2, 'asc']] });
+            }
 
             const footerCount = document.querySelector('.card-footer .float-end');
             if (footerCount) {

@@ -294,7 +294,7 @@
                     @endphp
                     <tr>
                         <td><input type="checkbox" class="client-checkbox" value="{{ $session->id }}"></td>
-                        <td class="action-col">
+                        <td>
                             <strong>{{ $username }}</strong>
                             <div class="text-muted small">{{ $session->phone ?? 'N/A' }}</div>
                         </td>
@@ -307,11 +307,11 @@
                             <div class="fw-semibold">{{ optional($session->expires_at)->format('Y-m-d H:i') ?? '-' }}</div>
                             <span class="badge bg-warning text-dark">{{ optional($session->expires_at)->diffForHumans() ?? '-' }}</span>
                         </td>
-                        <td class="action-col">
+                        <td>
                             <div class="fw-semibold text-success">{{ optional($session->started_at)->diffForHumans(null, true) ?? '-' }}</div>
                             <div class="text-muted small">Last online: {{ optional($session->last_activity_at ?? $session->started_at)->diffForHumans() ?? '-' }}</div>
                         </td>
-                        <td class="action-col">
+                        <td>
                             <div class="progress" style="height: 6px; width: 120px;">
                                 <div class="progress-bar bg-success" style="width: {{ min(100, (int) ($session->progress_percentage ?? 0)) }}%"></div>
                             </div>
@@ -1091,9 +1091,9 @@ document.addEventListener('DOMContentLoaded', function() {
 
         series: [
 
-            { name: 'Download',  [80, 120, 180, 250, 220, 320, 280, 380, 350, 450, 420, 520] },
+            { name: 'Download', data: [80, 120, 180, 250, 220, 320, 280, 380, 350, 450, 420, 520] },
 
-            { name: 'Upload',  [30, 45, 60, 85, 75, 110, 95, 130, 120, 160, 145, 185] }
+            { name: 'Upload', data: [30, 45, 60, 85, 75, 110, 95, 130, 120, 160, 145, 185] }
 
         ],
 
@@ -1166,8 +1166,6 @@ $(document).ready(function() {
     }
     tableEl.DataTable({
         responsive: false,
-        scrollX: true,
-        scrollCollapse: true,
         autoWidth: false,
         paging: true,
         searching: true,
@@ -1283,7 +1281,7 @@ document.addEventListener('DOMContentLoaded', function() {
             if ($.fn.DataTable.isDataTable(tableEl)) {
                 tableEl.DataTable().destroy();
             }
-            tableEl.DataTable({ responsive: false, scrollX: true, scrollCollapse: true, autoWidth: false, paging: true, searching: false, order: [[8, 'desc']], columnDefs: [{ targets: [0, -1], orderable: false, searchable: false }] });
+            tableEl.DataTable({ responsive: false, autoWidth: false, paging: true, searching: false, order: [[8, 'desc']], columnDefs: [{ targets: [0, -1], orderable: false, searchable: false }] });
 
             if (updatedAt) {
                 updatedAt.textContent = new Date().toLocaleTimeString('en-KE');

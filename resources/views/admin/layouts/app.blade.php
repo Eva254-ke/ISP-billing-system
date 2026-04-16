@@ -13,145 +13,149 @@
 
     <!-- Vite Assets -->
     @include('partials.vite-assets', ['entries' => ['resources/css/app.css', 'resources/js/app.js']])
-    <link rel="stylesheet" href="{{ asset('css/admin-overrides.css') }}?v=20260319-2">
+    <link rel="stylesheet" href="{{ asset('css/admin-overrides.css') }}?v=20260416-6">
     <!-- Font Awesome CDN fallback (prevents missing icons showing as squares if local build assets fail) -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" integrity="sha512-+4z5X5NQx1mENxvupwJzU3N4v2d8OmiW9zZVcGiGJkV8OjFg2p/X6s6lpxWQYa2Zs8r7K1QUqYEFIF2xqg8RFw==" crossorigin="anonymous" referrerpolicy="no-referrer">
 </head>
 <body class="hold-transition sidebar-mini layout-fixed layout-navbar-fixed">
+    @php
+        $currentUser = auth()->user();
+        $displayName = trim((string) ($currentUser?->full_name ?: $currentUser?->name ?: $currentUser?->email ?: 'Account'));
+        $roleLabel = $currentUser?->role_label ?: 'Administrator';
+        $tenantName = $currentUser?->tenant?->name;
+        $sidebarBrand = config('app.name', 'CloudBridge Networks');
+    @endphp
     <div class="wrapper">
 
-        <!-- Navbar (Edge-to-Edge, Fixed Top) -->
-        <nav class="main-header navbar navbar-expand navbar-white navbar-light border-bottom">
-            <!-- Left: Collapse Toggle + Logo -->
-            <ul class="navbar-nav">
-                <li class="nav-item">
-                    <a class="nav-link" id="sidebarToggle" href="javascript:void(0)">
-                        <i class="fas fa-bars"></i>
-                    </a>
-                </li>
-                <li class="nav-item d-md-none">
-                    <a href="{{ route('admin.dashboard') }}" class="nav-link brand-logo">
-                        <strong>CloudBridge</strong> Networks
-                    </a>
-                </li>
-            </ul>
+        <!-- Navbar -->
+        <nav class="main-header navbar navbar-expand border-bottom">
+            <div class="shell-header-start">
+                <button class="nav-link shell-toggle" id="sidebarToggle" type="button" aria-label="Toggle navigation" aria-controls="mainSidebar" aria-expanded="true">
+                    <i class="fas fa-bars"></i>
+                </button>
 
-            <!-- Right: User Menu -->
-            <ul class="navbar-nav ms-auto ml-auto align-items-center navbar-user-menu">
-                <li class="nav-item dropdown">
-                    <a class="nav-link dropdown-toggle js-user-dropdown-toggle" id="userMenuDropdown" data-bs-toggle="dropdown" data-toggle="dropdown" href="#" role="button" aria-haspopup="true" aria-expanded="false">
-                        <i class="far fa-user me-1"></i>
-                        <span class="d-none d-sm-inline">Admin</span>
-                    </a>
-                    <div class="dropdown-menu dropdown-menu-lg dropdown-menu-end dropdown-menu-right" aria-labelledby="userMenuDropdown">
-                        <a href="#" class="dropdown-item">
-                            <i class="fas fa-user me-2"></i> Profile
+                <a href="{{ route('admin.dashboard') }}" class="shell-brand" aria-label="CloudBridge Networks">
+                    <span class="shell-brand__mark">
+                        <i class="fas fa-cloud"></i>
+                    </span>
+                    <span class="shell-brand__copy">
+                        <span class="shell-brand__name">CloudBridge</span>
+                        <span class="shell-brand__sub">Networks</span>
+                    </span>
+                </a>
+            </div>
+
+            <div class="shell-header-end">
+                <ul class="navbar-nav align-items-center navbar-user-menu">
+                    <li class="nav-item dropdown">
+                        <a class="nav-link dropdown-toggle js-user-dropdown-toggle" id="userMenuDropdown" data-bs-toggle="dropdown" data-toggle="dropdown" href="#" role="button" aria-haspopup="true" aria-expanded="false">
+                            <i class="far fa-user-circle me-1"></i>
+                            <span class="d-none d-sm-inline">{{ $displayName }}</span>
                         </a>
-                        <div class="dropdown-divider"></div>
-                        <a href="{{ route('logout') }}" class="dropdown-item"
-                           onclick="event.preventDefault(); document.getElementById('logout-form').submit();">
-                            <i class="fas fa-sign-out-alt me-2"></i> Logout
-                        </a>
-                        <form id="logout-form" action="{{ route('logout') }}" method="POST" class="d-none">
-                            @csrf
-                        </form>
-                    </div>
-                </li>
-            </ul>
+                        <div class="dropdown-menu dropdown-menu-end dropdown-menu-right" aria-labelledby="userMenuDropdown">
+                            <div class="dropdown-item-text navbar-user-menu__summary">
+                                <strong class="navbar-user-menu__name">{{ $displayName }}</strong>
+                                <span class="navbar-user-menu__meta">{{ $roleLabel }}</span>
+                                @if($tenantName)
+                                    <span class="navbar-user-menu__meta">{{ $tenantName }}</span>
+                                @endif
+                            </div>
+                            <div class="dropdown-divider"></div>
+                            <a href="{{ route('logout') }}" class="dropdown-item"
+                               onclick="event.preventDefault(); document.getElementById('logout-form').submit();">
+                                <i class="fas fa-sign-out-alt me-2"></i> Logout
+                            </a>
+                            <form id="logout-form" action="{{ route('logout') }}" method="POST" class="d-none">
+                                @csrf
+                            </form>
+                        </div>
+                    </li>
+                </ul>
+            </div>
         </nav>
         <!-- /.navbar -->
 
         <!-- Sidebar (Below Navbar, Collapsible) -->
         <aside class="main-sidebar sidebar-dark-primary elevation-4" id="mainSidebar">
-            <!-- Brand (Mobile Only) -->
-            <a href="{{ route('admin.dashboard') }}" class="brand-link">
-                <span class="brand-text">CloudBridge Networks</span>
-            </a>
-
-            <!-- Sidebar -->
             <div class="sidebar">
-                <!-- Menu -->
-                <nav class="mt-2">
+                <div class="sidebar-brand">
+                    <a href="{{ route('admin.dashboard') }}" class="sidebar-brand__link" aria-label="{{ $sidebarBrand }}">
+                        <span class="sidebar-brand__name">{{ $sidebarBrand }}</span>
+                        <span class="sidebar-brand__sub">Admin Console</span>
+                    </a>
+                </div>
+
+                <nav class="mt-2 sidebar-nav-wrap">
                     <ul class="nav nav-pills nav-sidebar flex-column" data-widget="treeview" role="menu">
-                        
-                        <!-- Dashboard -->
                         <li class="nav-item">
                             <a href="{{ route('admin.dashboard') }}" 
                                class="nav-link {{ request()->routeIs('admin.dashboard') ? 'active' : '' }}">
-                                <p class="mb-0">Dashboard</p>
+                                <p class="mb-0"><span>Dashboard</span></p>
                             </a>
                         </li>
 
-                        <!-- Routers -->
                         <li class="nav-item">
                             <a href="{{ route('admin.routers.index') }}" 
                                class="nav-link {{ request()->routeIs('admin.routers.*') ? 'active' : '' }}">
-                                <p class="mb-0">Routers</p>
+                                <p class="mb-0"><span>Routers</span></p>
                             </a>
                         </li>
 
-                        <!-- Packages -->
                         <li class="nav-item">
                             <a href="{{ route('admin.packages.index') }}" 
                                class="nav-link {{ request()->routeIs('admin.packages.*') ? 'active' : '' }}">
-                                <p class="mb-0">Packages</p>
+                                <p class="mb-0"><span>Packages</span></p>
                             </a>
                         </li>
 
-                        <!-- Vouchers -->
                         <li class="nav-item">
                             <a href="{{ route('admin.vouchers.index') }}" 
                                class="nav-link {{ request()->routeIs('admin.vouchers.*') ? 'active' : '' }}">
-                                <p class="mb-0">Vouchers</p>
+                                <p class="mb-0"><span>Vouchers</span></p>
                             </a>
                         </li>
 
-                        <!-- Payments -->
                         <li class="nav-item">
                             <a href="{{ route('admin.payments.index') }}" 
                                class="nav-link {{ request()->routeIs('admin.payments.*') ? 'active' : '' }}">
-                                <p class="mb-0">Payments</p>
+                                <p class="mb-0"><span>Payments</span></p>
                             </a>
                         </li>
 
-                        <!-- Clients Dropdown -->
                         <li class="nav-item has-treeview {{ request()->is('admin/clients*') ? 'menu-open' : '' }}">
-                            <a href="{{ route('admin.clients.hotspot') }}" class="nav-link {{ request()->is('admin/clients*') ? 'active' : '' }}">
+                            <a href="{{ route('admin.clients.hotspot') }}" class="nav-link {{ request()->is('admin/clients*') ? 'active' : '' }}" aria-expanded="{{ request()->is('admin/clients*') ? 'true' : 'false' }}">
                                 <p>
-                                    Clients
-                                    <i class="right fas fa-angle-left"></i>
+                                    <span>Clients</span>
                                 </p>
                             </a>
                             <ul class="nav nav-treeview">
                                 <li class="nav-item">
                                     <a href="{{ route('admin.clients.hotspot') }}" 
                                        class="nav-link {{ request()->routeIs('admin.clients.hotspot') ? 'active' : '' }}">
-                                        <p class="mb-0">Hotspot Clients</p>
+                                        <p class="mb-0"><span>Hotspot Clients</span></p>
                                     </a>
                                 </li>
                                 <li class="nav-item">
                                     <a href="{{ route('admin.clients.pppoe') }}" 
                                        class="nav-link {{ request()->routeIs('admin.clients.pppoe') ? 'active' : '' }}">
-                                        <p class="mb-0">PPPoE Clients</p>
+                                        <p class="mb-0"><span>PPPoE Clients</span></p>
                                     </a>
                                 </li>
                                 <li class="nav-item">
                                     <a href="{{ route('admin.clients.customers') }}" 
                                        class="nav-link {{ request()->routeIs('admin.clients.customers') ? 'active' : '' }}">
-                                        <p class="mb-0">All Customers</p>
+                                        <p class="mb-0"><span>All Customers</span></p>
                                     </a>
                                 </li>
                             </ul>
                         </li>
 
-                        <!-- Settings -->
                         <li class="nav-item">
                             <a href="{{ route('admin.settings') }}" 
                                class="nav-link {{ request()->routeIs('admin.settings') ? 'active' : '' }}">
-                                <p class="mb-0">Settings</p>
+                                <p class="mb-0"><span>Settings</span></p>
                             </a>
                         </li>
-
                     </ul>
                 </nav>
             </div>

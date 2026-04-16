@@ -4,12 +4,11 @@
 
 @section('content')
 <!-- Stats Cards Row -->
-<div class="row">
-    <!-- Revenue Today -->
-    <div class="col-lg-3 col-6">
+<div class="row g-4 mb-4">
+    <div class="col-xl-3 col-sm-6">
         <div class="small-box bg-primary position-relative">
             <div class="inner">
-                <h3>KES 12,500</h3>
+                <h3 id="revenueTodayValue">KES {{ number_format((float) ($stats['revenue_today'] ?? 0), 0) }}</h3>
                 <p>Revenue Today</p>
             </div>
             <div class="icon">
@@ -22,11 +21,10 @@
         </div>
     </div>
 
-    <!-- Active Sessions -->
-    <div class="col-lg-3 col-6">
+    <div class="col-xl-3 col-sm-6">
         <div class="small-box bg-success position-relative">
             <div class="inner">
-                <h3>234</h3>
+                <h3 id="activeSessionsValue">{{ number_format((int) ($stats['active_sessions'] ?? 0)) }}</h3>
                 <p>Active Sessions</p>
             </div>
             <div class="icon">
@@ -39,11 +37,10 @@
         </div>
     </div>
 
-    <!-- Total Packages -->
-    <div class="col-lg-3 col-6">
+    <div class="col-xl-3 col-sm-6">
         <div class="small-box bg-warning position-relative">
             <div class="inner">
-                <h3>12</h3>
+                <h3 id="packagesTotalValue">{{ number_format((int) ($stats['packages_total'] ?? 0)) }}</h3>
                 <p>Packages</p>
             </div>
             <div class="icon">
@@ -56,11 +53,10 @@
         </div>
     </div>
 
-    <!-- Routers Online -->
-    <div class="col-lg-3 col-6">
+    <div class="col-xl-3 col-sm-6">
         <div class="small-box bg-danger position-relative">
             <div class="inner">
-                <h3>3/4</h3>
+                <h3 id="routersOnlineValue">{{ number_format((int) ($stats['routers_online'] ?? 0)) }}/{{ number_format((int) ($stats['routers_total'] ?? 0)) }}</h3>
                 <p>Routers Online</p>
             </div>
             <div class="icon">
@@ -75,47 +71,46 @@
 </div>
 
 <!-- Charts Row -->
-<div class="row">
-    <!-- Revenue Chart -->
-    <div class="col-md-8">
-        <div class="card card-primary">
+<div class="row g-4 mb-4">
+    <div class="col-xl-8">
+        <div class="card card-primary dashboard-chart-card">
             <div class="card-header">
                 <h3 class="card-title">
                     <i class="fas fa-chart-area me-2"></i>
                     Revenue (Last 7 Days)
                 </h3>
                 <div class="card-tools">
-                    <button type="button" class="btn btn-tool" data-card-widget="collapse">
+                    <button type="button" class="btn btn-tool" data-card-widget="collapse" aria-label="Collapse revenue chart">
                         <i class="fas fa-minus"></i>
                     </button>
                 </div>
             </div>
             <div class="card-body">
-                <div id="revenueChart" style="min-height: 350px;"></div>
+                <div id="revenueChart" class="dashboard-chart-shell"></div>
             </div>
             <div class="card-footer">
-                <div class="row">
+                <div class="row g-3">
                     <div class="col-sm-3 col-6">
                         <div class="description-block border-end">
-                            <h5 class="description-header">KES 45,200</h5>
+                            <h5 class="description-header" id="revenueWeekValue">KES {{ number_format((float) ($stats['revenue_week'] ?? 0), 0) }}</h5>
                             <span class="description-text">This Week</span>
                         </div>
                     </div>
                     <div class="col-sm-3 col-6">
                         <div class="description-block border-end">
-                            <h5 class="description-header">+15%</h5>
-                            <span class="description-text">vs Last Week</span>
+                            <h5 class="description-header" id="revenueAverageValue">KES {{ number_format((float) (($stats['revenue_week'] ?? 0) / 7), 0) }}</h5>
+                            <span class="description-text">Daily Average</span>
                         </div>
                     </div>
                     <div class="col-sm-3 col-6">
                         <div class="description-block border-end">
-                            <h5 class="description-header">412</h5>
+                            <h5 class="description-header" id="transactionsWeekValue">0</h5>
                             <span class="description-text">Transactions</span>
                         </div>
                     </div>
                     <div class="col-sm-3 col-6">
                         <div class="description-block">
-                            <h5 class="description-header">98%</h5>
+                            <h5 class="description-header" id="successRateWeekValue">0%</h5>
                             <span class="description-text">Success Rate</span>
                         </div>
                     </div>
@@ -124,9 +119,8 @@
         </div>
     </div>
 
-    <!-- Package Distribution -->
-    <div class="col-md-4">
-        <div class="card card-primary">
+    <div class="col-xl-4">
+        <div class="card card-primary dashboard-chart-card">
             <div class="card-header">
                 <h3 class="card-title">
                     <i class="fas fa-chart-pie me-2"></i>
@@ -134,14 +128,14 @@
                 </h3>
             </div>
             <div class="card-body">
-                <div id="packageChart" style="min-height: 300px;"></div>
+                <div id="packageChart" class="dashboard-chart-shell chart-compact"></div>
             </div>
         </div>
     </div>
 </div>
 
 <!-- Recent Activity Row -->
-<div class="row">
+<div class="row g-4">
     <!-- Recent Payments -->
     <div class="col-md-6">
         <div class="card">
@@ -224,7 +218,7 @@
                                 <i class="fas fa-circle {{ $iconClass }} fa-2x"></i>
                             </div>
                             <div class="product-info">
-                                <a href="#" class="product-title">{{ $router->name }}
+                                <a href="{{ route('admin.routers.show', $router) }}" class="product-title">{{ $router->name }}
                                     <span class="badge {{ $badgeClass }} float-end">{{ ucfirst($status) }}</span></a>
                                 <span class="product-description">{{ $router->ip_address }} • {{ (int) ($router->active_sessions ?? 0) }} users</span>
                             </div>
@@ -301,13 +295,25 @@
         const revenueLabels = (summary.weekly_revenue ?? []).map(day => day.label || '');
         const resolvedRevenueData = revenueData.length ? revenueData : [0, 0, 0, 0, 0, 0, 0];
         const resolvedRevenueLabels = revenueLabels.length ? revenueLabels : ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+        const revenueTodayValue = document.getElementById('revenueTodayValue');
+        const activeSessionsValue = document.getElementById('activeSessionsValue');
+        const packagesTotalValue = document.getElementById('packagesTotalValue');
+        const routersOnlineValue = document.getElementById('routersOnlineValue');
 
-        const cards = document.querySelectorAll('.small-box .inner h3');
-        if (cards.length >= 4) {
-            cards[0].textContent = `KES ${Number(summary.revenue_today || 0).toLocaleString()}`;
-            cards[1].textContent = Number(summary.active_sessions || 0).toLocaleString();
-            cards[2].textContent = Number(summary.packages_total || 0).toLocaleString();
-            cards[3].textContent = `${Number(summary.routers_online || 0)}/${Number(summary.routers_total || 0)}`;
+        if (revenueTodayValue) {
+            revenueTodayValue.textContent = `KES ${Number(summary.revenue_today || 0).toLocaleString()}`;
+        }
+
+        if (activeSessionsValue) {
+            activeSessionsValue.textContent = Number(summary.active_sessions || 0).toLocaleString();
+        }
+
+        if (packagesTotalValue) {
+            packagesTotalValue.textContent = Number(summary.packages_total || 0).toLocaleString();
+        }
+
+        if (routersOnlineValue) {
+            routersOnlineValue.textContent = `${Number(summary.routers_online || 0)}/${Number(summary.routers_total || 0)}`;
         }
 
         const liveRouterPayload = await fetchJson('/admin/api/routers/status?live=1', {
@@ -316,10 +322,10 @@
             data: [],
         });
 
-        if (cards.length >= 4) {
+        if (routersOnlineValue) {
             const liveOnline = Number(liveRouterPayload?.summary?.online ?? 0);
             const liveTotal = Number(liveRouterPayload?.summary?.total ?? 0);
-            cards[3].textContent = `${liveOnline}/${liveTotal}`;
+            routersOnlineValue.textContent = `${liveOnline}/${liveTotal}`;
         }
 
         const recentPaymentsBody = document.querySelector('.table.table-hover.table-striped tbody');
@@ -376,7 +382,7 @@
                                 <i class="fas fa-circle ${isOnline ? 'text-success' : 'text-danger'} fa-2x"></i>
                             </div>
                             <div class="product-info">
-                                <a href="#" class="product-title">${escapeHtml(router.name || 'Router')}
+                                <a href="/admin/routers/${Number(router.id || 0)}" class="product-title">${escapeHtml(router.name || 'Router')}
                                     <span class="badge ${isOnline ? 'bg-success' : 'bg-danger'} float-end">${escapeHtml(status.charAt(0).toUpperCase() + status.slice(1))}</span></a>
                                 <span class="product-description">${escapeHtml(router.ip || '-')} • ${Number(router.users || 0).toLocaleString()} users</span>
                             </div>
@@ -386,45 +392,86 @@
             }
         }
 
-        const footerBlocks = document.querySelectorAll('.description-block .description-header');
-        if (footerBlocks.length >= 4) {
-            footerBlocks[0].textContent = `KES ${Number(summary.revenue_week || 0).toLocaleString()}`;
-            footerBlocks[2].textContent = Number(summary.transactions_week || 0).toLocaleString();
-            footerBlocks[3].textContent = `${Number(summary.success_rate_week || 0)}%`;
+        const revenueWeekValue = document.getElementById('revenueWeekValue');
+        const revenueAverageValue = document.getElementById('revenueAverageValue');
+        const transactionsWeekValue = document.getElementById('transactionsWeekValue');
+        const successRateWeekValue = document.getElementById('successRateWeekValue');
+        const revenueWeek = Number(summary.revenue_week || 0);
+        const revenueAverage = revenueWeek > 0 ? Math.round(revenueWeek / 7) : 0;
+
+        if (revenueWeekValue) {
+            revenueWeekValue.textContent = `KES ${revenueWeek.toLocaleString()}`;
+        }
+
+        if (revenueAverageValue) {
+            revenueAverageValue.textContent = `KES ${revenueAverage.toLocaleString()}`;
+        }
+
+        if (transactionsWeekValue) {
+            transactionsWeekValue.textContent = Number(summary.transactions_week || 0).toLocaleString();
+        }
+
+        if (successRateWeekValue) {
+            successRateWeekValue.textContent = `${Number(summary.success_rate_week || 0)}%`;
         }
 
         const revenueMax = Math.max(2000, Math.ceil((Math.max(...resolvedRevenueData) + 1500) / 1000) * 1000);
-        new ApexCharts(document.querySelector("#revenueChart"), {
-            chart: {
-                type: 'area',
-                height: 350,
-                toolbar: { show: false },
-                animations: { enabled: true },
-                foreColor: '#E2E8F0',
-                dropShadow: { enabled: true, top: 6, left: 0, blur: 12, opacity: 0.15 }
-            },
-            noData: { text: 'No revenue yet', style: { color: '#E2E8F0' } },
-            series: [{ name: 'Revenue (KES)', data: resolvedRevenueData }],
-            colors: ['#7DD3FC'],
-            dataLabels: { enabled: false },
-            stroke: { curve: 'smooth', width: 3 },
-            markers: { size: 4, strokeWidth: 0, hover: { size: 6 } },
-            xaxis: {
-                categories: resolvedRevenueLabels,
-                labels: { style: { colors: '#E2E8F0', fontSize: '12px' } },
-                axisBorder: { show: false }, axisTicks: { show: false }
-            },
-            yaxis: {
-                min: 0, max: revenueMax, tickAmount: 5, forceNiceScale: true,
-                labels: { formatter: val => 'KES ' + val.toLocaleString(), style: { colors: '#E2E8F0', fontSize: '12px' } }
-            },
-            fill: {
-                type: 'gradient',
-                gradient: { shadeIntensity: 0.6, opacityFrom: 0.55, opacityTo: 0.08, stops: [0, 90, 100] }
-            },
-            grid: { borderColor: 'rgba(226, 232, 240, 0.2)', strokeDashArray: 4, padding: { left: 8, right: 8 } },
-            tooltip: { theme: 'dark', y: { formatter: val => 'KES ' + val.toLocaleString() } }
-        }).render();
+        const revenueChartEl = document.querySelector('#revenueChart');
+        let revenueChart = null;
+
+        if (revenueChartEl) {
+            revenueChart = new ApexCharts(revenueChartEl, {
+                chart: {
+                    type: 'area',
+                    height: 320,
+                    parentHeightOffset: 0,
+                    toolbar: { show: false },
+                    zoom: { enabled: false },
+                    animations: { enabled: true },
+                    foreColor: '#E2E8F0',
+                    dropShadow: { enabled: true, top: 6, left: 0, blur: 12, opacity: 0.15 },
+                },
+                noData: { text: 'No revenue yet', style: { color: '#E2E8F0' } },
+                series: [{ name: 'Revenue (KES)', data: resolvedRevenueData }],
+                colors: ['#7DD3FC'],
+                dataLabels: { enabled: false },
+                stroke: { curve: 'smooth', width: 3 },
+                markers: { size: 3, strokeWidth: 0, hover: { size: 5 } },
+                xaxis: {
+                    categories: resolvedRevenueLabels,
+                    crosshairs: { show: false },
+                    labels: { style: { colors: '#E2E8F0', fontSize: '12px' } },
+                    axisBorder: { show: false },
+                    axisTicks: { show: false },
+                },
+                yaxis: {
+                    min: 0,
+                    max: revenueMax,
+                    tickAmount: 5,
+                    forceNiceScale: true,
+                    labels: {
+                        formatter: val => 'KES ' + val.toLocaleString(),
+                        style: { colors: '#E2E8F0', fontSize: '12px' },
+                    },
+                },
+                fill: {
+                    type: 'gradient',
+                    gradient: { shadeIntensity: 0.6, opacityFrom: 0.55, opacityTo: 0.08, stops: [0, 90, 100] },
+                },
+                grid: {
+                    borderColor: 'rgba(226, 232, 240, 0.2)',
+                    strokeDashArray: 4,
+                    padding: { left: 6, right: 6, top: 4, bottom: 0 },
+                },
+                tooltip: {
+                    theme: 'dark',
+                    intersect: false,
+                    y: { formatter: val => 'KES ' + val.toLocaleString() },
+                },
+            });
+
+            revenueChart.render();
+        }
 
         // -------- Package Sales Donut --------
         const packageStatsPayload = await fetchJson('/admin/api/packages/stats', {
@@ -440,34 +487,61 @@
             : [0];
         const resolvedPackageLabels = totalPackages > 0 ? packageLabels : ['No Sales'];
 
-        new ApexCharts(document.querySelector("#packageChart"), {
-            chart: { type: 'donut', height: 300, toolbar: { show: false }, foreColor: '#E2E8F0' },
-            noData: { text: 'No package sales yet', style: { color: '#E2E8F0' } },
-            series: packageData,
-            labels: resolvedPackageLabels,
-            colors: ['#38BDF8', '#22D3EE', '#34D399', '#FBBF24', '#F87171'],
-            dataLabels: { enabled: false },
-            legend: { position: 'bottom', labels: { colors: '#E2E8F0' }, markers: { width: 10, height: 10, radius: 12 } },
-            plotOptions: {
-                pie: {
-                    donut: {
-                        size: '65%',
-                        labels: {
-                            show: true,
-                            name: { color: '#E2E8F0' },
-                            value: { color: '#F8FAFC', fontSize: '22px', fontWeight: 700, formatter: val => `${val}%` },
-                            total: {
+        const packageChartEl = document.querySelector('#packageChart');
+        let packageChart = null;
+
+        if (packageChartEl) {
+            packageChart = new ApexCharts(packageChartEl, {
+                chart: {
+                    type: 'donut',
+                    height: 280,
+                    parentHeightOffset: 0,
+                    toolbar: { show: false },
+                    foreColor: '#E2E8F0',
+                },
+                noData: { text: 'No package sales yet', style: { color: '#E2E8F0' } },
+                series: packageData,
+                labels: resolvedPackageLabels,
+                colors: ['#38BDF8', '#22D3EE', '#34D399', '#FBBF24', '#F87171'],
+                dataLabels: { enabled: false },
+                legend: {
+                    position: 'bottom',
+                    labels: { colors: '#E2E8F0' },
+                    markers: { width: 10, height: 10, radius: 12 },
+                },
+                plotOptions: {
+                    pie: {
+                        donut: {
+                            size: '65%',
+                            labels: {
                                 show: true,
-                                label: 'Total Sales',
-                                color: '#CBD5E1',
-                                formatter: function() { return totalPackages; }
-                            }
-                        }
-                    }
-                }
-            },
-            tooltip: { theme: 'dark' }
-        }).render();
+                                name: { color: '#E2E8F0' },
+                                value: { color: '#F8FAFC', fontSize: '22px', fontWeight: 700, formatter: val => `${val}%` },
+                                total: {
+                                    show: true,
+                                    label: 'Total Sales',
+                                    color: '#CBD5E1',
+                                    formatter: function() { return totalPackages; },
+                                },
+                            },
+                        },
+                    },
+                },
+                tooltip: { theme: 'dark' },
+            });
+
+            packageChart.render();
+        }
+
+        document.addEventListener('cb:layout-changed', function () {
+            if (revenueChart) {
+                revenueChart.updateOptions({ chart: { height: 320 } }, false, false);
+            }
+
+            if (packageChart) {
+                packageChart.updateOptions({ chart: { height: 280 } }, false, false);
+            }
+        });
     });
 </script>
 @endpush

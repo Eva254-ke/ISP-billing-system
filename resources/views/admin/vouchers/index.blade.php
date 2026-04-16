@@ -102,7 +102,7 @@
                     <th>Used At</th>
                     <th>Expires</th>
                     <th>Status</th>
-                    <th>Actions</th>
+                    <th class="action-col">Actions</th>
                 </tr>
             </thead>
             <tbody>
@@ -132,12 +132,12 @@
                         <td>{{ optional($voucher->used_at)->format('Y-m-d H:i') ?? '—' }}</td>
                         <td class="{{ optional($voucher->valid_until)?->isPast() ? 'text-danger' : '' }}">{{ optional($voucher->valid_until)->format('Y-m-d H:i') ?? '-' }}</td>
                         <td><span class="badge {{ $statusClass }}">{{ ucfirst($status) }}</span></td>
-                        <td>
+                        <td class="action-col">
                             <div class="btn-group">
-                                <button class="btn btn-sm btn-outline-primary" title="View Details" onclick="viewVoucherDetails({{ (int) $voucher->id }}, '{{ $voucher->code_display ?? $voucher->code }}')">
+                                <button type="button" class="btn btn-sm btn-outline-primary" title="View Details" onclick="viewVoucherDetails({{ (int) $voucher->id }}, '{{ $voucher->code_display ?? $voucher->code }}')">
                                     <i class="fas fa-eye"></i>
                                 </button>
-                                <button class="btn btn-sm btn-outline-danger" title="Delete" onclick="confirmDelete({{ (int) $voucher->id }}, '{{ $voucher->code_display ?? $voucher->code }}')">
+                                <button type="button" class="btn btn-sm btn-outline-danger" title="Delete" onclick="confirmDelete({{ (int) $voucher->id }}, '{{ $voucher->code_display ?? $voucher->code }}')">
                                     <i class="fas fa-trash"></i>
                                 </button>
                             </div>
@@ -853,10 +853,10 @@ document.addEventListener('DOMContentLoaded', function() {
                     <td>${usedAt}</td>
                     <td>${expiry}</td>
                     <td>${statusBadge(row.status)}</td>
-                    <td>
+                    <td class="action-col">
                         <div class="btn-group">
-                            <button class="btn btn-sm btn-outline-primary" onclick="viewVoucherDetails(${row.id || 0}, '${(row.code_display || row.code || '').replace(/'/g, "\\'")}')"><i class="fas fa-eye"></i></button>
-                            <button class="btn btn-sm btn-outline-danger" onclick="confirmDelete(${row.id || 0}, '${(row.code_display || row.code || '').replace(/'/g, "\\'")}')"><i class="fas fa-trash"></i></button>
+                            <button type="button" class="btn btn-sm btn-outline-primary" onclick="viewVoucherDetails(${row.id || 0}, '${(row.code_display || row.code || '').replace(/'/g, "\\'")}')"><i class="fas fa-eye"></i></button>
+                            <button type="button" class="btn btn-sm btn-outline-danger" onclick="confirmDelete(${row.id || 0}, '${(row.code_display || row.code || '').replace(/'/g, "\\'")}')"><i class="fas fa-trash"></i></button>
                         </div>
                     </td>
                 </tr>

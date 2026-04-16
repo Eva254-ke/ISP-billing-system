@@ -434,6 +434,13 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
                     $status = (string) ($router->status ?? Router::STATUS_OFFLINE);
                     $cpu = $router->cpu_usage;
                     $memory = $router->memory_usage;
+                    $routerFingerprint = Str::lower(trim((string) ($router->model ?: $router->name)));
+                    $serviceType = match (true) {
+                        Str::contains($routerFingerprint, 'hotspot + pppoe'),
+                        (Str::contains($routerFingerprint, 'hotspot') && Str::contains($routerFingerprint, 'pppoe')) => 'both',
+                        Str::contains($routerFingerprint, 'pppoe') => 'pppoe',
+                        default => 'hotspot',
+                    };
 
                     if ($live) {
                         $isOnline = $mikroTikService->pingRouter($router);
@@ -455,6 +462,8 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
                         'id' => $router->id,
                         'name' => $router->name,
                         'ip' => $router->ip_address,
+                        'location' => $router->location,
+                        'type' => $serviceType,
                         'status' => $status,
                         'users' => (int) ($router->active_sessions ?? 0),
                         'cpu' => $cpu,
@@ -618,6 +627,106 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
                 'message' => 'Tenant not found. For super admin, select a tenant first.',
             ], 422);
         };
+
+        Route::post('/routers', function (Request $request) use ($resolveTenantForPackageWrite, $tenantScopeError) {
+            $tenant = $resolveTenantForPackageWrite($request);
+
+            if (!$tenant) {
+                return $tenantScopeError();
+            }
+
+            $validated = $request->validate([
+                'name' => 'required|string|max:120',
+                'type' => 'required|in:hotspot,pppoe,both',
+                'ip' => 'required|ip',
+                'port' => 'nullable|integer|min:1|max:65535',
+                'username' => 'required|string|max:120',
+                'password' => 'required|string|max:255',
+                'location' => 'nullable|string|max:120',
+                'notes' => 'nullable|string|max:1000',
+            ]);
+
+            $ipAddress = trim((string) $validated['ip']);
+            $serviceType = strtolower((string) $validated['type']);
+
+            $alreadyExists = Router::query()
+                ->where('tenant_id', $tenant->id)
+                ->where('ip_address', $ipAddress)
+                ->exists();
+
+            if ($alreadyExists) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'A router with that IP address already exists for this tenant.',
+                ], 422);
+            }
+
+            $router = Router::create([
+                'tenant_id' => $tenant->id,
+                'name' => trim((string) $validated['name']),
+                'model' => match ($serviceType) {
+                    'pppoe' => 'MikroTik PPPoE',
+                    'both' => 'MikroTik Hotspot + PPPoE',
+                    default => 'MikroTik Hotspot',
+                },
+                'ip_address' => $ipAddress,
+                'api_port' => (int) ($validated['port'] ?? 8728),
+                'api_username' => trim((string) $validated['username']),
+                'api_password' => (string) $validated['password'],
+                'api_ssl' => false,
+                'location' => filled($validated['location'] ?? null) ? trim((string) $validated['location']) : null,
+                'notes' => filled($validated['notes'] ?? null) ? trim((string) $validated['notes']) : null,
+                'status' => Router::STATUS_OFFLINE,
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Router saved successfully.',
+                'data' => [
+                    'id' => $router->id,
+                    'name' => $router->name,
+                    'ip' => $router->ip_address,
+                    'location' => $router->location,
+                    'type' => $serviceType,
+                    'status' => $router->status,
+                ],
+            ], 201);
+        })->name('routers.store');
+
+        Route::post('/routers/bulk-delete', function (Request $request) use ($resolveTenantForPackageWrite, $tenantScopeError) {
+            $tenant = $resolveTenantForPackageWrite($request);
+
+            if (!$tenant) {
+                return $tenantScopeError();
+            }
+
+            $validated = $request->validate([
+                'router_ids' => 'required|array|min:1',
+                'router_ids.*' => 'integer',
+            ]);
+
+            $routers = Router::query()
+                ->where('tenant_id', $tenant->id)
+                ->whereIn('id', $validated['router_ids'])
+                ->get();
+
+            if ($routers->isEmpty()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'No matching routers found.',
+                ], 404);
+            }
+
+            foreach ($routers as $router) {
+                $router->delete();
+            }
+
+            return response()->json([
+                'success' => true,
+                'message' => sprintf('%d router(s) deleted successfully.', $routers->count()),
+                'deleted' => $routers->count(),
+            ]);
+        })->name('routers.bulk-delete');
 
         Route::get('/packages', function () use ($resolveTenant) {
             $tenant = $resolveTenant();
@@ -926,12 +1035,15 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
                     return [
                         'id' => $payment->id,
                         'phone' => $payment->phone,
+                        'customer_name' => $payment->customer_name,
                         'package_name' => $payment->package_name,
                         'package_id' => $payment->package_id,
                         'amount' => (float) $payment->amount,
                         'currency' => $payment->currency,
                         'status' => $payment->status,
-                        'reference' => $payment->mpesa_receipt_number ?: $payment->mpesa_checkout_request_id,
+                        'reference' => $payment->mpesa_receipt_number ?: ($payment->mpesa_checkout_request_id ?: $payment->reference),
+                        'mpesa_receipt_number' => $payment->mpesa_receipt_number,
+                        'mpesa_checkout_request_id' => $payment->mpesa_checkout_request_id,
                         'created_at' => $payment->created_at?->toIso8601String(),
                     ];
                 });
@@ -941,6 +1053,53 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
                 'data' => $payments,
             ]);
         })->name('payments.index');
+
+        Route::get('/payments/{payment}', function (Payment $payment) use ($resolveTenant) {
+            $tenant = $resolveTenant();
+
+            if ($tenant && (int) $payment->tenant_id !== (int) $tenant->id) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Payment not found',
+                ], 404);
+            }
+
+            $payment->load(['package', 'session.router']);
+
+            $reference = $payment->mpesa_receipt_number
+                ?: ($payment->mpesa_checkout_request_id ?: ($payment->reference ?: ('PAY-' . $payment->id)));
+            $callbackPayload = $payment->callback_payload ?: ($payment->callback_data ?: ($payment->metadata ?: []));
+            $router = $payment->session?->router;
+            $routerLabel = $router
+                ? trim(implode(' ', array_filter([$router->name, $router->ip_address ? '(' . $router->ip_address . ')' : null])))
+                : null;
+
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'id' => $payment->id,
+                    'reference' => $reference,
+                    'status' => strtolower((string) ($payment->status ?? 'unknown')),
+                    'phone' => $payment->phone ?: $payment->mpesa_phone,
+                    'customer_name' => $payment->customer_name,
+                    'package_name' => $payment->package_name ?: $payment->package?->name,
+                    'amount' => (float) $payment->amount,
+                    'currency' => $payment->currency ?: 'KES',
+                    'payment_channel' => $payment->payment_channel,
+                    'created_at' => $payment->created_at?->toIso8601String(),
+                    'initiated_at' => $payment->initiated_at?->toIso8601String(),
+                    'completed_at' => $payment->completed_at?->toIso8601String(),
+                    'activated_at' => $payment->activated_at?->toIso8601String(),
+                    'mpesa_receipt_number' => $payment->mpesa_receipt_number,
+                    'mpesa_checkout_request_id' => $payment->mpesa_checkout_request_id,
+                    'callback_payload' => $callbackPayload,
+                    'router_label' => $routerLabel,
+                    'session_started_at' => $payment->session?->started_at?->toIso8601String(),
+                    'session_expires_at' => $payment->session?->expires_at?->toIso8601String(),
+                    'session_duration_label' => $payment->package?->duration_formatted,
+                ],
+            ]);
+        })->name('payments.show');
 
         Route::get('/payments/stats', function () use ($resolveTenant) {
             $tenant = $resolveTenant();

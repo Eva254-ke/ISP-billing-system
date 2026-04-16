@@ -26,6 +26,10 @@
     --card-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
     --card-shadow-hover: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
     --transition-speed: 0.2s;
+    --header-height: 64px;
+    --sidebar-width: 260px;
+    --content-gap: 1.25rem;
+    --shell-max-width: 1680px;
 }
 
 /* ────────────────────────────────────────────────────────────────────────── */
@@ -37,6 +41,7 @@ body {
     margin: 0;
     padding: 0;
     overflow-x: hidden;
+    --shell-sidebar-width: var(--sidebar-width);
 }
 
 a {
@@ -83,6 +88,44 @@ a:hover {
     border-radius: 0 0 12px 12px !important;
 }
 
+.card-tools {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+.btn.btn-tool {
+    width: 2rem;
+    min-width: 2rem;
+    height: 2rem;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 999px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: transform var(--transition-speed), background-color var(--transition-speed), color var(--transition-speed), border-color var(--transition-speed);
+}
+
+.card:not(.card-primary) .btn.btn-tool {
+    color: var(--primary-color);
+    background: #eff6ff;
+    border-color: #bfdbfe;
+}
+
+.card-primary .btn.btn-tool {
+    color: white;
+    background: rgba(255, 255, 255, 0.14);
+    border-color: rgba(255, 255, 255, 0.2);
+}
+
+.btn.btn-tool:hover,
+.btn.btn-tool:focus {
+    transform: translateY(-1px);
+    opacity: 1;
+}
+
 /* Gradient Primary Card */
 .card-primary {
     background: linear-gradient(135deg, var(--primary-color) 0%, var(--secondary-color) 100%);
@@ -120,6 +163,26 @@ a:hover {
     border: 1px solid rgba(255, 255, 255, 0.15);
     border-radius: 14px;
     padding: 0.75rem;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.dashboard-chart-card .card-body {
+    padding: 1rem 1rem 0.75rem;
+    overflow: hidden;
+}
+
+.dashboard-chart-shell {
+    min-height: 300px;
+}
+
+.dashboard-chart-shell.chart-compact {
+    min-height: 260px;
+}
+
+.card-primary .apexcharts-canvas,
+.card-primary .apexcharts-svg {
+    max-width: 100% !important;
 }
 
 .card-primary .card-footer {
@@ -243,7 +306,7 @@ a:hover {
 .table-responsive {
     border-radius: 12px;
     box-shadow: var(--card-shadow);
-    overflow-x: auto;
+    overflow-x: hidden;
     overflow-y: visible;
     background: white;
     -webkit-overflow-scrolling: touch;
@@ -253,19 +316,21 @@ a:hover {
 .table {
     margin: 0;
     width: 100%;
+    table-layout: fixed;
 }
 
 .table-responsive .table {
-    min-width: 1100px;
+    min-width: 0;
 }
 
 .dataTables_scrollBody {
-    overflow: auto !important;
+    overflow: visible !important;
 }
 
 .dataTables_scrollHead table,
 .dataTables_scrollBody table {
-    min-width: 1100px;
+    min-width: 0;
+    width: 100% !important;
 }
 
 .table thead th {
@@ -276,16 +341,22 @@ a:hover {
     font-size: 0.875rem;
     text-transform: uppercase;
     letter-spacing: 0.025em;
-    padding: 1rem 1.5rem;
-    white-space: nowrap;
+    padding: 0.875rem 1rem;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    vertical-align: middle;
 }
 
 .table tbody td {
-    padding: 1rem 1.5rem;
+    padding: 0.95rem 1rem;
     border-bottom: 1px solid #f1f5f9;
     vertical-align: middle;
     font-size: 0.95rem;
-    white-space: nowrap;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    line-height: 1.4;
+    max-width: 0;
 }
 
 .table tbody tr:hover {
@@ -298,12 +369,13 @@ a:hover {
 
 /* Keep action column visible on wide tables */
 .table .action-col {
-    position: sticky;
-    right: 0;
-    background: #fff;
-    box-shadow: -12px 0 16px -14px rgba(15, 23, 42, 0.35);
-    z-index: 2;
-    min-width: 120px;
+    position: static;
+    right: auto;
+    background: inherit;
+    box-shadow: none;
+    z-index: auto;
+    min-width: 140px;
+    width: 140px;
     text-align: right;
 }
 
@@ -312,14 +384,70 @@ a:hover {
 }
 
 .table thead .action-col {
-    z-index: 3;
     background: #f8fafc;
 }
 
-/* DataTables wrapper should allow horizontal scroll */
+/* DataTables wrapper should fit the card width */
 .dataTables_wrapper {
     width: 100%;
-    overflow-x: auto;
+    overflow-x: visible;
+}
+
+.dataTables_wrapper .row {
+    row-gap: 0.75rem;
+}
+
+.dataTables_scroll,
+.dataTables_scrollHead,
+.dataTables_scrollBody {
+    width: 100% !important;
+}
+
+.table .btn-group {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    align-items: center;
+}
+
+.table .action-col .btn-group {
+    justify-content: flex-end;
+}
+
+.table .btn-group .btn {
+    white-space: nowrap;
+    position: relative;
+    z-index: 2;
+    flex: 0 0 auto;
+}
+
+.table td .btn-group,
+.table td a,
+.table td button {
+    position: relative;
+    z-index: 2;
+}
+
+.table td code,
+.table td .badge,
+.table td .text-muted,
+.table td small,
+.table td strong {
+    display: inline-block;
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+
+.table td code {
+    line-height: 1.35;
+    padding: 0.125rem 0.35rem;
+}
+
+.table td .badge {
+    line-height: 1.3;
+    text-align: left;
 }
 
 /* DataTables specific */
@@ -504,13 +632,12 @@ a:hover {
     border-left: 4px solid var(--info-color);
 }
 
-.alert-dismissible .btn-close {
-    padding: 1.25rem;
-    opacity: 0.7;
+.alert-dismissible {
+    padding-right: 4rem;
 }
 
-.alert-dismissible .btn-close:hover {
-    opacity: 1;
+.alert-dismissible .btn-close {
+    padding: 0;
 }
 
 /* ────────────────────────────────────────────────────────────────────────── */
@@ -668,6 +795,10 @@ a:hover {
 }
 
 .modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
     border-bottom: 1px solid #e2e8f0;
     padding: 1.25rem 1.5rem;
 }
@@ -689,6 +820,46 @@ a:hover {
 
 .modal-footer .btn {
     padding: 0.5rem 1rem;
+}
+
+.btn-close {
+    width: 2.25rem;
+    min-width: 2.25rem;
+    height: 2.25rem;
+    padding: 0;
+    margin: 0;
+    border: 1px solid #cbd5e1;
+    border-radius: 999px;
+    background: #f8fafc;
+    background-image: none !important;
+    color: #334155;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 1;
+    box-shadow: 0 4px 12px rgba(15, 23, 42, 0.08);
+    transition: transform var(--transition-speed), background-color var(--transition-speed), color var(--transition-speed), border-color var(--transition-speed), box-shadow var(--transition-speed);
+}
+
+.btn-close::before {
+    content: '\00d7';
+    font-size: 1.15rem;
+    font-weight: 700;
+    line-height: 1;
+}
+
+.btn-close:hover,
+.btn-close:focus {
+    background: #e2e8f0;
+    border-color: #94a3b8;
+    color: #0f172a;
+    opacity: 1;
+    transform: translateY(-1px);
+    box-shadow: 0 10px 22px rgba(15, 23, 42, 0.14);
+}
+
+.btn-close:focus {
+    box-shadow: 0 0 0 0.2rem rgba(37, 99, 235, 0.2);
 }
 
 /* ────────────────────────────────────────────────────────────────────────── */
@@ -759,24 +930,27 @@ body {
 .main-header {
     position: fixed;
     top: 0;
-    left: 260px;
+    left: var(--shell-sidebar-width);
     right: 0;
     z-index: 1030;
-    height: 60px;
-    background: white;
-    border-bottom: 1px solid #e2e8f0;
-    padding: 0 1.5rem;
+    height: var(--header-height);
+    min-height: var(--header-height);
+    background: rgba(255, 255, 255, 0.96);
+    border-bottom: 1px solid rgba(226, 232, 240, 0.96);
+    padding: 0 1.25rem;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
-    transition: left 0.3s ease;
+    box-shadow: 0 12px 30px rgba(15, 23, 42, 0.06);
+    backdrop-filter: blur(14px);
+    transition: left 0.25s ease, box-shadow 0.25s ease;
 }
 
 .main-header .navbar-nav {
     display: flex;
     align-items: center;
     gap: 0.75rem;
+    min-width: 0;
 }
 
 .main-header .navbar-nav.ms-auto {
@@ -793,6 +967,9 @@ body {
     padding: 0.5rem 0.75rem;
     font-size: 1rem;
     border-radius: 6px;
+    min-height: 2.5rem;
+    display: inline-flex;
+    align-items: center;
     transition: all 0.2s;
 }
 
@@ -818,33 +995,36 @@ body {
     top: 0;
     left: 0;
     bottom: 0;
-    width: 260px;
-    background: var(--sidebar-bg);
+    width: var(--sidebar-width);
+    background: linear-gradient(180deg, #1e293b 0%, #172133 100%);
     z-index: 1020;
     overflow-y: auto;
     overflow-x: hidden;
-    transition: transform 0.3s ease;
-    box-shadow: 2px 0 10px rgba(0, 0, 0, 0.08);
+    transition: transform 0.25s ease;
+    box-shadow: 12px 0 30px rgba(15, 23, 42, 0.16);
+    border-right: 1px solid rgba(15, 23, 42, 0.2);
 }
 
-body.sidebar-collapsed .main-header {
+body.sidebar-collapsed .main-header,
+body.sidebar-collapse .main-header {
     left: 0;
 }
 
 /* Sidebar collapsed - slide out */
-body.sidebar-collapsed .main-sidebar {
+body.sidebar-collapsed .main-sidebar,
+body.sidebar-collapse .main-sidebar {
     transform: translateX(-100%);
 }
 
 /* Sidebar Brand */
 .main-sidebar .brand-link {
-    height: 60px;
+    height: var(--header-height);
     display: flex;
     align-items: center;
     padding: 0 1.25rem;
     color: white;
     font-weight: 700;
-    border-bottom: 1px solid #334155;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.18);
 }
 
 .main-sidebar .brand-link:hover {
@@ -859,8 +1039,8 @@ body.sidebar-collapsed .main-sidebar {
 
 /* Sidebar content */
 .sidebar {
-    padding: 1rem 0;
-    height: calc(100vh - 60px);
+    padding: 1rem 0 1.5rem;
+    height: calc(100vh - var(--header-height));
 }
 
 .user-panel {
@@ -878,9 +1058,10 @@ body.sidebar-collapsed .main-sidebar {
 /* Navigation */
 .nav-sidebar > .nav-item > .nav-link {
     color: rgba(255, 255, 255, 0.85);
-    padding: 0.75rem 1.25rem;
-    margin: 0.25rem 0.75rem;
+    padding: 0.8rem 1.05rem;
+    margin: 0.2rem 0.85rem;
     border-radius: 8px;
+    border: 1px solid transparent;
     font-size: 0.925rem;
     font-weight: 500;
     transition: all 0.2s;
@@ -890,8 +1071,9 @@ body.sidebar-collapsed .main-sidebar {
 }
 
 .nav-sidebar > .nav-item > .nav-link:hover {
-    background: var(--sidebar-hover);
+    background: rgba(255, 255, 255, 0.08);
     color: white;
+    border-color: rgba(148, 163, 184, 0.18);
 }
 
 .nav-sidebar > .nav-item > .nav-link.active {
@@ -908,14 +1090,19 @@ body.sidebar-collapsed .main-sidebar {
 .nav-sidebar > .nav-item > .nav-link p {
     margin: 0;
     flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
 }
 
 /* Treeview submenu */
 .nav-treeview {
-    background: rgba(0, 0, 0, 0.15);
-    margin: 0.25rem 0.75rem;
-    border-radius: 6px;
-    padding: 0.25rem 0;
+    background: rgba(15, 23, 42, 0.4);
+    margin: 0.3rem 0.85rem 0.5rem;
+    border-radius: 10px;
+    padding: 0.35rem 0;
 }
 
 .nav-treeview .nav-link {
@@ -936,25 +1123,44 @@ body.sidebar-collapsed .main-sidebar {
 
 /* Content Wrapper: Proper Spacing */
 .content-wrapper {
-    margin-top: 60px;
-    margin-left: 260px;
-    min-height: calc(100vh - 60px);
-    transition: margin-left 0.3s ease;
-    background: #f1f5f9;
-    padding: 1.5rem;
+    margin-top: var(--header-height);
+    margin-left: var(--shell-sidebar-width);
+    min-height: calc(100vh - var(--header-height));
+    transition: margin-left 0.25s ease, padding 0.25s ease;
+    background:
+        radial-gradient(circle at top right, rgba(37, 99, 235, 0.08), transparent 22%),
+        radial-gradient(circle at top left, rgba(6, 182, 212, 0.05), transparent 24%),
+        #f1f5f9;
+    padding: var(--content-gap);
 }
 
 /* When sidebar is collapsed, content takes full width */
-body.sidebar-collapsed .content-wrapper {
+body.sidebar-collapsed .content-wrapper,
+body.sidebar-collapse .content-wrapper {
     margin-left: 0;
 }
 
 .content-header {
-    background: white;
-    border-bottom: 1px solid #e2e8f0;
-    padding: 1.25rem 1.5rem;
-    margin: -1.5rem -1.5rem 1.5rem -1.5rem;
-    border-radius: 0;
+    background: rgba(255, 255, 255, 0.94);
+    border: 1px solid #e2e8f0;
+    padding: 1.1rem 1.5rem;
+    margin: 0 0 1.5rem;
+    border-radius: 18px;
+    box-shadow: 0 18px 40px rgba(15, 23, 42, 0.06);
+}
+
+.content-header .container-fluid,
+.content > .container-fluid {
+    max-width: var(--shell-max-width);
+    margin: 0 auto;
+    padding: 0;
+}
+
+.content-header h1 {
+    color: #0f172a;
+    font-size: clamp(1.85rem, 2.2vw, 2.35rem);
+    font-weight: 700;
+    letter-spacing: -0.03em;
 }
 
 .content {
@@ -963,9 +1169,9 @@ body.sidebar-collapsed .content-wrapper {
 
 /* Footer */
 .main-footer {
-    margin-left: 260px;
-    transition: margin-left 0.3s ease;
-    background: white;
+    margin-left: var(--shell-sidebar-width);
+    transition: margin-left 0.25s ease;
+    background: rgba(255, 255, 255, 0.96);
     border-top: 1px solid #e2e8f0;
     padding: 1rem 1.5rem;
     font-size: 0.875rem;
@@ -973,14 +1179,15 @@ body.sidebar-collapsed .content-wrapper {
 }
 
 /* When sidebar is collapsed, footer takes full width */
-body.sidebar-collapsed .main-footer {
+body.sidebar-collapsed .main-footer,
+body.sidebar-collapse .main-footer {
     margin-left: 0;
 }
 
 /* Sidebar Overlay (Mobile) */
 .sidebar-overlay {
     position: fixed;
-    top: 60px;
+    top: var(--header-height);
     left: 0;
     right: 0;
     bottom: 0;
@@ -1002,6 +1209,7 @@ body.sidebar-collapsed .main-footer {
 @media (max-width: 992px) {
     .main-header {
         left: 0;
+        padding: 0 1rem;
     }
 
     .main-sidebar {
@@ -1016,6 +1224,10 @@ body.sidebar-collapsed .main-footer {
     .main-footer {
         margin-left: 0 !important;
         width: 100% !important;
+    }
+
+    .content-header {
+        padding: 1rem 1.15rem;
     }
     
     .main-header .brand-logo {
@@ -1040,7 +1252,7 @@ body.sidebar-collapsed .main-footer {
     
     .table thead th,
     .table tbody td {
-        padding: 0.75rem 1rem;
+        padding: 0.75rem;
     }
     
     .card-body,
@@ -1054,8 +1266,25 @@ body.sidebar-collapsed .main-footer {
     }
     
     .content-header {
+        padding: 1rem 1.1rem;
+        margin: 0 0 1rem;
+        border-radius: 14px;
+    }
+
+    .dashboard-chart-shell {
+        min-height: 250px;
+    }
+
+    .dashboard-chart-shell.chart-compact {
+        min-height: 220px;
+    }
+
+    .main-header {
+        padding: 0 0.75rem;
+    }
+
+    .main-footer {
         padding: 1rem;
-        margin: -1rem -1rem 1rem -1rem;
     }
 }
 

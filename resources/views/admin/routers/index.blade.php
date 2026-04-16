@@ -77,7 +77,7 @@
                     <th>Users</th>
                     <th>CPU/Mem</th>
                     <th>Last Sync</th>
-                    <th>Actions</th>
+                    <th class="action-col">Actions</th>
                 </tr>
             </thead>
             <tbody>
@@ -88,6 +88,23 @@
                         $cpu = is_null($router->cpu_usage) ? null : (int) $router->cpu_usage;
                         $memory = is_null($router->memory_usage) ? null : (int) $router->memory_usage;
                         $progressWidth = max((int) ($cpu ?? 0), (int) ($memory ?? 0));
+                        $routerTypeSource = strtolower(trim((string) ($router->model ?: $router->name)));
+                        $routerType = match (true) {
+                            str_contains($routerTypeSource, 'hotspot + pppoe'),
+                            (str_contains($routerTypeSource, 'hotspot') && str_contains($routerTypeSource, 'pppoe')) => 'both',
+                            str_contains($routerTypeSource, 'pppoe') => 'pppoe',
+                            default => 'hotspot',
+                        };
+                        $routerTypeLabel = match ($routerType) {
+                            'pppoe' => 'PPPoE',
+                            'both' => 'Hotspot + PPPoE',
+                            default => 'Hotspot',
+                        };
+                        $routerTypeClass = match ($routerType) {
+                            'pppoe' => 'bg-info',
+                            'both' => 'bg-secondary',
+                            default => 'bg-primary',
+                        };
                     @endphp
                     <tr>
                         <td><input type="checkbox" class="router-checkbox" value="{{ $router->id }}"></td>
@@ -96,7 +113,7 @@
                             <div class="text-muted small">{{ $router->location ?? 'N/A' }}</div>
                         </td>
                         <td><code>{{ $router->ip_address }}</code></td>
-                        <td><span class="badge {{ str_contains(strtolower((string) $router->name), 'pppoe') ? 'bg-info' : 'bg-primary' }}">{{ str_contains(strtolower((string) $router->name), 'pppoe') ? 'PPPoE' : 'Hotspot' }}</span></td>
+                        <td><span class="badge {{ $routerTypeClass }}">{{ $routerTypeLabel }}</span></td>
                         <td>{{ $router->location ?? 'N/A' }}</td>
                         <td>
                             <span class="status-dot {{ $isOnline ? 'online' : 'offline' }}"></span>
@@ -114,7 +131,7 @@
                             @endif
                         </td>
                         <td>{{ optional($router->last_seen_at)->diffForHumans() ?? '-' }}</td>
-                        <td>
+                        <td class="action-col">
                             <div class="btn-group">
                                 <button class="btn btn-sm btn-outline-primary" title="View" onclick="viewRouter({{ $router->id }})">
                                     <i class="fas fa-eye"></i>
@@ -156,67 +173,79 @@
 @endsection
 
 @push('scripts')
-<script>
-    // Select All Checkboxes
-    document.getElementById('selectAll').addEventListener('change', function() {
-        document.querySelectorAll('.router-checkbox').forEach(cb => {
-            cb.checked = this.checked;
-        });
-    });
-
-    // Bulk Delete
-    document.getElementById('bulkDelete').addEventListener('click', function() {
-        const selected = document.querySelectorAll('.router-checkbox:checked');
-        if (selected.length === 0) {
-            Swal.fire('Info', 'No routers selected', 'info');
-            return;
-        }
-        Swal.fire({
-            title: 'Delete Selected Routers?',
-            text: `You are about to delete ${selected.length} router(s). This cannot be undone.`,
-            icon: 'warning',
-            showCancelButton: true,
-            confirmButtonText: 'Yes, Delete!',
-            confirmButtonColor: '#EF4444'
-        }).then((result) => {
-            if (result.isConfirmed) {
-                Swal.fire('Deleted!', 'Routers have been deleted.', 'success');
-            }
-        });
-    });
-
-    // Refresh Routers
-    function loadRouters() {
-        if (typeof window.refreshRouters === 'function') {
-            window.refreshRouters();
-            return;
-        }
-
-        Swal.fire({
-            title: 'Refreshing...',
-            text: 'Checking router connections',
-            timer: 1000,
-            showConfirmButton: false,
-        });
-    }
-
-</script>
 @include('admin.routers.modals.add')
-@endpush
-
-@push('scripts')
 <script>
-document.addEventListener('DOMContentLoaded', function() {
-    const tableEl = $('.data-table');
+document.addEventListener('DOMContentLoaded', function () {
+    const tableEl = window.jQuery ? window.jQuery('.data-table') : null;
     const tbody = document.querySelector('.data-table tbody');
     const statsBoxes = document.querySelectorAll('.row .small-box .inner h3');
+    const selectAll = document.getElementById('selectAll');
+    const bulkDelete = document.getElementById('bulkDelete');
+    const addRouterForm = document.getElementById('addRouterForm');
+    const saveRouterButton = document.getElementById('saveRouter');
+    const footerCount = document.querySelector('.card-footer .float-end');
+    const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
+    const viewBaseUrl = @json(url('/admin/routers'));
 
-    async function getJson(url) {
-        const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
-        if (!res.ok) {
-            throw new Error(`Request failed: ${res.status}`);
+    function escapeHtml(value) {
+        return String(value ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    function showAlert(title, text, icon = 'info') {
+        if (window.Swal) {
+            return Swal.fire(title, text, icon);
         }
-        return res.json();
+
+        window.alert([title, text].filter(Boolean).join('\n'));
+        return Promise.resolve();
+    }
+
+    async function requestJson(url, options = {}) {
+        const headers = {
+            Accept: 'application/json',
+            ...(options.headers || {}),
+        };
+
+        if (options.body && !headers['Content-Type']) {
+            headers['Content-Type'] = 'application/json';
+        }
+
+        if (csrfToken && !headers['X-CSRF-TOKEN']) {
+            headers['X-CSRF-TOKEN'] = csrfToken;
+        }
+
+        const response = await fetch(url, {
+            credentials: 'same-origin',
+            ...options,
+            headers,
+        });
+
+        const payload = await response.json().catch(() => ({}));
+
+        if (!response.ok) {
+            throw new Error(payload?.message || `Request failed: ${response.status}`);
+        }
+
+        return payload;
+    }
+
+    function routerTypeMeta(type) {
+        const normalized = String(type || '').toLowerCase();
+
+        if (normalized === 'pppoe') {
+            return { label: 'PPPoE', className: 'bg-info' };
+        }
+
+        if (normalized === 'both') {
+            return { label: 'Hotspot + PPPoE', className: 'bg-secondary' };
+        }
+
+        return { label: 'Hotspot', className: 'bg-primary' };
     }
 
     function statusBadge(status) {
@@ -224,7 +253,24 @@ document.addEventListener('DOMContentLoaded', function() {
         const isOnline = normalized === 'online' || normalized === 'warning';
         const colorClass = isOnline ? 'text-success' : 'text-danger';
         const dotClass = isOnline ? 'online' : 'offline';
-        return `<span class="status-dot ${dotClass}"></span><span class="${colorClass}">${normalized || 'unknown'}</span>`;
+        return `<span class="status-dot ${dotClass}"></span><span class="${colorClass}">${escapeHtml(normalized || 'unknown')}</span>`;
+    }
+
+    function bindSelection() {
+        if (!selectAll) return;
+
+        const checkboxes = document.querySelectorAll('.router-checkbox');
+        checkboxes.forEach(checkbox => {
+            checkbox.addEventListener('change', function () {
+                if (!this.checked) {
+                    selectAll.checked = false;
+                    return;
+                }
+
+                const totalChecked = document.querySelectorAll('.router-checkbox:checked').length;
+                selectAll.checked = totalChecked === checkboxes.length && checkboxes.length > 0;
+            });
+        });
     }
 
     function renderRows(rows) {
@@ -245,38 +291,50 @@ document.addEventListener('DOMContentLoaded', function() {
                     <td></td>
                 </tr>
             `;
+            bindSelection();
             return;
         }
 
-        tbody.innerHTML = rows.map((row, i) => `
-            <tr>
-                <td><input type="checkbox" class="router-checkbox" value="${row.id || i + 1}"></td>
-                <td><strong>${row.name || 'Router'}</strong><div class="text-muted small">${row.location || 'N/A'}</div></td>
-                <td><code>${row.ip || '-'}</code></td>
-                <td><span class="badge ${(String(row.name || '').toLowerCase().includes('pppoe')) ? 'bg-info' : 'bg-primary'}">${(String(row.name || '').toLowerCase().includes('pppoe')) ? 'PPPoE' : 'Hotspot'}</span></td>
-                <td>${row.location || 'N/A'}</td>
-                <td>${statusBadge(row.status)}</td>
-                <td>${Number(row.users || 0).toLocaleString()}</td>
-                <td>
-                    ${(row.cpu == null && row.memory == null)
-                        ? '<span class="text-muted">-- / --</span>'
-                        : `<div class="progress progress-xs" style="height: 6px;"><div class="progress-bar ${Math.max(Number(row.cpu || 0), Number(row.memory || 0)) >= 80 ? 'bg-danger' : 'bg-success'}" style="width: ${Math.max(Number(row.cpu || 0), Number(row.memory || 0))}%"></div></div><small class="text-muted">${row.cpu ?? '--'}% / ${row.memory ?? '--'}%</small>`}
-                </td>
-                <td>${row.last_seen_at ? new Date(row.last_seen_at).toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit' }) : '-'}</td>
-                <td>
-                    <div class="btn-group">
-                        <button class="btn btn-sm btn-outline-primary" title="View" onclick="viewRouter(${row.id || 0})"><i class="fas fa-eye"></i></button>
-                        <button class="btn btn-sm btn-outline-success" title="Test" onclick="testConnection(${row.id || 0})"><i class="fas fa-plug"></i></button>
-                    </div>
-                </td>
-            </tr>
-        `).join('');
+        tbody.innerHTML = rows.map((row, index) => {
+            const type = routerTypeMeta(row.type);
+            const utilization = Math.max(Number(row.cpu || 0), Number(row.memory || 0));
+            const lastSeen = row.last_seen_at
+                ? new Date(row.last_seen_at).toLocaleString('en-KE', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+                : '-';
+
+            return `
+                <tr>
+                    <td><input type="checkbox" class="router-checkbox" value="${Number(row.id || index + 1)}"></td>
+                    <td><strong>${escapeHtml(row.name || 'Router')}</strong><div class="text-muted small">${escapeHtml(row.location || 'N/A')}</div></td>
+                    <td><code>${escapeHtml(row.ip || '-')}</code></td>
+                    <td><span class="badge ${type.className}">${type.label}</span></td>
+                    <td>${escapeHtml(row.location || 'N/A')}</td>
+                    <td>${statusBadge(row.status)}</td>
+                    <td>${Number(row.users || 0).toLocaleString()}</td>
+                    <td>
+                        ${(row.cpu == null && row.memory == null)
+                            ? '<span class="text-muted">-- / --</span>'
+                            : `<div class="progress progress-xs" style="height: 6px;"><div class="progress-bar ${utilization >= 80 ? 'bg-danger' : 'bg-success'}" style="width: ${utilization}%"></div></div><small class="text-muted">${row.cpu ?? '--'}% / ${row.memory ?? '--'}%</small>`}
+                    </td>
+                    <td>${escapeHtml(lastSeen)}</td>
+                    <td class="action-col">
+                        <div class="btn-group">
+                            <button class="btn btn-sm btn-outline-primary" type="button" title="View router" onclick="viewRouter(${Number(row.id || 0)})"><i class="fas fa-eye"></i></button>
+                            <button class="btn btn-sm btn-outline-success" type="button" title="Test connection" onclick="testConnection(${Number(row.id || 0)})"><i class="fas fa-plug"></i></button>
+                        </div>
+                    </td>
+                </tr>
+            `;
+        }).join('');
+
+        bindSelection();
     }
 
     function renderStats(rows) {
-        const online = rows.filter(r => ['online', 'warning'].includes(String(r.status || '').toLowerCase())).length;
-        const offline = rows.filter(r => !['online', 'warning'].includes(String(r.status || '').toLowerCase())).length;
-        const users = rows.reduce((sum, r) => sum + Number(r.users || 0), 0);
+        const online = rows.filter(row => ['online', 'warning'].includes(String(row.status || '').toLowerCase())).length;
+        const offline = rows.length - online;
+        const users = rows.reduce((sum, row) => sum + Number(row.users || 0), 0);
+
         if (statsBoxes.length >= 4) {
             statsBoxes[0].textContent = online.toLocaleString();
             statsBoxes[1].textContent = offline.toLocaleString();
@@ -284,29 +342,194 @@ document.addEventListener('DOMContentLoaded', function() {
             statsBoxes[3].textContent = rows.length.toLocaleString();
         }
 
-        const footerCount = document.querySelector('.card-footer .float-end');
         if (footerCount) {
             footerCount.textContent = `Showing ${rows.length.toLocaleString()} routers`;
         }
     }
 
+    function refreshDataTable() {
+        if (!tableEl || !window.jQuery || !window.jQuery.fn || !window.jQuery.fn.DataTable) {
+            return;
+        }
+
+        if (window.jQuery.fn.DataTable.isDataTable(tableEl)) {
+            tableEl.DataTable().destroy();
+        }
+
+        tableEl.DataTable({
+            responsive: true,
+            autoWidth: false,
+            paging: false,
+            searching: true,
+            order: [[1, 'asc']],
+            columnDefs: [
+                { targets: [0, -1], orderable: false, searchable: false },
+            ],
+        });
+    }
+
     async function loadRouters() {
         try {
-            const payload = await getJson('/admin/api/routers/status?live=1');
+            const payload = await requestJson('/admin/api/routers/status?live=1');
             const rows = Array.isArray(payload?.data) ? payload.data : [];
             renderRows(rows);
             renderStats(rows);
-
-            if ($.fn.DataTable.isDataTable(tableEl)) {
-                tableEl.DataTable().destroy();
-            }
-            tableEl.DataTable({ responsive: true, autoWidth: false, paging: false, searching: true, order: [[1, 'asc']] });
+            refreshDataTable();
         } catch (error) {
             console.error('Failed to load routers:', error);
+            showAlert('Refresh failed', error.message || 'Unable to load routers right now.', 'error');
         }
     }
 
+    window.viewRouter = function (id) {
+        if (!id) return;
+        window.location.assign(`${viewBaseUrl}/${id}`);
+    };
+
+    window.testConnection = async function (id) {
+        if (!id) return;
+
+        if (window.Swal) {
+            Swal.fire({
+                title: 'Testing router...',
+                text: 'Checking API connectivity',
+                allowOutsideClick: false,
+                didOpen: () => Swal.showLoading(),
+            });
+        }
+
+        try {
+            const payload = await requestJson('/admin/api/routers/test', {
+                method: 'POST',
+                body: JSON.stringify({ router_id: id }),
+            });
+            const details = payload?.data || {};
+            const lines = [
+                details.cpu != null ? `CPU Load: ${details.cpu}%` : null,
+                details.memory != null ? `Memory Usage: ${details.memory}%` : null,
+                details.uptime ? `Uptime: ${details.uptime}` : null,
+            ].filter(Boolean);
+
+            await showAlert('Router reachable', lines.join('\n') || (payload?.message || 'Router is online'), 'success');
+            await loadRouters();
+        } catch (error) {
+            await showAlert('Connection failed', error.message || 'Router is offline or unreachable.', 'error');
+        }
+    };
+
     window.refreshRouters = loadRouters;
+
+    if (selectAll) {
+        selectAll.addEventListener('change', function () {
+            document.querySelectorAll('.router-checkbox').forEach(checkbox => {
+                checkbox.checked = this.checked;
+            });
+        });
+    }
+
+    if (bulkDelete) {
+        bulkDelete.addEventListener('click', async function () {
+            const selectedIds = Array.from(document.querySelectorAll('.router-checkbox:checked'))
+                .map(checkbox => Number(checkbox.value || 0))
+                .filter(Boolean);
+
+            if (!selectedIds.length) {
+                await showAlert('No routers selected', 'Select at least one router to delete.', 'info');
+                return;
+            }
+
+            if (window.Swal) {
+                const result = await Swal.fire({
+                    title: 'Delete selected routers?',
+                    text: `You are about to delete ${selectedIds.length} router(s). This cannot be undone.`,
+                    icon: 'warning',
+                    showCancelButton: true,
+                    confirmButtonText: 'Yes, delete',
+                    confirmButtonColor: '#EF4444',
+                });
+
+                if (!result.isConfirmed) {
+                    return;
+                }
+            }
+
+            try {
+                const payload = await requestJson('/admin/api/routers/bulk-delete', {
+                    method: 'POST',
+                    body: JSON.stringify({ router_ids: selectedIds }),
+                });
+                await showAlert('Routers deleted', payload?.message || 'Selected routers were deleted.', 'success');
+                if (selectAll) {
+                    selectAll.checked = false;
+                }
+                await loadRouters();
+            } catch (error) {
+                await showAlert('Delete failed', error.message || 'Unable to delete the selected routers.', 'error');
+            }
+        });
+    }
+
+    function hideModal(id) {
+        if (window.CBModal && window.CBModal.hideById) {
+            window.CBModal.hideById(id);
+            return;
+        }
+
+        const modal = document.getElementById(id);
+        if (!modal) return;
+
+        if (window.bootstrap && window.bootstrap.Modal) {
+            window.bootstrap.Modal.getOrCreateInstance(modal).hide();
+            return;
+        }
+
+        if (window.jQuery && window.jQuery.fn && window.jQuery.fn.modal) {
+            window.jQuery(modal).modal('hide');
+        }
+    }
+
+    if (saveRouterButton && addRouterForm) {
+        saveRouterButton.addEventListener('click', async function () {
+            if (!addRouterForm.reportValidity()) {
+                return;
+            }
+
+            const formData = new FormData(addRouterForm);
+            const payload = {
+                name: String(formData.get('name') || '').trim(),
+                type: String(formData.get('type') || 'hotspot'),
+                ip: String(formData.get('ip') || '').trim(),
+                port: Number(formData.get('port') || 8728),
+                username: String(formData.get('username') || '').trim(),
+                password: String(formData.get('password') || ''),
+                location: String(formData.get('location') || '').trim(),
+                notes: String(formData.get('notes') || '').trim(),
+            };
+
+            const originalLabel = saveRouterButton.innerHTML;
+            saveRouterButton.disabled = true;
+            saveRouterButton.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>Saving...';
+
+            try {
+                const response = await requestJson('/admin/api/routers', {
+                    method: 'POST',
+                    body: JSON.stringify(payload),
+                });
+                addRouterForm.reset();
+                addRouterForm.querySelector('input[name="port"]').value = '8728';
+                addRouterForm.querySelector('input[name="username"]').value = 'admin';
+                hideModal('addRouterModal');
+                await showAlert('Router added', response?.message || 'Router saved successfully.', 'success');
+                await loadRouters();
+            } catch (error) {
+                await showAlert('Save failed', error.message || 'Unable to save the router.', 'error');
+            } finally {
+                saveRouterButton.disabled = false;
+                saveRouterButton.innerHTML = originalLabel;
+            }
+        });
+    }
+
     loadRouters();
 });
 </script>
