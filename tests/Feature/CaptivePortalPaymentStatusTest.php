@@ -396,6 +396,57 @@ class CaptivePortalPaymentStatusTest extends TestCase
         ]);
     }
 
+    public function test_status_keeps_verifying_when_query_reports_still_processing(): void
+    {
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant);
+        $payment = $this->createPayment($tenant, $package, [
+            'status' => 'pending',
+            'mpesa_checkout_request_id' => 'ws_CO_still_processing_001',
+            'metadata' => [
+                'daraja_last_status' => 'pending_verification',
+            ],
+        ]);
+
+        $daraja = Mockery::mock(DarajaService::class);
+        $daraja->shouldReceive('queryStkStatus')->once()->with('ws_CO_still_processing_001')->andReturn([
+            'success' => true,
+            'final' => false,
+            'is_pending' => true,
+            'is_success' => false,
+            'is_failed' => false,
+            'response_code' => '0',
+            'result_code' => 1,
+            'result_desc' => 'The transaction is still under processing.',
+            'merchant_request_id' => '29115-88888-1',
+            'checkout_request_id' => 'ws_CO_still_processing_001',
+            'receipt_number' => null,
+            'phone_number' => null,
+            'amount' => null,
+            'raw' => [
+                'ResultCode' => 1,
+                'ResultDesc' => 'The transaction is still under processing.',
+                'CheckoutRequestID' => 'ws_CO_still_processing_001',
+            ],
+            'error' => null,
+        ]);
+        $this->app->instance(DarajaService::class, $daraja);
+
+        $response = $this->get(route('wifi.status', [
+            'phone' => '0712345678',
+            'tenant_id' => $tenant->id,
+            'payment' => $payment->id,
+            'recheck' => 1,
+        ]));
+
+        $response->assertOk();
+        $response->assertSeeText('We are verifying your payment');
+
+        $payment->refresh();
+        $this->assertSame('pending', $payment->status);
+        $this->assertSame('query_pending', data_get($payment->metadata, 'daraja_last_status'));
+    }
+
     public function test_mpesa_callback_marks_underpaid_transaction_failed(): void
     {
         $tenant = $this->createTenant();

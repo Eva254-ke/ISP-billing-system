@@ -366,8 +366,17 @@ class CaptivePortalController extends Controller
         $callbackResultCode = data_get($payment->callback_data, 'ResultCode');
         $hasFinalFailureFromCallback = is_numeric($callbackResultCode) && (int) $callbackResultCode !== 0;
         $recentFailure = $payment->failed_at?->gt(now()->subMinutes(self::VERIFICATION_WINDOW_MINUTES)) ?? false;
+        $likelyStillProcessing = $this->isPaymentFailureLikelyStillProcessing($payment, $metadata);
 
-        if ($hasFinalFailureFromCallback || in_array($lastStatus, ['failed_via_query', 'underpaid_amount'], true)) {
+        if ($likelyStillProcessing && $recentFailure) {
+            return true;
+        }
+
+        if (
+            $hasFinalFailureFromCallback
+            || $lastStatus === 'underpaid_amount'
+            || ($lastStatus === 'failed_via_query' && !$likelyStillProcessing)
+        ) {
             return false;
         }
 
@@ -383,7 +392,7 @@ class CaptivePortalController extends Controller
             $statusView = 'pending';
         }
 
-        if ($statusView === 'pending' && trim((string) ($metadata['daraja_last_status'] ?? '')) === 'pending_verification') {
+        if ($statusView === 'pending' && in_array(trim((string) ($metadata['daraja_last_status'] ?? '')), ['pending_verification', 'query_pending'], true)) {
             $statusView = 'verifying';
         }
 
@@ -1112,12 +1121,14 @@ class CaptivePortalController extends Controller
             $recentFailure = $payment->failed_at?->gt(now()->subMinutes(self::VERIFICATION_WINDOW_MINUTES)) ?? false;
             $callbackResultCode = data_get($payment->callback_data, 'ResultCode');
             $lastStatus = trim((string) ($metadata['daraja_last_status'] ?? ''));
+            $likelyStillProcessing = $this->isPaymentFailureLikelyStillProcessing($payment, $metadata);
 
             $hasFinalFailureFromCallback = is_numeric($callbackResultCode) && (int) $callbackResultCode !== 0;
             if (
                 !$recentFailure
                 || $hasFinalFailureFromCallback
-                || in_array($lastStatus, ['failed_via_query', 'underpaid_amount'], true)
+                || $lastStatus === 'underpaid_amount'
+                || ($lastStatus === 'failed_via_query' && !$likelyStillProcessing)
             ) {
                 return;
             }
@@ -1151,6 +1162,28 @@ class CaptivePortalController extends Controller
                 'status' => $status,
                 'error' => $result['error'] ?? null,
             ]);
+            return;
+        }
+
+        if ($this->shouldTreatDarajaQueryResultAsPending($result)) {
+            $payment->update([
+                'status' => 'pending',
+                'failed_at' => null,
+                'callback_data' => (array) ($result['raw'] ?? []),
+                'metadata' => array_merge($metadata, [
+                    'daraja_last_status' => 'query_pending',
+                    'daraja_verification_required' => true,
+                    'daraja_query_pending_at' => now()->toIso8601String(),
+                ]),
+            ]);
+
+            Log::info('Daraja STK query indicates payment is still processing', [
+                'payment_id' => $payment->id,
+                'checkout_request_id' => $checkoutRequestId,
+                'result_code' => $result['result_code'] ?? null,
+                'result_desc' => $result['result_desc'] ?? null,
+            ]);
+
             return;
         }
 
@@ -1201,6 +1234,54 @@ class CaptivePortalController extends Controller
         }
 
         $payment->update(['metadata' => $metadata]);
+    }
+
+    private function shouldTreatDarajaQueryResultAsPending(array $result): bool
+    {
+        if (($result['is_pending'] ?? false) === true) {
+            return true;
+        }
+
+        $resultCode = $result['result_code'] ?? null;
+        $resultDesc = strtolower(trim((string) ($result['result_desc'] ?? '')));
+
+        if (
+            str_contains($resultDesc, 'still under process')
+            || str_contains($resultDesc, 'still under processing')
+            || str_contains($resultDesc, 'under process')
+            || str_contains($resultDesc, 'under processing')
+            || str_contains($resultDesc, 'being processed')
+            || str_contains($resultDesc, 'in progress')
+            || str_contains($resultDesc, 'processing')
+        ) {
+            return true;
+        }
+
+        return is_numeric($resultCode) && (int) $resultCode === 1;
+    }
+
+    private function isPaymentFailureLikelyStillProcessing(Payment $payment, array $metadata = []): bool
+    {
+        $metadata = $metadata !== [] ? $metadata : (is_array($payment->metadata) ? $payment->metadata : []);
+
+        $failureText = strtolower(trim((string) (
+            $payment->reconciliation_notes
+            ?? ($metadata['daraja_failure_reason'] ?? null)
+            ?? data_get($payment->callback_data, 'ResultDesc')
+            ?? ''
+        )));
+
+        if ($failureText === '') {
+            return false;
+        }
+
+        return str_contains($failureText, 'still under process')
+            || str_contains($failureText, 'still under processing')
+            || str_contains($failureText, 'under process')
+            || str_contains($failureText, 'under processing')
+            || str_contains($failureText, 'being processed')
+            || str_contains($failureText, 'in progress')
+            || str_contains($failureText, 'processing');
     }
 
     private function activatePaidAccess(Payment $payment): ?UserSession

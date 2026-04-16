@@ -208,6 +208,7 @@ class DarajaService
             return [
                 'success' => false,
                 'final' => false,
+                'is_pending' => false,
                 'is_success' => false,
                 'is_failed' => false,
                 'response_code' => null,
@@ -227,6 +228,7 @@ class DarajaService
             return [
                 'success' => false,
                 'final' => false,
+                'is_pending' => false,
                 'is_success' => false,
                 'is_failed' => false,
                 'response_code' => null,
@@ -247,6 +249,7 @@ class DarajaService
             return [
                 'success' => false,
                 'final' => false,
+                'is_pending' => false,
                 'is_success' => false,
                 'is_failed' => false,
                 'response_code' => null,
@@ -282,8 +285,10 @@ class DarajaService
             $responseCode = (string) ($result['ResponseCode'] ?? '');
             $resultCodeRaw = $result['ResultCode'] ?? null;
             $resultCode = is_numeric($resultCodeRaw) ? (int) $resultCodeRaw : null;
+            $resultDesc = (string) ($result['ResultDesc'] ?? '');
             $accepted = $response->successful() && $responseCode === '0';
-            $isFinal = $accepted && $resultCode !== null;
+            $isPending = $accepted && $this->isPendingQueryResult($resultCode, $resultDesc);
+            $isFinal = $accepted && $resultCode !== null && !$isPending;
             $isSuccess = $isFinal && $resultCode === 0;
             $isFailed = $isFinal && $resultCode !== 0;
 
@@ -292,17 +297,20 @@ class DarajaService
                 'checkout_request_id' => $checkoutRequestId,
                 'response_code' => $responseCode,
                 'result_code' => $resultCode,
+                'result_desc' => $resultDesc,
+                'is_pending' => $isPending,
                 'http_status' => $response->status(),
             ]);
 
             return [
                 'success' => $accepted,
                 'final' => $isFinal,
+                'is_pending' => $isPending,
                 'is_success' => $isSuccess,
                 'is_failed' => $isFailed,
                 'response_code' => $responseCode !== '' ? $responseCode : null,
                 'result_code' => $resultCode,
-                'result_desc' => (string) ($result['ResultDesc'] ?? ''),
+                'result_desc' => $resultDesc,
                 'merchant_request_id' => $result['MerchantRequestID'] ?? null,
                 'checkout_request_id' => $result['CheckoutRequestID'] ?? $checkoutRequestId,
                 'receipt_number' => !empty($result['MpesaReceiptNumber']) ? (string) $result['MpesaReceiptNumber'] : null,
@@ -323,6 +331,7 @@ class DarajaService
             return [
                 'success' => false,
                 'final' => false,
+                'is_pending' => false,
                 'is_success' => false,
                 'is_failed' => false,
                 'response_code' => null,
@@ -337,6 +346,29 @@ class DarajaService
                 'error' => 'Connection error: ' . $e->getMessage(),
             ];
         }
+    }
+
+    private function isPendingQueryResult(?int $resultCode, string $resultDesc): bool
+    {
+        if ($resultCode === null || $resultCode === 0) {
+            return false;
+        }
+
+        $desc = strtolower(trim($resultDesc));
+
+        if (
+            str_contains($desc, 'still under process')
+            || str_contains($desc, 'still under processing')
+            || str_contains($desc, 'under process')
+            || str_contains($desc, 'under processing')
+            || str_contains($desc, 'being processed')
+            || str_contains($desc, 'in progress')
+            || str_contains($desc, 'processing')
+        ) {
+            return true;
+        }
+
+        return in_array($resultCode, [1], true);
     }
 
     private function requestAccessToken(): array
