@@ -138,11 +138,30 @@ class AdminPageController extends Controller
         $basePayments = Payment::query()
             ->when($tenant, fn ($query) => $query->where('tenant_id', $tenant->id));
 
+        $packages = Package::query()
+            ->when($tenant, fn ($query) => $query->where('tenant_id', $tenant->id))
+            ->where('is_active', true)
+            ->orderBy('name')
+            ->get(['id', 'name']);
+
         $rows = (clone $basePayments)
             ->with('package')
             ->latest('created_at')
             ->limit(100)
             ->get();
+
+        $dailyRevenue = collect();
+        for ($i = 6; $i >= 0; $i--) {
+            $day = now()->subDays($i);
+            $dailyRevenue->push([
+                'date' => $day->toDateString(),
+                'label' => $day->format('D'),
+                'amount' => (float) (clone $basePayments)
+                    ->whereDate('created_at', $day->toDateString())
+                    ->whereIn('status', ['completed', 'confirmed', 'activated'])
+                    ->sum('amount'),
+            ]);
+        }
 
         $stats = [
             'revenue_total' => (float) (clone $basePayments)
@@ -160,6 +179,8 @@ class AdminPageController extends Controller
             'tenant' => $tenant,
             'stats' => $stats,
             'payments' => $rows,
+            'packages' => $packages,
+            'dailyRevenue' => $dailyRevenue,
         ]);
     }
 

@@ -838,8 +838,8 @@ class CaptivePortalController extends Controller
             callbackUrl: $this->resolveDarajaCallbackUrl()
         );
 
-        $newCheckoutId = (string) ($response['checkout_request_id'] ?? '');
-        $newMerchantId = (string) ($response['merchant_request_id'] ?? '');
+        $newCheckoutId = $this->extractDarajaCheckoutRequestId($response);
+        $newMerchantId = $this->extractDarajaMerchantRequestId($response);
         $metadata = is_array($payment->metadata) ? $payment->metadata : [];
 
         $updates = [
@@ -847,14 +847,26 @@ class CaptivePortalController extends Controller
                 'gateway' => 'daraja',
                 'daraja_response_code' => $response['response_code'] ?? null,
                 'daraja_response_description' => $response['response_description'] ?? null,
-                'daraja_merchant_request_id' => $newMerchantId !== '' ? $newMerchantId : null,
+                'daraja_merchant_request_id' => $newMerchantId,
                 'daraja_last_request_at' => now()->toIso8601String(),
                 'daraja_last_status' => ($response['success'] ?? false) ? 'pending_customer_confirmation' : ($metadata['daraja_last_status'] ?? null),
             ]),
         ];
 
-        if ($response['success'] && $newCheckoutId !== '' && $newCheckoutId !== (string) $payment->mpesa_checkout_request_id) {
-            $updates['mpesa_checkout_request_id'] = $newCheckoutId;
+        if ($newCheckoutId !== null && $newCheckoutId !== (string) $payment->mpesa_checkout_request_id) {
+            $checkoutIdTaken = Payment::withTrashed()
+                ->where('mpesa_checkout_request_id', $newCheckoutId)
+                ->where('id', '!=', $payment->id)
+                ->exists();
+
+            if ($checkoutIdTaken) {
+                Log::critical('Daraja checkout id conflict while updating initiated payment', [
+                    'payment_id' => $payment->id,
+                    'checkout_request_id' => $newCheckoutId,
+                ]);
+            } else {
+                $updates['mpesa_checkout_request_id'] = $newCheckoutId;
+            }
         }
 
         $payment->update($updates);
@@ -915,8 +927,45 @@ class CaptivePortalController extends Controller
 
         $responseCode = trim((string) ($response['response_code'] ?? ''));
         $hasRawPayload = !empty((array) ($response['raw'] ?? []));
+        $hasCheckoutRequestId = $this->extractDarajaCheckoutRequestId($response) !== null;
 
-        return !$hasRawPayload || $responseCode === '';
+        return $hasCheckoutRequestId || !$hasRawPayload || $responseCode === '';
+    }
+
+    private function extractDarajaCheckoutRequestId(array $response): ?string
+    {
+        $candidates = [
+            $response['checkout_request_id'] ?? null,
+            data_get($response, 'raw.CheckoutRequestID'),
+            data_get($response, 'raw.checkout_request_id'),
+        ];
+
+        foreach ($candidates as $candidate) {
+            $value = trim((string) $candidate);
+            if ($value !== '') {
+                return $value;
+            }
+        }
+
+        return null;
+    }
+
+    private function extractDarajaMerchantRequestId(array $response): ?string
+    {
+        $candidates = [
+            $response['merchant_request_id'] ?? null,
+            data_get($response, 'raw.MerchantRequestID'),
+            data_get($response, 'raw.merchant_request_id'),
+        ];
+
+        foreach ($candidates as $candidate) {
+            $value = trim((string) $candidate);
+            if ($value !== '') {
+                return $value;
+            }
+        }
+
+        return null;
     }
 
     private function markPaymentPendingVerificationFromDaraja(Payment $payment, array $payload, string $reason): void

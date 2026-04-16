@@ -359,6 +359,31 @@ class ProcessMpesaCallback implements ShouldQueue
 
     private function findFallbackPayment(string $checkoutRequestId): ?Payment
     {
+        $merchantRequestId = trim((string) ($this->callbackData['MerchantRequestID'] ?? ''));
+        if ($merchantRequestId !== '') {
+            $merchantMatches = Payment::query()
+                ->whereIn('status', ['initiated', 'pending', 'failed'])
+                ->whereIn('payment_channel', ['captive_portal', 'session_extension'])
+                ->whereNull('mpesa_receipt_number')
+                ->where('created_at', '>=', now()->subHours(4))
+                ->where('metadata->daraja_merchant_request_id', $merchantRequestId)
+                ->orderByDesc('created_at')
+                ->limit(3)
+                ->get();
+
+            if ($merchantMatches->count() === 1) {
+                return $merchantMatches->first();
+            }
+
+            if ($merchantMatches->count() > 1) {
+                Log::channel('payment')->critical('Ambiguous merchant-based callback mapping; manual review required', [
+                    'checkout_request_id' => $checkoutRequestId,
+                    'merchant_request_id' => $merchantRequestId,
+                    'payment_ids' => $merchantMatches->pluck('id')->all(),
+                ]);
+            }
+        }
+
         $amount = $this->extractAmount($this->callbackData);
         $phoneCandidates = $this->buildPhoneCandidates($this->extractPhoneNumber($this->callbackData));
 

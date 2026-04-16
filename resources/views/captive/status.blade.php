@@ -283,18 +283,32 @@
     <script>
         @if($shouldAutoPoll)
         const currentStatus = @json($statusView);
-        setInterval(async () => {
+        let statusPollInFlight = false;
+
+        const pollStatus = async () => {
+            if (statusPollInFlight) {
+                return;
+            }
+
+            statusPollInFlight = true;
             try {
                 const response = await fetch('{{ $statusCheckRoute }}', {
-                    headers: { 'Accept': 'application/json' }
+                    headers: { 'Accept': 'application/json' },
+                    cache: 'no-store'
                 });
 
                 if (!response.ok) {
                     return;
                 }
 
-                const payload = await response.json();
-                if (!payload) {
+                let payload = null;
+                try {
+                    payload = await response.json();
+                } catch (jsonError) {
+                    return;
+                }
+
+                if (!payload || typeof payload !== 'object') {
                     return;
                 }
 
@@ -311,7 +325,13 @@
                 }
             } catch (error) {
                 // Keep silent, meta refresh acts as fallback.
+            } finally {
+                statusPollInFlight = false;
             }
+        };
+
+        setInterval(() => {
+            void pollStatus();
         }, 5000);
         @endif
 
