@@ -13,6 +13,7 @@ use App\Services\Mpesa\DarajaService;
 use App\Services\Radius\FreeRadiusProvisioningService;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Cache;
 
 class CaptivePortalController extends Controller
 {
@@ -20,6 +21,8 @@ class CaptivePortalController extends Controller
     private const STATUS_PRIORITIES = ['initiated', 'pending', 'confirmed', 'completed', 'activated'];
     private const KENYA_PHONE_REGEX = '/^(?:0[17]\d{8}|(?:\+?254)[17]\d{8})$/';
     private const VERIFICATION_WINDOW_MINUTES = 20;
+    private const DUPLICATE_PAYMENT_WINDOW_MINUTES = 20;
+    private const PAYMENT_LOCK_SECONDS = 20;
 
     /**
      * Show package selection page (public, no auth required)
@@ -103,40 +106,107 @@ class CaptivePortalController extends Controller
         if (!$this->isGatewayConfigured($gateway)) {
             return back()->withErrors(['Payment gateway is not configured. Please contact support.']);
         }
-        
-        $payment = DB::transaction(function () use ($phone, $package, $gateway) {
-            return Payment::create([
-                'tenant_id' => $package->tenant_id,
+
+        $lock = null;
+        try {
+            $lock = Cache::lock($this->buildPaymentInitiationLockKey($tenantId, $phone, (int) $package->id), self::PAYMENT_LOCK_SECONDS);
+        } catch (\Throwable $lockError) {
+            Log::warning('Payment initiation lock unavailable; continuing without lock', [
+                'tenant_id' => $tenantId,
                 'phone' => $phone,
                 'package_id' => $package->id,
-                'package_name' => $package->name,
-                'amount' => $package->price,
-                'currency' => $package->currency ?? 'KES',
-                'mpesa_checkout_request_id' => 'CP-' . strtoupper(uniqid()),
-                'status' => 'pending',
-                'initiated_at' => now(),
-                'payment_channel' => 'captive_portal',
-                'metadata' => [
-                    'gateway' => $gateway,
-                    'created_via' => 'captive_portal',
-                ],
+                'error' => $lockError->getMessage(),
             ]);
-        });
-        
-        Log::info('Captive payment initiated', [
-            'phone' => $phone,
-            'package' => $package->name,
-            'amount' => $package->price,
-            'reference' => $payment->mpesa_checkout_request_id,
-        ]);
-        
-        session([
-            'captive_phone' => $phone,
-            'captive_tenant_id' => $package->tenant_id,
-            'captive_payment_id' => $payment->id,
-        ]);
-        
+        }
+
+        if ($lock && !$lock->get()) {
+            $existing = $this->findRecentCaptivePortalPayment($tenantId, $phone, (int) $package->id);
+            if ($existing) {
+                session([
+                    'captive_phone' => $phone,
+                    'captive_tenant_id' => $package->tenant_id,
+                    'captive_payment_id' => $existing->id,
+                ]);
+
+                return redirect()->route('wifi.status', $this->buildStatusRouteParameters(
+                    phone: $phone,
+                    payment: $existing,
+                    tenantId: $package->tenant_id
+                ))->with('message', 'A payment request is already being processed. Please wait for confirmation.');
+            }
+
+            return back()->withErrors(['Payment request is already in progress. Please try again in a few seconds.']);
+        }
+
         try {
+            $existing = $this->findRecentCaptivePortalPayment($tenantId, $phone, (int) $package->id);
+            if ($existing) {
+                $this->reconcileDarajaPaymentIfNeeded($existing, false);
+                $existing = $existing->fresh();
+
+                if ($existing && $this->shouldReuseCaptivePaymentAttempt($existing)) {
+                    if (in_array((string) $existing->status, ['completed', 'confirmed'], true)) {
+                        try {
+                            $this->activatePaidAccess($existing);
+                        } catch (\Throwable $activationError) {
+                            Log::warning('Activation retry failed while reusing recent captive payment', [
+                                'payment_id' => $existing->id,
+                                'error' => $activationError->getMessage(),
+                            ]);
+                        }
+                    }
+
+                    session([
+                        'captive_phone' => $phone,
+                        'captive_tenant_id' => $package->tenant_id,
+                        'captive_payment_id' => $existing->id,
+                    ]);
+
+                    $message = in_array((string) $existing->status, ['completed', 'confirmed'], true)
+                        ? 'Payment already confirmed. Connecting you now.'
+                        : 'Payment request already in progress. Complete the M-Pesa prompt and wait for confirmation.';
+
+                    return redirect()->route('wifi.status', $this->buildStatusRouteParameters(
+                            phone: $phone,
+                            payment: $existing,
+                            tenantId: $package->tenant_id
+                        ))
+                        ->with('message', $message);
+                }
+            }
+
+            $payment = DB::transaction(function () use ($phone, $package, $gateway) {
+                return Payment::create([
+                    'tenant_id' => $package->tenant_id,
+                    'phone' => $phone,
+                    'package_id' => $package->id,
+                    'package_name' => $package->name,
+                    'amount' => $package->price,
+                    'currency' => $package->currency ?? 'KES',
+                    'mpesa_checkout_request_id' => 'CP-' . strtoupper(uniqid()),
+                    'status' => 'pending',
+                    'initiated_at' => now(),
+                    'payment_channel' => 'captive_portal',
+                    'metadata' => [
+                        'gateway' => $gateway,
+                        'created_via' => 'captive_portal',
+                    ],
+                ]);
+            });
+
+            Log::info('Captive payment initiated', [
+                'phone' => $phone,
+                'package' => $package->name,
+                'amount' => $package->price,
+                'reference' => $payment->mpesa_checkout_request_id,
+            ]);
+
+            session([
+                'captive_phone' => $phone,
+                'captive_tenant_id' => $package->tenant_id,
+                'captive_payment_id' => $payment->id,
+            ]);
+
             $response = $this->initiateStkPush(
                 payment: $payment,
                 package: $package,
@@ -171,6 +241,12 @@ class CaptivePortalController extends Controller
                 'gateway' => $gateway,
             ]);
             return back()->withErrors(['Payment service unavailable. Please try again.']);
+        } finally {
+            try {
+                $lock?->release();
+            } catch (\Throwable) {
+                // Ignore lock release failures; lock auto-expires.
+            }
         }
     }
 
@@ -249,13 +325,6 @@ class CaptivePortalController extends Controller
                 ->first();
         }
 
-        $sessionPaymentId = (int) session('captive_payment_id', 0);
-        if ($sessionPaymentId > 0) {
-            return (clone $paymentQuery)
-                ->whereKey($sessionPaymentId)
-                ->first();
-        }
-
         return null;
     }
 
@@ -298,7 +367,7 @@ class CaptivePortalController extends Controller
         $hasFinalFailureFromCallback = is_numeric($callbackResultCode) && (int) $callbackResultCode !== 0;
         $recentFailure = $payment->failed_at?->gt(now()->subMinutes(self::VERIFICATION_WINDOW_MINUTES)) ?? false;
 
-        if ($hasFinalFailureFromCallback || in_array($lastStatus, ['failed_via_query', 'rejected_by_gateway'], true)) {
+        if ($hasFinalFailureFromCallback || in_array($lastStatus, ['failed_via_query', 'underpaid_amount'], true)) {
             return false;
         }
 
@@ -1048,7 +1117,7 @@ class CaptivePortalController extends Controller
             if (
                 !$recentFailure
                 || $hasFinalFailureFromCallback
-                || in_array($lastStatus, ['failed_via_query', 'rejected_by_gateway'], true)
+                || in_array($lastStatus, ['failed_via_query', 'underpaid_amount'], true)
             ) {
                 return;
             }
@@ -1333,6 +1402,40 @@ class CaptivePortalController extends Controller
     private function resolvePaymentGateway(): string
     {
         return 'daraja';
+    }
+
+    private function findRecentCaptivePortalPayment(int $tenantId, string $phone, int $packageId): ?Payment
+    {
+        return Payment::query()
+            ->where('tenant_id', $tenantId)
+            ->where('phone', $phone)
+            ->where('package_id', $packageId)
+            ->where('payment_channel', 'captive_portal')
+            ->whereIn('status', ['initiated', 'pending', 'failed', 'confirmed', 'completed'])
+            ->where('created_at', '>=', now()->subMinutes(self::DUPLICATE_PAYMENT_WINDOW_MINUTES))
+            ->orderByDesc('created_at')
+            ->orderByDesc('id')
+            ->first();
+    }
+
+    private function shouldReuseCaptivePaymentAttempt(Payment $payment): bool
+    {
+        $status = (string) $payment->status;
+
+        if (in_array($status, ['initiated', 'pending', 'confirmed', 'completed'], true)) {
+            return true;
+        }
+
+        if ($status === 'failed' && $this->paymentNeedsVerification($payment)) {
+            return true;
+        }
+
+        return false;
+    }
+
+    private function buildPaymentInitiationLockKey(int $tenantId, string $phone, int $packageId): string
+    {
+        return sprintf('captive-pay:%d:%s:%d', $tenantId, preg_replace('/\D+/', '', $phone) ?: $phone, $packageId);
     }
 
     private function isGatewayConfigured(string $gateway): bool

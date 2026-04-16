@@ -255,6 +255,122 @@ class CaptivePortalPaymentStatusTest extends TestCase
         $this->assertSame('QK999XYZ', $payment->mpesa_receipt_number);
     }
 
+    public function test_pay_reuses_recent_pending_payment_attempt_instead_of_creating_duplicate(): void
+    {
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant);
+        $existing = $this->createPayment($tenant, $package, [
+            'status' => 'pending',
+            'mpesa_checkout_request_id' => 'CP-EXISTING-001',
+        ]);
+
+        $daraja = Mockery::mock(DarajaService::class);
+        $daraja->shouldReceive('isConfigured')->once()->andReturn(true);
+        $daraja->shouldNotReceive('stkPush');
+        $this->app->instance(DarajaService::class, $daraja);
+
+        $response = $this->post(route('wifi.pay', ['tenant_id' => $tenant->id]), [
+            'phone' => '0712345678',
+            'package_id' => $package->id,
+        ]);
+
+        $response->assertRedirect(route('wifi.status', [
+            'phone' => '0712345678',
+            'tenant_id' => $tenant->id,
+            'payment' => $existing->id,
+        ]));
+
+        $this->assertSame(1, Payment::query()->count());
+    }
+
+    public function test_status_ignores_stale_failed_payment_from_session_when_newer_payment_exists(): void
+    {
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant);
+
+        $staleFailed = $this->createPayment($tenant, $package, [
+            'status' => 'failed',
+            'mpesa_checkout_request_id' => 'CP-STALE-FAILED',
+            'failed_at' => now()->subMinutes(30),
+            'metadata' => [
+                'daraja_last_status' => 'rejected_by_gateway',
+            ],
+        ]);
+
+        Payment::query()->whereKey($staleFailed->id)->update([
+            'created_at' => now()->subMinutes(30),
+        ]);
+
+        $this->createPayment($tenant, $package, [
+            'status' => 'pending',
+            'mpesa_checkout_request_id' => 'CP-NEW-PENDING',
+        ]);
+
+        $response = $this->withSession(['captive_payment_id' => $staleFailed->id])
+            ->get(route('wifi.status', [
+                'phone' => '0712345678',
+                'tenant_id' => $tenant->id,
+            ]));
+
+        $response->assertOk();
+        $response->assertSeeText('Confirm the M-Pesa prompt');
+        $response->assertDontSeeText('This payment attempt did not go through');
+    }
+
+    public function test_check_status_returns_verifying_for_recent_failed_rejected_by_gateway_payment(): void
+    {
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant);
+        $payment = $this->createPayment($tenant, $package, [
+            'status' => 'failed',
+            'mpesa_checkout_request_id' => 'CP-FAILED-RECENT',
+            'failed_at' => now()->subMinutes(2),
+            'metadata' => [
+                'daraja_last_status' => 'rejected_by_gateway',
+            ],
+        ]);
+
+        $response = $this->getJson(route('wifi.status.check', [
+            'phone' => '0712345678',
+            'tenant_id' => $tenant->id,
+            'payment' => $payment->id,
+        ]));
+
+        $response->assertOk();
+        $response->assertJson([
+            'status' => 'verifying',
+            'payment_id' => $payment->id,
+        ]);
+    }
+
+    public function test_mpesa_callback_marks_underpaid_transaction_failed(): void
+    {
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant, ['price' => 100]);
+        $payment = $this->createPayment($tenant, $package, [
+            'amount' => 100,
+            'status' => 'pending',
+            'mpesa_checkout_request_id' => 'ws_CO_underpaid_001',
+        ]);
+
+        $job = new ProcessMpesaCallback([
+            'CheckoutRequestID' => 'ws_CO_underpaid_001',
+            'ResultCode' => 0,
+            'ResultDesc' => 'The service request is processed successfully.',
+            'MpesaReceiptNumber' => 'QKUNDERPAID1',
+            'PhoneNumber' => '254712345678',
+            'Amount' => 50,
+        ]);
+
+        $job->handle(Mockery::mock(SessionManager::class));
+
+        $payment->refresh();
+        $this->assertSame('failed', $payment->status);
+        $this->assertSame('underpaid_amount', data_get($payment->metadata, 'daraja_last_status'));
+        $this->assertSame(100.0, (float) data_get($payment->metadata, 'underpaid_expected_amount'));
+        $this->assertSame(50.0, (float) data_get($payment->metadata, 'underpaid_received_amount'));
+    }
+
     private function createTenant(array $overrides = []): Tenant
     {
         return Tenant::query()->create(array_merge([

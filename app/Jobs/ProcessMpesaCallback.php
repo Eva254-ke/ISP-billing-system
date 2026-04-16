@@ -17,6 +17,7 @@ use Illuminate\Support\Facades\Cache;
 class ProcessMpesaCallback implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+    private const AMOUNT_TOLERANCE = 0.01;
 
     /**
      * 🔴 CRITICAL PRIORITY
@@ -91,7 +92,7 @@ class ProcessMpesaCallback implements ShouldQueue
         // ──────────────────────────────────────────────────────────────────
         // EDGE CASE #3: Duplicate callback (Idempotency)
         // ──────────────────────────────────────────────────────────────────
-        if ($payment->status === 'completed') {
+        if (in_array((string) $payment->status, ['completed', 'activated'], true)) {
             Log::channel('payment')->info('Duplicate callback ignored - already completed', [
                 'payment_id' => $payment->id,
                 'receipt' => $payment->mpesa_receipt_number,
@@ -130,7 +131,7 @@ class ProcessMpesaCallback implements ShouldQueue
                 return;
             }
 
-            if ($payment->status === 'completed') {
+            if (in_array((string) $payment->status, ['completed', 'activated'], true)) {
                 DB::commit();
                 $lock->release();
                 return;
@@ -189,6 +190,33 @@ class ProcessMpesaCallback implements ShouldQueue
                 $mpesaReceipt = $this->extractReceiptNumber($this->callbackData);
                 $mpesaPhone = $this->extractPhoneNumber($this->callbackData);
                 $amount = $this->extractAmount($this->callbackData);
+                $expectedAmount = (float) $payment->amount;
+
+                if ($amount !== null && ($amount + self::AMOUNT_TOLERANCE) < $expectedAmount) {
+                    $payment->update([
+                        'status' => 'failed',
+                        'failed_at' => now(),
+                        'callback_data' => $this->callbackData,
+                        'callback_attempts' => $payment->callback_attempts + 1,
+                        'reconciliation_notes' => sprintf('Underpaid amount: expected %.2f, received %.2f', $expectedAmount, $amount),
+                        'metadata' => array_merge($payment->metadata ?? [], [
+                            'daraja_last_status' => 'underpaid_amount',
+                            'underpaid_expected_amount' => $expectedAmount,
+                            'underpaid_received_amount' => $amount,
+                        ]),
+                    ]);
+
+                    Log::channel('payment')->critical('Underpaid M-Pesa callback rejected', [
+                        'payment_id' => $payment->id,
+                        'checkout_request_id' => $checkoutRequestId,
+                        'expected_amount' => $expectedAmount,
+                        'received_amount' => $amount,
+                    ]);
+
+                    DB::commit();
+                    $lock->release();
+                    return;
+                }
 
                 // ──────────────────────────────────────────────────────────────
                 // EDGE CASE #7: Duplicate receipt number (unique constraint)
@@ -218,7 +246,7 @@ class ProcessMpesaCallback implements ShouldQueue
                     'status' => 'confirmed',
                     'mpesa_receipt_number' => $mpesaReceipt,
                     'mpesa_phone' => $this->normalizePhoneForStorage($mpesaPhone) ?? $payment->mpesa_phone,
-                    'amount' => $amount ?? $payment->amount,
+                    'amount' => $amount !== null ? max($expectedAmount, (float) $amount) : $payment->amount,
                     'callback_data' => $this->callbackData,
                     'callback_attempts' => $payment->callback_attempts + 1,
                     'confirmed_at' => now(),
@@ -252,19 +280,44 @@ class ProcessMpesaCallback implements ShouldQueue
                 }
 
                 $sessionPhone = $this->normalizePhoneForStorage($mpesaPhone) ?? (string) $payment->phone;
+                $durationMinutes = (int) ($payment->package?->duration_in_minutes ?? 60);
+                $session = UserSession::query()->where('payment_id', $payment->id)->first();
 
-                $session = UserSession::create([
-                    'tenant_id' => $payment->tenant_id,
-                    'router_id' => $routerId,
-                    'package_id' => $payment->package_id,
-                    'username' => $sessionPhone,
-                    'phone' => $sessionPhone,
-                    'status' => 'pending',
-                    'started_at' => now(),
-                    'expires_at' => now()->addMinutes((int) ($payment->package?->duration_in_minutes ?? 60)),
-                    'grace_period_seconds' => 300,
-                    'payment_id' => $payment->id,
-                ]);
+                if (!$session) {
+                    $session = UserSession::create([
+                        'tenant_id' => $payment->tenant_id,
+                        'router_id' => $routerId,
+                        'package_id' => $payment->package_id,
+                        'username' => $sessionPhone,
+                        'phone' => $sessionPhone,
+                        'status' => 'pending',
+                        'started_at' => now(),
+                        'expires_at' => now()->addMinutes($durationMinutes),
+                        'grace_period_seconds' => 300,
+                        'payment_id' => $payment->id,
+                    ]);
+                } else {
+                    $session->update([
+                        'router_id' => $session->router_id ?: $routerId,
+                        'package_id' => $session->package_id ?: $payment->package_id,
+                        'username' => $session->username ?: $sessionPhone,
+                        'phone' => $session->phone ?: $sessionPhone,
+                        'started_at' => $session->started_at ?: now(),
+                        'expires_at' => $session->expires_at ?: now()->addMinutes($durationMinutes),
+                    ]);
+                }
+
+                if ((string) $session->status === 'active') {
+                    $payment->update([
+                        'status' => 'completed',
+                        'completed_at' => $payment->completed_at ?? now(),
+                        'session_id' => $session->id,
+                    ]);
+
+                    DB::commit();
+                    $lock->release();
+                    return;
+                }
 
                 $result = $sessionManager->activateSession($session, $payment->package);
 
@@ -304,7 +357,18 @@ class ProcessMpesaCallback implements ShouldQueue
             // PROCESS FAILED PAYMENT
             // ──────────────────────────────────────────────────────────────────
             else {
-                $payment->markFailed("M-Pesa ResultCode {$resultCode}: {$resultDesc}");
+                $payment->update([
+                    'status' => 'failed',
+                    'failed_at' => now(),
+                    'callback_data' => $this->callbackData,
+                    'callback_attempts' => $payment->callback_attempts + 1,
+                    'reconciliation_notes' => "M-Pesa ResultCode {$resultCode}: {$resultDesc}",
+                    'metadata' => array_merge($payment->metadata ?? [], [
+                        'daraja_last_status' => 'failed_callback',
+                        'daraja_result_code' => $resultCode,
+                        'daraja_result_desc' => $resultDesc,
+                    ]),
+                ]);
                 
                 Log::channel('payment')->warning('Payment failed', [
                     'payment_id' => $payment->id,
