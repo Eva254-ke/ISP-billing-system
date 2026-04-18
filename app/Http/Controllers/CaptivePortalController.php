@@ -34,6 +34,9 @@ class CaptivePortalController extends Controller
         $phone = $phoneInput !== null
             ? ($this->normalizePhoneForStorage((string) $phoneInput) ?? trim((string) $phoneInput))
             : null;
+        $clientContext = $this->resolveClientContext($request);
+        $clientMac = $clientContext['mac'];
+        $clientIp = $clientContext['ip'];
         $mode = strtolower(trim((string) $request->query('mode', '')));
         $showReconnectScreen = $mode === 'reconnect';
 
@@ -43,6 +46,8 @@ class CaptivePortalController extends Controller
                 'activeSession' => null,
                 'phone' => $phone,
                 'tenant' => null,
+                'clientMac' => $clientMac,
+                'clientIp' => $clientIp,
                 'tenantResolutionError' => 'Tenant portal not resolved. Use your tenant domain (e.g. https://your-subdomain.cloudbridge.network/wifi) or include tenant_id in the URL.',
             ], 400);
         }
@@ -50,7 +55,7 @@ class CaptivePortalController extends Controller
         session(['captive_tenant_id' => $tenant->id]);
 
         if ($showReconnectScreen) {
-            return view('captive.reconnect', compact('phone', 'tenant'));
+            return view('captive.reconnect', compact('phone', 'tenant', 'clientMac', 'clientIp'));
         }
         
         $activeSession = null;
@@ -71,7 +76,7 @@ class CaptivePortalController extends Controller
             ->orderBy('price')
             ->get();
 
-        return view('captive.packages', compact('packages', 'activeSession', 'phone', 'tenant'));
+        return view('captive.packages', compact('packages', 'activeSession', 'phone', 'tenant', 'clientMac', 'clientIp'));
     }
     
     /**
@@ -97,6 +102,8 @@ class CaptivePortalController extends Controller
                 ->withErrors(['Use a valid Safaricom number: 07XXXXXXXX, 01XXXXXXXX, +2547XXXXXXXX or +2541XXXXXXXX.'])
                 ->withInput();
         }
+        $clientContext = $this->resolveClientContext($request);
+        $clientContextMeta = $this->buildClientContextMeta($clientContext, $request);
 
         $package = Package::query()
             ->when($tenantId > 0, fn ($query) => $query->where('tenant_id', $tenantId))
@@ -141,6 +148,14 @@ class CaptivePortalController extends Controller
         try {
             $existing = $this->findReusableCaptivePaymentAttempt($tenantId, $phone, (int) $package->id);
             if ($existing && $this->shouldReuseCaptivePaymentAttempt($existing)) {
+                if ($clientContextMeta !== []) {
+                    $existingMetadata = is_array($existing->metadata) ? $existing->metadata : [];
+                    $existingClientMeta = is_array($existingMetadata['client_context'] ?? null) ? $existingMetadata['client_context'] : [];
+                    $existingMetadata['client_context'] = array_merge($existingClientMeta, $clientContextMeta);
+                    $existing->update(['metadata' => $existingMetadata]);
+                    $existing = $existing->fresh();
+                }
+
                 $this->reconcileDarajaPaymentIfNeeded($existing, false);
                 $existing = $existing->fresh();
 
@@ -175,7 +190,7 @@ class CaptivePortalController extends Controller
                 }
             }
 
-            $payment = DB::transaction(function () use ($phone, $package, $gateway) {
+            $payment = DB::transaction(function () use ($phone, $package, $gateway, $clientContextMeta) {
                 return Payment::create([
                     'tenant_id' => $package->tenant_id,
                     'phone' => $phone,
@@ -190,6 +205,7 @@ class CaptivePortalController extends Controller
                     'metadata' => [
                         'gateway' => $gateway,
                         'created_via' => 'captive_portal',
+                        'client_context' => $clientContextMeta,
                     ],
                 ]);
             });
@@ -479,6 +495,8 @@ class CaptivePortalController extends Controller
     public function reconnect(Request $request)
     {
         $tenantId = $this->resolveTenantId($request);
+        $clientContext = $this->resolveClientContext($request);
+        $clientContextMeta = $this->buildClientContextMeta($clientContext, $request);
 
         if ($tenantId <= 0) {
             return back()->withErrors(['Tenant portal not resolved. Reopen your WiFi portal and try again.']);
@@ -543,7 +561,7 @@ class CaptivePortalController extends Controller
             }
 
             try {
-                $payment = DB::transaction(function () use ($voucher, $phone, $routerId) {
+                $payment = DB::transaction(function () use ($voucher, $phone, $routerId, $clientContextMeta) {
                     $payment = Payment::create([
                         'tenant_id' => $voucher->tenant_id,
                         'phone' => $phone,
@@ -561,20 +579,8 @@ class CaptivePortalController extends Controller
                             'voucher_id' => $voucher->id,
                             'voucher_code' => $voucher->code_display,
                             'redeemed_via' => 'captive_portal',
+                            'client_context' => $clientContextMeta,
                         ],
-                    ]);
-
-                    UserSession::create([
-                        'tenant_id' => $voucher->tenant_id,
-                        'router_id' => $routerId,
-                        'package_id' => $voucher->package_id,
-                        'username' => $this->generateUsername($phone),
-                        'phone' => $phone,
-                        'status' => 'active',
-                        'started_at' => now(),
-                        'expires_at' => now()->copy()->addMinutes($voucher->package->duration_in_minutes ?? 60),
-                        'payment_id' => $payment->id,
-                        'voucher_id' => $voucher->id,
                     ]);
 
                     $voucher->update([
@@ -593,12 +599,25 @@ class CaptivePortalController extends Controller
                 session(['captive_phone' => $phone]);
                 session(['captive_payment_id' => $payment->id]);
 
+                $activationMessage = 'Voucher redeemed successfully! Activation is in progress.';
+                try {
+                    $activatedSession = $this->activatePaidAccess($payment->fresh());
+                    if ($activatedSession && $activatedSession->status === 'active') {
+                        $activationMessage = 'Voucher redeemed successfully! You are now connected.';
+                    }
+                } catch (\Throwable $activationError) {
+                    Log::warning('Voucher redemption succeeded but router activation is still pending', [
+                        'payment_id' => $payment->id,
+                        'error' => $activationError->getMessage(),
+                    ]);
+                }
+
                 return redirect()->route('wifi.status', $this->buildStatusRouteParameters(
                     phone: $phone,
                     payment: $payment,
                     tenantId: $voucher->tenant_id
                 ))
-                    ->with('success', 'Voucher redeemed successfully!');
+                    ->with('success', $activationMessage);
             } catch (\Throwable $e) {
                 Log::error('Voucher redemption failed', [
                     'voucher_id' => $voucher->id,
@@ -670,18 +689,15 @@ class CaptivePortalController extends Controller
                 return redirect()->back()->withErrors(['No active router is configured for this tenant.']);
             }
 
-            UserSession::create([
-                'tenant_id' => $payment->tenant_id,
-                'router_id' => $routerId,
-                'package_id' => $payment->package_id,
-                'username' => $this->generateUsername($phone),
-                'phone' => $phone,
-                'mac_address' => $request->mac ?? null,
-                'status' => 'active',
-                'started_at' => now(),
-                'expires_at' => now()->copy()->addMinutes($payment->package?->duration_in_minutes ?? 60),
-                'payment_id' => $payment->id,
-            ]);
+            if ($clientContextMeta !== []) {
+                $paymentMetadata = is_array($payment->metadata) ? $payment->metadata : [];
+                $existingClientMeta = is_array($paymentMetadata['client_context'] ?? null) ? $paymentMetadata['client_context'] : [];
+                $paymentMetadata['client_context'] = array_merge($existingClientMeta, $clientContextMeta);
+                $payment->update(['metadata' => $paymentMetadata]);
+                $payment = $payment->fresh();
+            }
+
+            $activatedSession = $this->activatePaidAccess($payment);
             
             $payment->increment('reconnect_count');
             
@@ -693,12 +709,16 @@ class CaptivePortalController extends Controller
             
             session(['captive_payment_id' => $payment->id]);
 
+            $successMessage = ($activatedSession && $activatedSession->status === 'active')
+                ? 'Reconnected successfully! You are now connected.'
+                : 'Payment verified. Activation is in progress.';
+
             return redirect()->route('wifi.status', $this->buildStatusRouteParameters(
                 phone: $phone,
                 payment: $payment,
                 tenantId: $payment->tenant_id
             ))
-                ->with('success', 'Reconnected successfully!');
+                ->with('success', $successMessage);
                 
         } catch (\Exception $e) {
             Log::error('Reconnection failed', [
@@ -1306,6 +1326,10 @@ class CaptivePortalController extends Controller
         $durationMinutes = max(1, (int) ($payment->package?->duration_in_minutes ?? 60));
         $username = $this->resolveRadiusUsernameFromPhone($payment->phone, $payment->id);
         $expiresAt = now()->copy()->addMinutes($durationMinutes);
+        $paymentMetadata = is_array($payment->metadata) ? $payment->metadata : [];
+        $paymentClientContext = is_array($paymentMetadata['client_context'] ?? null) ? $paymentMetadata['client_context'] : [];
+        $clientMac = $this->normalizeMacAddress((string) ($paymentClientContext['mac'] ?? ''));
+        $clientIp = $this->normalizeClientIpAddress((string) ($paymentClientContext['ip'] ?? ''));
 
         $session = UserSession::firstOrCreate(
             ['payment_id' => $payment->id],
@@ -1315,11 +1339,40 @@ class CaptivePortalController extends Controller
                 'package_id' => $payment->package_id,
                 'username' => $username,
                 'phone' => $payment->phone,
+                'mac_address' => $clientMac,
+                'ip_address' => $clientIp,
                 'status' => 'pending',
                 'started_at' => now(),
                 'expires_at' => $expiresAt,
             ]
         );
+
+        $sessionUpdates = [];
+        if ((int) $session->router_id !== (int) $routerId) {
+            $sessionUpdates['router_id'] = $routerId;
+        }
+        if ($clientMac !== null && $session->mac_address !== $clientMac) {
+            $sessionUpdates['mac_address'] = $clientMac;
+        }
+        if ($clientIp !== null && $session->ip_address !== $clientIp) {
+            $sessionUpdates['ip_address'] = $clientIp;
+        }
+        if ($session->status !== 'active') {
+            $sessionUpdates['status'] = 'pending';
+            $sessionUpdates['expires_at'] = $expiresAt;
+        }
+        if ($sessionUpdates !== []) {
+            $session->update($sessionUpdates);
+            $session->refresh();
+        }
+
+        if (!$payment->package) {
+            Log::warning('Access activation skipped: package missing on payment', [
+                'payment_id' => $payment->id,
+                'session_id' => $session->id,
+            ]);
+            return $session->fresh();
+        }
 
         if ((bool) config('radius.enabled', false) && $payment->package) {
             try {
@@ -1331,31 +1384,25 @@ class CaptivePortalController extends Controller
                     expiresAt: $expiresAt
                 );
 
+                $radiusMetadata = [
+                    'provisioned' => true,
+                    'username' => $username,
+                    'provisioned_at' => now()->toIso8601String(),
+                    'expires_at' => $expiresAt->toIso8601String(),
+                    'auth_hint' => 'password_equals_username',
+                ];
+
                 $session->update([
-                    'status' => 'active',
                     'started_at' => $session->started_at ?? now(),
                     'expires_at' => $expiresAt,
-                    'last_synced_at' => now(),
                     'metadata' => array_merge($session->metadata ?? [], [
-                        'radius' => [
-                            'provisioned' => true,
-                            'username' => $username,
-                            'provisioned_at' => now()->toIso8601String(),
-                            'expires_at' => $expiresAt->toIso8601String(),
-                            'auth_hint' => 'password_equals_username',
-                        ],
+                        'radius' => $radiusMetadata,
                     ]),
                 ]);
 
                 $payment->update([
                     'metadata' => array_merge($payment->metadata ?? [], [
-                        'radius' => [
-                            'provisioned' => true,
-                            'username' => $username,
-                            'provisioned_at' => now()->toIso8601String(),
-                            'expires_at' => $expiresAt->toIso8601String(),
-                            'auth_hint' => 'password_equals_username',
-                        ],
+                        'radius' => $radiusMetadata,
                     ]),
                 ]);
 
@@ -1364,8 +1411,6 @@ class CaptivePortalController extends Controller
                     'session_id' => $session->id,
                     'username' => $username,
                 ]);
-
-                return $session->fresh();
             } catch (\Throwable $e) {
                 Log::error('FreeRADIUS provisioning failed after payment', [
                     'payment_id' => $payment->id,
@@ -1376,26 +1421,43 @@ class CaptivePortalController extends Controller
             }
         }
 
-        if ($payment->package) {
-            $sessionManager = app(SessionManager::class);
-            $activation = $sessionManager->activateSession($session, $payment->package);
+        $sessionManager = app(SessionManager::class);
+        $activation = $sessionManager->activateSession($session->fresh(), $payment->package);
 
-            if (!($activation['success'] ?? false)) {
-                Log::warning('MikroTik activation not completed', [
-                    'payment_id' => $payment->id,
-                    'session_id' => $session->id,
-                    'reason' => $activation['error'] ?? 'unknown',
-                    'queued' => (bool) ($activation['queued'] ?? false),
-                ]);
-                return $session->fresh();
-            }
+        if (!($activation['success'] ?? false)) {
+            $session->update([
+                'status' => 'pending',
+                'expires_at' => $expiresAt,
+                'metadata' => array_merge($session->metadata ?? [], [
+                    'activation' => array_merge(
+                        (array) (($session->metadata ?? [])['activation'] ?? []),
+                        [
+                            'last_failed_at' => now()->toIso8601String(),
+                            'last_error' => (string) ($activation['error'] ?? 'unknown'),
+                            'queued' => (bool) ($activation['queued'] ?? false),
+                        ]
+                    ),
+                ]),
+            ]);
 
-            Log::info('Paid access activated on MikroTik', [
+            Log::warning('MikroTik activation not completed', [
                 'payment_id' => $payment->id,
                 'session_id' => $session->id,
-                'username' => $session->username,
+                'reason' => $activation['error'] ?? 'unknown',
+                'queued' => (bool) ($activation['queued'] ?? false),
             ]);
+            return $session->fresh();
         }
+
+        if ($payment->activated_at === null) {
+            $payment->update(['activated_at' => now()]);
+        }
+
+        Log::info('Paid access activated on MikroTik', [
+            'payment_id' => $payment->id,
+            'session_id' => $session->id,
+            'username' => $session->username,
+        ]);
 
         return $session->fresh();
     }
@@ -1458,6 +1520,68 @@ class CaptivePortalController extends Controller
         }
 
         return null;
+    }
+
+    private function resolveClientContext(Request $request): array
+    {
+        $macInput = (string) $request->input('mac', $request->query('mac', session('captive_client_mac', '')));
+        $ipInput = (string) $request->input('ip', $request->query('ip', session('captive_client_ip', '')));
+
+        $mac = $this->normalizeMacAddress($macInput);
+        $ip = $this->normalizeClientIpAddress($ipInput);
+
+        if ($mac !== null) {
+            session(['captive_client_mac' => $mac]);
+        }
+
+        if ($ip !== null) {
+            session(['captive_client_ip' => $ip]);
+        }
+
+        return [
+            'mac' => $mac,
+            'ip' => $ip,
+        ];
+    }
+
+    private function buildClientContextMeta(array $clientContext, Request $request): array
+    {
+        $meta = array_filter([
+            'mac' => $clientContext['mac'] ?? null,
+            'ip' => $clientContext['ip'] ?? null,
+        ], static fn ($value) => $value !== null && $value !== '');
+
+        $userAgent = trim((string) $request->userAgent());
+        if ($userAgent !== '') {
+            $meta['user_agent'] = $userAgent;
+        }
+
+        $requestIp = $this->normalizeClientIpAddress((string) $request->ip());
+        if ($requestIp !== null) {
+            $meta['request_ip'] = $requestIp;
+        }
+
+        return $meta;
+    }
+
+    private function normalizeMacAddress(string $mac): ?string
+    {
+        $normalized = strtoupper(preg_replace('/[^0-9A-Fa-f]/', '', $mac) ?? '');
+        if (strlen($normalized) !== 12) {
+            return null;
+        }
+
+        return implode(':', str_split($normalized, 2));
+    }
+
+    private function normalizeClientIpAddress(string $ipAddress): ?string
+    {
+        $candidate = trim($ipAddress);
+        if ($candidate === '') {
+            return null;
+        }
+
+        return filter_var($candidate, FILTER_VALIDATE_IP) ? $candidate : null;
     }
 
     private function resolveRadiusUsernameFromPhone(string $phone, ?int $paymentId = null): string

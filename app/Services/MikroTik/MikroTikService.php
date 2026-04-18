@@ -37,30 +37,50 @@ class MikroTikService
     /**
      * Create user session on MikroTik (Hotspot login)
      */
-    public function createHotspotSession(Router $router, string $username, string $password, int $durationMinutes): array
+    public function createHotspotSession(
+        Router $router,
+        string $username,
+        string $password,
+        int $durationMinutes,
+        ?string $macAddress = null,
+        ?string $ipAddress = null
+    ): array
     {
-        return $this->withRetry(function () use ($router, $username, $password, $durationMinutes) {
+        return $this->withRetry(function () use ($router, $username, $password, $durationMinutes, $macAddress, $ipAddress) {
             $client = $this->getClient($router);
             
             // Calculate expiry time
             $expiresAt = now()->addMinutes($durationMinutes);
             
             // Login user to hotspot
-            $query = (new Query('/ip/hotspot/login'))
-                ->equal('name', $username)
-                ->equal('password', $password);
-            
-            $result = $client->query($query)->read();
+            $result = $this->loginHotspotUser(
+                client: $client,
+                username: $username,
+                password: $password,
+                macAddress: $macAddress,
+                ipAddress: $ipAddress
+            );
             
             // Set session timeout (MikroTik uses seconds)
             $timeoutSeconds = $durationMinutes * 60;
-            $this->setSessionTimeout($client, $username, $timeoutSeconds);
+            try {
+                $this->setSessionTimeout($client, $username, $timeoutSeconds);
+            } catch (\Throwable $timeoutError) {
+                // Radius users may not exist in local hotspot user table. Avoid failing activation for that.
+                Log::channel('mikrotik')->warning('Unable to set local hotspot user timeout; continuing activation', [
+                    'router' => $router->name,
+                    'username' => $username,
+                    'error' => $timeoutError->getMessage(),
+                ]);
+            }
             
             Log::channel('mikrotik')->info('Hotspot session created', [
                 'router' => $router->name,
                 'username' => $username,
                 'expires_at' => $expiresAt->toIso8601String(),
                 'duration_minutes' => $durationMinutes,
+                'mac_address' => $macAddress,
+                'ip_address' => $ipAddress,
             ]);
             
             return [
@@ -71,6 +91,53 @@ class MikroTikService
             ];
             
         }, $router, 'createHotspotSession');
+    }
+
+    /**
+     * Trigger hotspot login for a user. New RouterOS versions expose this on /ip/hotspot/active/login.
+     */
+    private function loginHotspotUser(
+        Client $client,
+        string $username,
+        string $password,
+        ?string $macAddress = null,
+        ?string $ipAddress = null
+    ): array {
+        $query = (new Query('/ip/hotspot/active/login'))
+            ->equal('user', $username)
+            ->equal('password', $password);
+
+        if ($macAddress !== null && $macAddress !== '') {
+            $query->equal('mac-address', $macAddress);
+        }
+
+        if ($ipAddress !== null && $ipAddress !== '') {
+            $query->equal('ip', $ipAddress);
+        }
+
+        try {
+            return $client->query($query)->read();
+        } catch (QueryException $error) {
+            // Backward-compatible fallback for older setups.
+            $legacyQuery = (new Query('/ip/hotspot/login'))
+                ->equal('name', $username)
+                ->equal('password', $password);
+
+            if ($macAddress !== null && $macAddress !== '') {
+                $legacyQuery->equal('mac-address', $macAddress);
+            }
+
+            if ($ipAddress !== null && $ipAddress !== '') {
+                $legacyQuery->equal('ip', $ipAddress);
+            }
+
+            Log::channel('mikrotik')->warning('Hotspot login fallback command used', [
+                'username' => $username,
+                'error' => $error->getMessage(),
+            ]);
+
+            return $client->query($legacyQuery)->read();
+        }
     }
 
     /**

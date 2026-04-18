@@ -21,6 +21,8 @@
             'tenant_id' => $tenantId > 0 ? $tenantId : request()->query('tenant_id'),
             'phone' => old('phone', $phone ?? ''),
         ], static fn ($value) => $value !== null && $value !== '');
+        $clientMacValue = trim((string) old('mac', $clientMac ?? request()->query('mac', session('captive_client_mac', ''))));
+        $clientIpValue = trim((string) old('ip', $clientIp ?? request()->query('ip', session('captive_client_ip', ''))));
     @endphp
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -65,6 +67,8 @@
                     <h3 class="cp-form-title">Reconnect with M-Pesa code</h3>
                     <form method="POST" action="{{ route('wifi.reconnect') }}">
                         @csrf
+                        <input type="hidden" name="mac" value="{{ $clientMacValue }}">
+                        <input type="hidden" name="ip" value="{{ $clientIpValue }}">
                         <div class="cp-field">
                             <label for="reconnectPhone">Phone Number</label>
                             <input id="reconnectPhone" type="tel" name="phone" placeholder="0712345678 or 0112345678" value="{{ old('phone', $phone ?? '') }}" required pattern="(?:0[17]\d{8}|(?:\+?254)[17]\d{8})" autocomplete="tel" inputmode="tel">
@@ -81,6 +85,8 @@
                     <h3 class="cp-form-title">Redeem voucher</h3>
                     <form method="POST" action="{{ route('wifi.reconnect') }}">
                         @csrf
+                        <input type="hidden" name="mac" value="{{ $clientMacValue }}">
+                        <input type="hidden" name="ip" value="{{ $clientIpValue }}">
                         <div class="cp-field">
                             <label for="voucherPhone">Phone Number</label>
                             <input id="voucherPhone" type="tel" name="phone" placeholder="0712345678 or 0112345678" value="{{ old('phone', $phone ?? '') }}" required pattern="(?:0[17]\d{8}|(?:\+?254)[17]\d{8})" autocomplete="tel" inputmode="tel">

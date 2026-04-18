@@ -19,6 +19,8 @@
             : 'tel:+254742939094';
         $selectedPackageId = (int) old('package_id', 0);
         $selectedPackage = $packages->firstWhere('id', $selectedPackageId);
+        $clientMacValue = trim((string) old('mac', $clientMac ?? request()->query('mac', session('captive_client_mac', ''))));
+        $clientIpValue = trim((string) old('ip', $clientIp ?? request()->query('ip', session('captive_client_ip', ''))));
         $reconnectParams = array_filter([
             'tenant_id' => $tenantId > 0 ? $tenantId : request()->query('tenant_id'),
             'phone' => old('phone', $phone ?? ''),
@@ -245,6 +247,8 @@
                     <form method="POST" action="{{ route('wifi.pay') }}" id="cpPaymentForm" class="cp-payment-form" style="margin-top:0">
                         @csrf
                         <input type="hidden" name="package_id" id="cpPackageId" value="">
+                        <input type="hidden" name="mac" value="{{ $clientMacValue }}">
+                        <input type="hidden" name="ip" value="{{ $clientIpValue }}">
 
                         <div class="cp-field">
                             <label for="cpPhone">Safaricom M-Pesa Number</label>

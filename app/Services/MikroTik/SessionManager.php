@@ -45,11 +45,19 @@ class SessionManager
             $router,
             $session->username,
             $session->username, // Password = username for simplicity
-            $durationMinutes
+            $durationMinutes,
+            $session->mac_address,
+            $session->ip_address
         );
         
-        if (!$result['success']) {
-            return $result;
+        if (!is_array($result) || !($result['success'] ?? false)) {
+            return [
+                'success' => false,
+                'error' => is_array($result)
+                    ? (string) ($result['error'] ?? 'Router activation failed.')
+                    : 'No response from router during activation.',
+                'queued' => false,
+            ];
         }
         
         // Update session record
