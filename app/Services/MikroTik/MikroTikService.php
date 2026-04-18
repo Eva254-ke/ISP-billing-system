@@ -505,7 +505,13 @@ class MikroTikService
         
         if ($router->api_ssl) {
             $config['ssl'] = true;
-            $config['ssl_verify'] = false; // Disable for self-signed certs (common in MikroTik)
+            // RouterOS client expects SSL context options under `ssl_options`.
+            // Keep cert verification permissive for common self-signed MikroTik certs.
+            $config['ssl_options'] = [
+                'verify_peer' => false,
+                'verify_peer_name' => false,
+                'allow_self_signed' => true,
+            ];
         }
         
         return new Client($config);
