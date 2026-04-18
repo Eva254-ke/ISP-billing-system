@@ -39,7 +39,7 @@ class AdminPageController extends Controller
                 ->sum('amount'),
             'active_sessions' => (clone $sessions)->active()->count(),
             'packages_total' => (clone $packages)->count(),
-            'routers_online' => (clone $routers)->where('status', 'online')->count(),
+            'routers_online' => (clone $routers)->whereIn('status', ['online', 'warning'])->count(),
             'routers_total' => (clone $routers)->count(),
             'revenue_week' => (float) (clone $payments)
                 ->where('created_at', '>=', now()->startOfWeek())
@@ -78,7 +78,7 @@ class AdminPageController extends Controller
         $rows = $routers->orderBy('name')->get();
 
         $stats = [
-            'online' => $rows->where('status', 'online')->count(),
+            'online' => $rows->filter(fn ($router) => in_array((string) $router->status, ['online', 'warning'], true))->count(),
             'offline' => $rows->where('status', 'offline')->count(),
             'total_users' => (int) $rows->sum(fn ($router) => (int) ($router->active_sessions ?? 0)),
             'total' => $rows->count(),
@@ -456,7 +456,7 @@ class AdminPageController extends Controller
             'new_last_hour' => (clone $baseSessions)->where('created_at', '>=', now()->subHour())->count(),
             'routers_online' => Router::query()
                 ->when($tenant, fn ($query) => $query->where('tenant_id', $tenant->id))
-                ->where('status', 'online')
+                ->whereIn('status', ['online', 'warning'])
                 ->count(),
         ];
 

@@ -301,21 +301,79 @@ class MikroTikService
             
             // Update router status
             $router->markOnline();
+            $this->recordConnectivityMetadata($router, [
+                'last_connectivity_check_at' => now()->toIso8601String(),
+                'last_connectivity_result' => 'api_ok',
+                'last_connectivity_error' => null,
+                'last_connectivity_error_at' => null,
+                'last_connectivity_error_type' => null,
+                'api_port_reachable' => true,
+                'tcp_probe_message' => null,
+            ]);
             
             return true;
             
         } catch (\Exception $e) {
+            [$tcpReachable, $tcpProbeMessage] = $this->probeApiTcpPort($router);
+            $errorType = $this->classifyConnectivityError($e->getMessage(), $tcpReachable);
+
             Log::channel('mikrotik')->warning('Router ping failed', [
                 'router' => $router->name,
                 'ip' => $router->ip_address,
                 'error' => $e->getMessage(),
+                'error_type' => $errorType,
+                'tcp_reachable' => $tcpReachable,
+                'tcp_probe' => $tcpProbeMessage,
             ]);
             
-            // Update router status
-            $router->markOffline();
+            if ($tcpReachable) {
+                // Router is reachable but MikroTik API auth/query failed.
+                $router->markWarning('Router reachable but API login failed');
+            } else {
+                $router->markOffline();
+            }
+
+            $this->recordConnectivityMetadata($router, [
+                'last_connectivity_check_at' => now()->toIso8601String(),
+                'last_connectivity_result' => $tcpReachable ? 'api_failed_tcp_ok' : 'tcp_unreachable',
+                'last_connectivity_error' => $e->getMessage(),
+                'last_connectivity_error_at' => now()->toIso8601String(),
+                'last_connectivity_error_type' => $errorType,
+                'api_port_reachable' => $tcpReachable,
+                'tcp_probe_message' => $tcpProbeMessage,
+            ]);
             
             return false;
         }
+    }
+
+    /**
+     * Read last connectivity diagnostics saved during pingRouter().
+     */
+    public function getConnectivityDiagnostics(Router $router): array
+    {
+        $metadata = is_array($router->metadata) ? $router->metadata : [];
+        $errorType = $metadata['last_connectivity_error_type'] ?? null;
+        $apiPortReachable = (bool) ($metadata['api_port_reachable'] ?? false);
+        $message = match ($errorType) {
+            'auth_error' => 'Router is reachable, but MikroTik API authentication failed.',
+            'tls_error' => 'Router API port is reachable, but SSL/TLS negotiation failed.',
+            'network_error' => 'Router API port is unreachable from the server.',
+            default => $apiPortReachable
+                ? 'Router is reachable, but MikroTik API query failed.'
+                : 'Router is unreachable or API is blocked.',
+        };
+
+        return [
+            'status' => (string) ($router->status ?? Router::STATUS_OFFLINE),
+            'last_result' => $metadata['last_connectivity_result'] ?? null,
+            'error' => $metadata['last_connectivity_error'] ?? null,
+            'error_type' => $errorType,
+            'api_port_reachable' => $apiPortReachable,
+            'tcp_probe_message' => $metadata['tcp_probe_message'] ?? null,
+            'checked_at' => $metadata['last_connectivity_check_at'] ?? null,
+            'message' => $message,
+        ];
     }
 
     /**
@@ -471,6 +529,86 @@ class MikroTikService
         }
         
         return 0;
+    }
+
+    /**
+     * Store connectivity check metadata without clobbering existing router metadata.
+     */
+    private function recordConnectivityMetadata(Router $router, array $metadata): void
+    {
+        $existing = is_array($router->metadata) ? $router->metadata : [];
+        $router->update([
+            'metadata' => array_merge($existing, $metadata),
+        ]);
+    }
+
+    /**
+     * Basic TCP probe to distinguish network reachability from API/auth failures.
+     *
+     * @return array{0: bool, 1: string}
+     */
+    private function probeApiTcpPort(Router $router): array
+    {
+        $host = trim((string) ($router->ip_address ?? ''));
+        $port = (int) ($router->api_port ?: 8728);
+
+        if ($host === '' || $port < 1 || $port > 65535) {
+            return [false, 'Invalid router host/port'];
+        }
+
+        $errno = 0;
+        $errstr = '';
+        $start = microtime(true);
+
+        $socket = @fsockopen($host, $port, $errno, $errstr, self::CONNECTION_TIMEOUT);
+        if ($socket === false) {
+            $reason = trim($errstr) !== '' ? trim($errstr) : "errno {$errno}";
+            return [false, "TCP {$host}:{$port} failed ({$reason})"];
+        }
+
+        fclose($socket);
+        $latencyMs = (int) round((microtime(true) - $start) * 1000);
+
+        return [true, "TCP {$host}:{$port} reachable ({$latencyMs}ms)"];
+    }
+
+    private function classifyConnectivityError(string $message, bool $tcpReachable): string
+    {
+        $normalized = strtolower(trim($message));
+
+        if ($normalized === '') {
+            return $tcpReachable ? 'api_error' : 'network_error';
+        }
+
+        if (
+            str_contains($normalized, 'invalid user')
+            || str_contains($normalized, 'cannot log in')
+            || str_contains($normalized, 'not enough permissions')
+            || str_contains($normalized, 'login failed')
+            || str_contains($normalized, 'authentication')
+        ) {
+            return 'auth_error';
+        }
+
+        if (
+            str_contains($normalized, 'ssl')
+            || str_contains($normalized, 'tls')
+            || str_contains($normalized, 'certificate')
+        ) {
+            return 'tls_error';
+        }
+
+        if (
+            str_contains($normalized, 'timed out')
+            || str_contains($normalized, 'no route')
+            || str_contains($normalized, 'connection refused')
+            || str_contains($normalized, 'unable to connect')
+            || str_contains($normalized, 'network is unreachable')
+        ) {
+            return 'network_error';
+        }
+
+        return $tcpReachable ? 'api_error' : 'network_error';
     }
 
     /**

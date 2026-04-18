@@ -691,7 +691,7 @@ class Tenant extends Model
     public function getOnlineRouterCountAttribute(): int
     {
         return $this->routers()
-            ->where('status', 'online')
+            ->whereIn('status', ['online', 'warning'])
             ->count();
     }
 

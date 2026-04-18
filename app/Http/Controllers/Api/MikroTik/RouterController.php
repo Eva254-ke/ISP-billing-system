@@ -33,7 +33,7 @@ class RouterController extends Controller
                     'model' => $router->model,
                     'ip_address' => $router->ip_address,
                     'status' => $router->status,
-                    'is_online' => $router->status === 'online',
+                    'is_online' => in_array((string) $router->status, ['online', 'warning'], true),
                     'last_seen' => $router->last_seen_at?->diffForHumans(),
                     'cpu_usage' => $router->cpu_usage,
                     'memory_usage' => $router->memory_usage,
@@ -67,6 +67,7 @@ class RouterController extends Controller
             
             if ($isOnline) {
                 // Get system info
+                $router->refresh();
                 $systemInfo = $this->mikrotikService->getRouterSystemInfo($router);
                 
                 return response()->json([
@@ -83,10 +84,17 @@ class RouterController extends Controller
                 ]);
             }
 
+            $router->refresh();
+            $diagnostics = $this->mikrotikService->getConnectivityDiagnostics($router);
+
             return response()->json([
                 'success' => false,
-                'message' => 'Router is offline or unreachable',
-                'data' => ['is_online' => false],
+                'message' => (string) ($diagnostics['message'] ?? 'Router is offline or unreachable'),
+                'data' => [
+                    'is_online' => false,
+                    'status' => $router->status,
+                    'diagnostics' => $diagnostics,
+                ],
             ], 503);
 
         } catch (\Exception $e) {

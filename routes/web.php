@@ -384,18 +384,24 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
             $isOnline = $mikroTikService->pingRouter($router);
 
             if (!$isOnline) {
+                $router->refresh();
+                $diagnostics = $mikroTikService->getConnectivityDiagnostics($router);
+
                 return response()->json([
                     'success' => false,
-                    'message' => 'Router is offline or unreachable',
+                    'message' => (string) ($diagnostics['message'] ?? 'Router is offline or unreachable'),
                     'router' => [
                         'id' => $router->id,
                         'name' => $router->name,
                         'ip_address' => $router->ip_address,
+                        'status' => $router->status,
                     ],
+                    'diagnostics' => $diagnostics,
                     'commands' => $commands,
-                ]);
+                ], 503);
             }
 
+            $router->refresh();
             $systemInfo = $mikroTikService->getRouterSystemInfo($router);
 
             return response()->json([
@@ -445,7 +451,8 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
 
                     if ($live) {
                         $isOnline = $mikroTikService->pingRouter($router);
-                        $status = $isOnline ? Router::STATUS_ONLINE : Router::STATUS_OFFLINE;
+                        $router->refresh();
+                        $status = (string) ($router->status ?? ($isOnline ? Router::STATUS_ONLINE : Router::STATUS_OFFLINE));
 
                         if ($isOnline) {
                             $systemInfo = $mikroTikService->getRouterSystemInfo($router);
@@ -505,13 +512,21 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
             $isOnline = $mikroTikService->pingRouter($router);
 
             if (!$isOnline) {
+                $router->refresh();
+                $diagnostics = $mikroTikService->getConnectivityDiagnostics($router);
+
                 return response()->json([
                     'success' => false,
-                    'message' => 'Router is offline or unreachable',
-                    'router' => $router->id,
-                ]);
+                    'message' => (string) ($diagnostics['message'] ?? 'Router is offline or unreachable'),
+                    'router' => [
+                        'id' => $router->id,
+                        'status' => $router->status,
+                    ],
+                    'diagnostics' => $diagnostics,
+                ], 503);
             }
 
+            $router->refresh();
             $systemInfo = $mikroTikService->getRouterSystemInfo($router);
 
             return response()->json([
@@ -587,7 +602,7 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
                         ->sum('amount'),
                     'active_sessions' => (clone $sessions)->where('status', 'active')->count(),
                     'packages_total' => (clone $packages)->count(),
-                    'routers_online' => (clone $routers)->where('status', 'online')->count(),
+                    'routers_online' => (clone $routers)->whereIn('status', ['online', 'warning'])->count(),
                     'routers_total' => (clone $routers)->count(),
                     'transactions_week' => $totalThisWeek,
                     'success_rate_week' => $totalThisWeek > 0

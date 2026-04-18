@@ -31,8 +31,7 @@ class RouterHealthCheck extends Command
     public function handle(): int
     {
         Log::channel('mikrotik')->info('Starting router health check');
-
-        $this->info('🖥️ Starting router health check...');
+        $this->info('Starting router health check...');
 
         $routers = Router::all();
         $online = 0;
@@ -41,7 +40,7 @@ class RouterHealthCheck extends Command
 
         $this->table(
             ['Router', 'IP Address', 'Status', 'CPU', 'Memory', 'Uptime'],
-            $routers->map(function ($router) {
+            $routers->map(function (Router $router) {
                 return [
                     $router->name,
                     $router->ip_address,
@@ -60,17 +59,15 @@ class RouterHealthCheck extends Command
 
             try {
                 $isOnline = $this->mikrotikService->pingRouter($router);
+                $router->refresh();
 
                 if ($isOnline) {
-                    // Get detailed system info
                     $systemInfo = $this->mikrotikService->getRouterSystemInfo($router);
-
                     $cpu = (int) ($systemInfo['cpu_load'] ?? 0);
                     $memory = (int) ($systemInfo['memory_usage'] ?? 0);
 
-                    // Determine status based on resource usage
                     if ($cpu > 80 || $memory > 80) {
-                        $router->update(['status' => 'warning']);
+                        $router->update(['status' => Router::STATUS_WARNING]);
                         $warning++;
 
                         Log::channel('mikrotik')->warning('Router resource warning', [
@@ -79,38 +76,44 @@ class RouterHealthCheck extends Command
                             'memory' => $memory,
                         ]);
 
-                        $this->warn("   ⚠️ {$router->name} - WARNING (CPU: {$cpu}%, RAM: {$memory}%)");
-
-                        // TODO: Alert admin if resources critical
-                        // if ($cpu > 90 || $memory > 90) {
-                        //     Notification::send(...);
-                        // }
-
+                        $this->warn("   WARNING {$router->name} (CPU: {$cpu}%, RAM: {$memory}%)");
                     } else {
-                        $router->update(['status' => 'online']);
+                        $router->update(['status' => Router::STATUS_ONLINE]);
                         $online++;
 
-                        $this->info("   ✅ {$router->name} - Online (CPU: {$cpu}%, RAM: {$memory}%)");
+                        $this->info("   OK {$router->name} (CPU: {$cpu}%, RAM: {$memory}%)");
                     }
 
-                } else {
-                    $router->update(['status' => 'offline']);
-                    $offline++;
-
-                    Log::channel('mikrotik')->error('Router offline', [
-                        'router' => $router->name,
-                        'ip' => $router->ip_address,
-                        'model' => $router->model,
-                    ]);
-
-                    $this->error("   ❌ {$router->name} - OFFLINE");
-
-                    // TODO: Alert admin immediately for offline router
-                    // Notification::send(...);
+                    continue;
                 }
 
+                if ($router->status === Router::STATUS_WARNING) {
+                    $warning++;
+                    $diagnostics = $this->mikrotikService->getConnectivityDiagnostics($router);
+
+                    Log::channel('mikrotik')->warning('Router reachable but MikroTik API check failed', [
+                        'router' => $router->name,
+                        'ip' => $router->ip_address,
+                        'diagnostics' => $diagnostics,
+                    ]);
+
+                    $message = (string) ($diagnostics['message'] ?? 'Router reachable but API check failed');
+                    $this->warn("   WARNING {$router->name} ({$message})");
+                    continue;
+                }
+
+                $router->update(['status' => Router::STATUS_OFFLINE]);
+                $offline++;
+
+                Log::channel('mikrotik')->error('Router offline', [
+                    'router' => $router->name,
+                    'ip' => $router->ip_address,
+                    'model' => $router->model,
+                ]);
+
+                $this->error("   OFFLINE {$router->name}");
             } catch (\Exception $e) {
-                $router->update(['status' => 'offline']);
+                $router->update(['status' => Router::STATUS_OFFLINE]);
                 $offline++;
 
                 Log::channel('mikrotik')->error('Router health check failed', [
@@ -118,13 +121,10 @@ class RouterHealthCheck extends Command
                     'error' => $e->getMessage(),
                 ]);
 
-                $this->error("   ❌ {$router->name} - ERROR: {$e->getMessage()}");
+                $this->error("   ERROR {$router->name}: {$e->getMessage()}");
             }
         }
 
-        // ──────────────────────────────────────────────────────────────────
-        // SUMMARY
-        // ──────────────────────────────────────────────────────────────────
         Log::channel('mikrotik')->info('Router health check completed', [
             'total' => $routers->count(),
             'online' => $online,
@@ -133,17 +133,15 @@ class RouterHealthCheck extends Command
         ]);
 
         $this->newLine();
-        $this->info('✅ Health Check Summary:');
+        $this->info('Health Check Summary:');
         $this->info("   Total routers: {$routers->count()}");
-        $this->info("   🟢 Online: {$online}");
-        $this->warn("   🟡 Warning: {$warning}");
-        $this->error("   🔴 Offline: {$offline}");
+        $this->info("   Online: {$online}");
+        $this->warn("   Warning: {$warning}");
+        $this->error("   Offline: {$offline}");
 
-        // Alert if any routers offline
         if ($offline > 0) {
             $this->newLine();
-            $this->error('⚠️ Action required: {$offline} router(s) offline - check immediately!');
-            // TODO: Send urgent alert to admin
+            $this->error("Action required: {$offline} router(s) offline - check immediately.");
         }
 
         return Command::SUCCESS;
