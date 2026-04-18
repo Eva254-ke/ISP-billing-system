@@ -215,7 +215,7 @@ class Router extends Model
 
     public function getConnectionStatusAttribute(): string
     {
-        if (!$this->is_active ?? true) {
+        if (!$this->isRouterActive()) {
             return 'inactive';
         }
         
@@ -677,7 +677,7 @@ class Router extends Model
 
     protected function markConnectionError(string $error): void
     {
-        $this->update([
+        $this->persistRouterState([
             'status' => self::STATUS_ERROR,
             'metadata' => array_merge(
                 $this->metadata ?? [],
@@ -747,7 +747,7 @@ class Router extends Model
 
     public function markOnline(): void
     {
-        $this->update([
+        $this->persistRouterState([
             'status' => self::STATUS_ONLINE,
             'last_seen_at' => now(),
         ]);
@@ -755,7 +755,7 @@ class Router extends Model
 
     public function markOffline(): void
     {
-        $this->update([
+        $this->persistRouterState([
             'status' => self::STATUS_OFFLINE,
             'last_seen_at' => now(),
         ]);
@@ -763,7 +763,7 @@ class Router extends Model
 
     public function markWarning(?string $reason = null): void
     {
-        $this->update([
+        $this->persistRouterState([
             'status' => self::STATUS_WARNING,
             'last_seen_at' => now(),
             'metadata' => array_merge(
@@ -776,8 +776,28 @@ class Router extends Model
     public function shouldAutoSync(): bool
     {
         return $this->auto_sync_enabled 
-            && $this->is_active 
+            && $this->isRouterActive()
             && $this->status === self::STATUS_ONLINE;
+    }
+
+    protected function isRouterActive(): bool
+    {
+        if (array_key_exists('is_active', $this->attributes)) {
+            return (bool) $this->attributes['is_active'];
+        }
+
+        return true;
+    }
+
+    protected function persistRouterState(array $changes): void
+    {
+        if (!$this->exists) {
+            $this->forceFill($changes);
+            return;
+        }
+
+        static::query()->whereKey($this->getKey())->update($changes);
+        $this->forceFill($changes)->syncOriginalAttributes(array_keys($changes));
     }
 
     public function getRecommendedAccountingInterval(): int
