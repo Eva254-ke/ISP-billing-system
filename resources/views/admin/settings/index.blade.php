@@ -649,6 +649,10 @@ Thank you for choosing CloudBridge Networks.</textarea>
                                     <label class="form-label small">Accounting Port</label>
                                     <input type="number" class="form-control form-control-sm" id="radius_acct_port" value="1813">
                                 </div>
+                                <div class="col-md-6 mb-3">
+                                    <label class="form-label small">Timeout (seconds)</label>
+                                    <input type="number" class="form-control form-control-sm" id="radius_timeout" value="5" min="1" max="30">
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -1007,13 +1011,14 @@ function buildMikrotikCommandsFromInputs() {
         : 'YOUR_RADIUS_SERVER_IP';
     const radiusPort = Number(document.getElementById('radius_port')?.value || 1812);
     const radiusAcctPort = Number(document.getElementById('radius_acct_port')?.value || 1813);
+    const radiusTimeoutSeconds = Math.max(1, Number(document.getElementById('radius_timeout')?.value || 5));
     const radiusSecretRaw = document.getElementById('radius_secret')?.value?.trim() || '';
     const radiusSecret = radiusSecretRaw !== '' && radiusSecretRaw.toLowerCase() !== 'your-radius-secret'
         ? radiusSecretRaw
         : 'YOUR_SHARED_SECRET';
 
     return [
-        `/radius add service=hotspot,ppp address=${radiusServer} protocol=udp authentication-port=${radiusPort} accounting-port=${radiusAcctPort} secret=${radiusSecret} timeout=300ms`,
+        `/radius add service=hotspot,ppp address=${radiusServer} protocol=udp authentication-port=${radiusPort} accounting-port=${radiusAcctPort} secret=${radiusSecret} timeout=${radiusTimeoutSeconds}s`,
         '/ip hotspot profile set [find] use-radius=yes',
         '/ppp aaa set use-radius=yes accounting=yes interim-update=1m',
         '/radius incoming set accept=yes port=3799',
@@ -1022,7 +1027,7 @@ function buildMikrotikCommandsFromInputs() {
 }
 
 function bindMikrotikCommandRefresh() {
-    ['radius_server', 'radius_port', 'radius_acct_port', 'radius_secret'].forEach((id) => {
+    ['radius_server', 'radius_port', 'radius_acct_port', 'radius_secret', 'radius_timeout'].forEach((id) => {
         const el = document.getElementById(id);
         if (!el) {
             return;

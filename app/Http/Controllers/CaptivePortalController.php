@@ -1351,6 +1351,9 @@ class CaptivePortalController extends Controller
         if ((int) $session->router_id !== (int) $routerId) {
             $sessionUpdates['router_id'] = $routerId;
         }
+        if ((int) $session->package_id !== (int) ($payment->package_id ?? 0) && (int) ($payment->package_id ?? 0) > 0) {
+            $sessionUpdates['package_id'] = (int) $payment->package_id;
+        }
         if ($clientMac !== null && $session->mac_address !== $clientMac) {
             $sessionUpdates['mac_address'] = $clientMac;
         }
@@ -1358,6 +1361,13 @@ class CaptivePortalController extends Controller
             $sessionUpdates['ip_address'] = $clientIp;
         }
         if ($session->status !== 'active') {
+            // Keep session credentials aligned with RADIUS provisioning username.
+            if ((string) ($session->username ?? '') !== $username) {
+                $sessionUpdates['username'] = $username;
+            }
+            if (!empty($payment->phone) && (string) ($session->phone ?? '') !== (string) $payment->phone) {
+                $sessionUpdates['phone'] = $payment->phone;
+            }
             $sessionUpdates['status'] = 'pending';
             $sessionUpdates['expires_at'] = $expiresAt;
         }

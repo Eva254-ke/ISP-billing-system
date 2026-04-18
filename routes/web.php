@@ -247,6 +247,7 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
             $radiusServer = trim((string) ($settings['radius_server'] ?? config('radius.server_ip', '127.0.0.1')));
             $radiusAuthPort = (int) ($settings['radius_port'] ?? config('radius.auth_port', 1812));
             $radiusAcctPort = (int) ($settings['radius_acct_port'] ?? config('radius.acct_port', 1813));
+            $radiusTimeoutSeconds = max(1, (int) ($settings['radius_timeout'] ?? config('radius.timeout', 5)));
             $radiusSecret = trim((string) ($settings['radius_secret'] ?? config('radius.shared_secret', '')));
 
             $isLoopbackServer = in_array(strtolower($radiusServer), ['127.0.0.1', 'localhost', '::1'], true);
@@ -256,7 +257,7 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
                 : 'YOUR_SHARED_SECRET';
 
             return [
-                '/radius add service=hotspot,ppp address=' . $safeServer . ' protocol=udp authentication-port=' . max(1, $radiusAuthPort) . ' accounting-port=' . max(1, $radiusAcctPort) . ' secret=' . $safeSecret . ' timeout=300ms',
+                '/radius add service=hotspot,ppp address=' . $safeServer . ' protocol=udp authentication-port=' . max(1, $radiusAuthPort) . ' accounting-port=' . max(1, $radiusAcctPort) . ' secret=' . $safeSecret . ' timeout=' . $radiusTimeoutSeconds . 's',
                 '/ip hotspot profile set [find] use-radius=yes',
                 '/ppp aaa set use-radius=yes accounting=yes interim-update=1m',
                 '/radius incoming set accept=yes port=3799',

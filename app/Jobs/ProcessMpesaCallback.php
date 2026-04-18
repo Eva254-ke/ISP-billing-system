@@ -280,6 +280,7 @@ class ProcessMpesaCallback implements ShouldQueue
                 }
 
                 $sessionPhone = $this->normalizePhoneForStorage($mpesaPhone) ?? (string) $payment->phone;
+                $sessionUsername = $this->resolveRadiusUsernameFromPhone((string) $payment->phone, (int) $payment->id);
                 $durationMinutes = (int) ($payment->package?->duration_in_minutes ?? 60);
                 $session = UserSession::query()->where('payment_id', $payment->id)->first();
 
@@ -288,7 +289,7 @@ class ProcessMpesaCallback implements ShouldQueue
                         'tenant_id' => $payment->tenant_id,
                         'router_id' => $routerId,
                         'package_id' => $payment->package_id,
-                        'username' => $sessionPhone,
+                        'username' => $sessionUsername,
                         'phone' => $sessionPhone,
                         'status' => 'pending',
                         'started_at' => now(),
@@ -300,7 +301,9 @@ class ProcessMpesaCallback implements ShouldQueue
                     $session->update([
                         'router_id' => $session->router_id ?: $routerId,
                         'package_id' => $session->package_id ?: $payment->package_id,
-                        'username' => $session->username ?: $sessionPhone,
+                        'username' => ((string) $session->status === 'active')
+                            ? ($session->username ?: $sessionUsername)
+                            : $sessionUsername,
                         'phone' => $session->phone ?: $sessionPhone,
                         'started_at' => $session->started_at ?: now(),
                         'expires_at' => $session->expires_at ?: now()->addMinutes($durationMinutes),
@@ -551,6 +554,16 @@ class ProcessMpesaCallback implements ShouldQueue
         }
 
         return $digits;
+    }
+
+    private function resolveRadiusUsernameFromPhone(string $phone, int $paymentId): string
+    {
+        $digits = preg_replace('/\D+/', '', $phone);
+        if ($digits !== '') {
+            return 'cb' . $digits;
+        }
+
+        return 'cbu' . $paymentId;
     }
 
     private function getRouterForTenant(int $tenantId): ?int

@@ -7,6 +7,7 @@ return [
     'server_ip' => env('RADIUS_SERVER_IP', '127.0.0.1'),
     'auth_port' => (int) env('RADIUS_AUTH_PORT', 1812),
     'acct_port' => (int) env('RADIUS_ACCT_PORT', 1813),
+    'timeout' => max(1, (int) env('RADIUS_TIMEOUT', 5)),
     'shared_secret' => env('RADIUS_SHARED_SECRET', ''),
 
     // FreeRADIUS SQL connection name from config/database.php
