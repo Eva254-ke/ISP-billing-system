@@ -11,6 +11,7 @@ use RouterOS\Client;
 use RouterOS\Query;
 use RouterOS\Exception\QueryException;
 use RouterOS\Exception\ClientException;
+use Illuminate\Contracts\Encryption\DecryptException;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Cache;
 
@@ -301,7 +302,7 @@ class Router extends Model
                 'host' => $this->ip_address,
                 'port' => $options['port'] ?? $this->api_port ?? 8728,
                 'user' => $this->api_username,
-                'pass' => $this->api_password,
+                'pass' => $this->resolveApiPassword(),
                 'ssl' => $this->api_ssl ?? false,
                 'timeout' => $options['timeout'] ?? self::SYNC_TIMEOUT_SECONDS,
                 'attempts' => $options['attempts'] ?? 2,
@@ -315,6 +316,20 @@ class Router extends Model
                 'trace' => $e->getTraceAsString(),
             ]);
             return null;
+        }
+    }
+
+    protected function resolveApiPassword(): string
+    {
+        $raw = (string) ($this->api_password ?? '');
+        if ($raw === '') {
+            return '';
+        }
+
+        try {
+            return (string) decrypt($raw);
+        } catch (DecryptException) {
+            return $raw;
         }
     }
 

@@ -226,12 +226,8 @@
                         <label class="form-label">MikroTik User Profile</label>
                         <select class="form-select" name="mikrotik_profile">
                             <option value="">-- Auto-generate --</option>
-                            <option value="profile-1hour">profile-1hour</option>
-                            <option value="profile-3hours">profile-3hours</option>
-                            <option value="profile-24hours">profile-24hours</option>
-                            <option value="profile-weekly">profile-weekly</option>
-                            <option value="profile-monthly">profile-monthly</option>
-                            <option value="custom">-- Custom --</option>
+                            <option value="" disabled>Loading MikroTik profiles...</option>
+                            <option value="__custom__">-- Custom --</option>
                         </select>
                         <small class="text-muted">Leave empty to auto-generate from package name</small>
                     </div>
@@ -310,7 +306,16 @@
                     </div>
                     <div class="mb-3">
                         <label class="form-label">MikroTik User Profile</label>
-                        <input type="text" class="form-control" name="mikrotik_profile" value="">
+                        <select class="form-select" name="mikrotik_profile">
+                            <option value="">-- Auto-generate --</option>
+                            <option value="" disabled>Loading MikroTik profiles...</option>
+                            <option value="__custom__">-- Custom --</option>
+                        </select>
+                        <small class="text-muted">Use a router profile when available, or choose custom.</small>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Custom Profile Name</label>
+                        <input type="text" class="form-control" name="custom_profile" placeholder="e.g., custom-profile-name" disabled>
                     </div>
                     <div class="form-check mb-3">
                         <input class="form-check-input" type="checkbox" name="is_active" id="editIsActive">
@@ -385,18 +390,167 @@ function withTenantScope(url) {
     return `${url}${glue}tenant_id=${tenantId}`;
 }
 
-// Custom profile name toggle
-document.querySelector('select[name="mikrotik_profile"]').addEventListener('change', function() {
-    const customInput = document.querySelector('input[name="custom_profile"]');
-    customInput.disabled = this.value !== 'custom';
-    if (this.value === 'custom') customInput.focus();
-});
+const PROFILE_CUSTOM_VALUE = '__custom__';
 
-function buildPackagePayload(form) {
+function getProfileSelects() {
+    return Array.from(document.querySelectorAll('select[name="mikrotik_profile"]'));
+}
+
+function getCurrentProfileValue(form) {
     const profileSelect = form.querySelector('select[name="mikrotik_profile"]');
     const customProfile = form.querySelector('input[name="custom_profile"]')?.value?.trim() || '';
-    const rawProfile = profileSelect ? profileSelect.value : (form.querySelector('input[name="mikrotik_profile"]')?.value || '');
-    const selectedProfile = rawProfile === 'custom' ? customProfile : rawProfile;
+    const rawProfile = profileSelect ? profileSelect.value : '';
+
+    return rawProfile === PROFILE_CUSTOM_VALUE ? customProfile : rawProfile;
+}
+
+function toggleCustomProfileInput(select, focusWhenCustom = false) {
+    if (!select) return;
+
+    const form = select.closest('form');
+    const customInput = form ? form.querySelector('input[name="custom_profile"]') : null;
+    if (!customInput) return;
+
+    const isCustom = select.value === PROFILE_CUSTOM_VALUE;
+    customInput.disabled = !isCustom;
+    customInput.required = isCustom;
+
+    if (!isCustom) {
+        customInput.value = '';
+    } else if (focusWhenCustom) {
+        customInput.focus();
+    }
+}
+
+function attachProfileSelectHandlers() {
+    getProfileSelects().forEach((select) => {
+        if (select.dataset.profileHandlerBound === '1') {
+            return;
+        }
+
+        select.addEventListener('change', function() {
+            toggleCustomProfileInput(this, true);
+        });
+
+        select.dataset.profileHandlerBound = '1';
+        toggleCustomProfileInput(select, false);
+    });
+}
+
+function setProfileValue(form, profileName) {
+    const select = form.querySelector('select[name="mikrotik_profile"]');
+    const customInput = form.querySelector('input[name="custom_profile"]');
+    const normalized = String(profileName || '').trim();
+
+    if (!select) {
+        return;
+    }
+
+    if (normalized === '') {
+        select.value = '';
+        if (customInput) {
+            customInput.value = '';
+        }
+        toggleCustomProfileInput(select, false);
+        return;
+    }
+
+    const hasOption = Array.from(select.options).some((option) => option.value === normalized);
+    if (hasOption) {
+        select.value = normalized;
+        if (customInput) {
+            customInput.value = '';
+        }
+        toggleCustomProfileInput(select, false);
+        return;
+    }
+
+    if (customInput) {
+        select.value = PROFILE_CUSTOM_VALUE;
+        customInput.value = normalized;
+    } else {
+        select.value = '';
+    }
+
+    toggleCustomProfileInput(select, false);
+}
+
+function renderProfileSelectOptions(profileNames = []) {
+    const options = ['<option value="">-- Auto-generate --</option>'];
+
+    for (const name of profileNames) {
+        const safeName = String(name)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+        options.push(`<option value="${safeName}">${safeName}</option>`);
+    }
+
+    options.push('<option value="__custom__">-- Custom --</option>');
+
+    const forms = [document.getElementById('addPackageForm'), document.getElementById('editPackageForm')].filter(Boolean);
+    forms.forEach((form) => {
+        const selectedValue = getCurrentProfileValue(form);
+        const select = form.querySelector('select[name="mikrotik_profile"]');
+        if (!select) return;
+
+        select.innerHTML = options.join('');
+        setProfileValue(form, selectedValue);
+    });
+
+    attachProfileSelectHandlers();
+}
+
+function renderProfileLoadingState() {
+    const options = [
+        '<option value="">-- Auto-generate --</option>',
+        '<option value="" disabled>Loading MikroTik profiles...</option>',
+        '<option value="__custom__">-- Custom --</option>',
+    ].join('');
+
+    getProfileSelects().forEach((select) => {
+        const selected = select.value;
+        select.innerHTML = options;
+        if (selected === PROFILE_CUSTOM_VALUE) {
+            select.value = PROFILE_CUSTOM_VALUE;
+        }
+    });
+}
+
+async function loadMikroTikProfiles() {
+    const tenantSelect = document.getElementById('packageTenantId');
+    if (tenantSelect && getScopedTenantId() <= 0) {
+        renderProfileSelectOptions([]);
+        return;
+    }
+
+    renderProfileLoadingState();
+
+    try {
+        const res = await fetch(withTenantScope('/admin/api/mikrotik/profiles'), {
+            headers: { 'Accept': 'application/json' },
+            credentials: 'same-origin',
+        });
+
+        const payload = await res.json().catch(() => ({}));
+        if (!res.ok || !payload?.success) {
+            throw new Error(payload?.message || 'Failed to load MikroTik profiles');
+        }
+
+        const profiles = Array.isArray(payload?.data?.profiles) ? payload.data.profiles : [];
+        renderProfileSelectOptions(profiles);
+    } catch (error) {
+        console.warn('Unable to load MikroTik profiles:', error);
+        renderProfileSelectOptions([]);
+    }
+}
+
+function buildPackagePayload(form) {
+    const customProfile = form.querySelector('input[name="custom_profile"]')?.value?.trim() || '';
+    const rawProfile = form.querySelector('select[name="mikrotik_profile"]')?.value || '';
+    const selectedProfile = rawProfile === PROFILE_CUSTOM_VALUE ? customProfile : rawProfile;
     const tenantId = getScopedTenantId();
 
     const payload = {
@@ -553,7 +707,7 @@ window.openEditPackageFromButton = function openEditPackageFromButton(button) {
     form.querySelector('input[name="price"]').value = button.dataset.price || '';
     form.querySelector('input[name="download_speed"]').value = button.dataset.download || '';
     form.querySelector('input[name="upload_speed"]').value = button.dataset.upload || '';
-    form.querySelector('input[name="mikrotik_profile"]').value = button.dataset.profile || '';
+    setProfileValue(form, button.dataset.profile || '');
     form.querySelector('input[name="is_active"]').checked = String(button.dataset.active || '0') === '1';
 };
 
@@ -579,6 +733,16 @@ function bindStatusToggles() {
                     Swal.fire('Error', error.message || 'Failed to update status', 'error');
                 });
         });
+    });
+}
+
+attachProfileSelectHandlers();
+loadMikroTikProfiles();
+
+const packageTenantSelect = document.getElementById('packageTenantId');
+if (packageTenantSelect) {
+    packageTenantSelect.addEventListener('change', function() {
+        loadMikroTikProfiles();
     });
 }
 

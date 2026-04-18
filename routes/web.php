@@ -628,6 +628,85 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
             ], 422);
         };
 
+        Route::get('/mikrotik/profiles', function (Request $request, MikroTikService $mikroTikService) use ($resolveTenantForPackageWrite, $tenantScopeError) {
+            $tenant = $resolveTenantForPackageWrite($request);
+
+            if (!$tenant) {
+                return $tenantScopeError();
+            }
+
+            $routers = Router::query()
+                ->where('tenant_id', $tenant->id)
+                ->orderByRaw(
+                    "CASE WHEN status = ? THEN 0 WHEN status = ? THEN 1 ELSE 2 END",
+                    [Router::STATUS_ONLINE, Router::STATUS_WARNING]
+                )
+                ->orderBy('id')
+                ->limit(5)
+                ->get();
+
+            $routerProfiles = [];
+            $onlineRouter = null;
+
+            foreach ($routers as $router) {
+                if (!$mikroTikService->pingRouter($router)) {
+                    continue;
+                }
+
+                $onlineRouter = $router;
+                $routerProfiles = array_merge(
+                    $routerProfiles,
+                    $mikroTikService->getHotspotUserProfiles($router),
+                    $mikroTikService->getPppProfiles($router)
+                );
+
+                if (!empty($routerProfiles)) {
+                    break;
+                }
+            }
+
+            $databaseProfiles = Package::query()
+                ->where('tenant_id', $tenant->id)
+                ->whereNotNull('mikrotik_profile_name')
+                ->pluck('mikrotik_profile_name')
+                ->map(fn ($name) => trim((string) $name))
+                ->filter()
+                ->values()
+                ->all();
+
+            $profiles = collect(array_merge($routerProfiles, $databaseProfiles))
+                ->map(fn ($name) => trim((string) $name))
+                ->filter()
+                ->unique(fn ($name) => Str::lower($name))
+                ->sort(fn ($a, $b) => strnatcasecmp($a, $b))
+                ->values()
+                ->all();
+
+            $message = $onlineRouter
+                ? 'MikroTik profiles loaded successfully.'
+                : 'Router is offline; showing saved profile names only.';
+
+            if (empty($profiles)) {
+                $message = 'No MikroTik profiles found yet. Create one on your router or enter a custom name.';
+            }
+
+            return response()->json([
+                'success' => true,
+                'message' => $message,
+                'data' => [
+                    'profiles' => $profiles,
+                    'router' => $onlineRouter ? [
+                        'id' => $onlineRouter->id,
+                        'name' => $onlineRouter->name,
+                        'ip_address' => $onlineRouter->ip_address,
+                    ] : null,
+                    'source' => $onlineRouter
+                        ? (!empty($databaseProfiles) ? 'router+database' : 'router')
+                        : 'database',
+                ],
+            ]);
+        })->name('mikrotik.profiles');
+
         Route::post('/routers', function (Request $request) use ($resolveTenantForPackageWrite, $tenantScopeError) {
             $tenant = $resolveTenantForPackageWrite($request);
 
@@ -638,7 +717,20 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
             $validated = $request->validate([
                 'name' => 'required|string|max:120',
                 'type' => 'required|in:hotspot,pppoe,both',
-                'ip' => 'required|ip',
+                'ip' => [
+                    'required',
+                    'string',
+                    'max:45',
+                    static function ($attribute, $value, $fail) {
+                        $host = trim((string) $value);
+                        $isIp = filter_var($host, FILTER_VALIDATE_IP) !== false;
+                        $isHostname = filter_var($host, FILTER_VALIDATE_DOMAIN, FILTER_FLAG_HOSTNAME) !== false;
+
+                        if (!$isIp && !$isHostname) {
+                            $fail('Router address must be a valid IP address or hostname.');
+                        }
+                    },
+                ],
                 'port' => 'nullable|integer|min:1|max:65535',
                 'username' => 'required|string|max:120',
                 'password' => 'required|string|max:255',
@@ -672,7 +764,7 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
                 'ip_address' => $ipAddress,
                 'api_port' => (int) ($validated['port'] ?? 8728),
                 'api_username' => trim((string) $validated['username']),
-                'api_password' => (string) $validated['password'],
+                'api_password' => encrypt((string) $validated['password']),
                 'api_ssl' => false,
                 'location' => filled($validated['location'] ?? null) ? trim((string) $validated['location']) : null,
                 'notes' => filled($validated['notes'] ?? null) ? trim((string) $validated['notes']) : null,

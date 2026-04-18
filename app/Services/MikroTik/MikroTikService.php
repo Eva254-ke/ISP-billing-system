@@ -4,6 +4,7 @@ namespace App\Services\MikroTik;
 
 use App\Models\Router;
 use App\Models\UserSession;
+use Illuminate\Contracts\Encryption\DecryptException;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use RouterOS\Client;
@@ -354,6 +355,40 @@ class MikroTikService
     }
 
     /**
+     * Get hotspot user profiles available on the router.
+     */
+    public function getHotspotUserProfiles(Router $router): array
+    {
+        return $this->withRetry(function () use ($router) {
+            $client = $this->getClient($router);
+            $response = $client->query(new Query('/ip/hotspot/user/profile/print'))->read();
+
+            return collect($response)
+                ->map(fn ($row) => trim((string) ($row['name'] ?? '')))
+                ->filter()
+                ->values()
+                ->all();
+        }, $router, 'getHotspotUserProfiles') ?? [];
+    }
+
+    /**
+     * Get PPP profiles available on the router.
+     */
+    public function getPppProfiles(Router $router): array
+    {
+        return $this->withRetry(function () use ($router) {
+            $client = $this->getClient($router);
+            $response = $client->query(new Query('/ppp/profile/print'))->read();
+
+            return collect($response)
+                ->map(fn ($row) => trim((string) ($row['name'] ?? '')))
+                ->filter()
+                ->values()
+                ->all();
+        }, $router, 'getPppProfiles') ?? [];
+    }
+
+    /**
      * Set session timeout on MikroTik (prevents early disconnects)
      */
     private function setSessionTimeout(Client $client, string $username, int $seconds): void
@@ -427,7 +462,7 @@ class MikroTikService
         $config = [
             'host' => $router->ip_address,
             'user' => $router->api_username,
-            'pass' => decrypt($router->api_password), // Decrypt stored password
+            'pass' => $this->resolveRouterPassword($router->api_password),
             'port' => $router->api_port,
             'timeout' => self::CONNECTION_TIMEOUT,
             'attempts' => 1,
@@ -439,6 +474,23 @@ class MikroTikService
         }
         
         return new Client($config);
+    }
+
+    /**
+     * Support both encrypted and legacy plaintext stored passwords.
+     */
+    private function resolveRouterPassword(?string $value): string
+    {
+        $raw = (string) ($value ?? '');
+        if ($raw === '') {
+            return '';
+        }
+
+        try {
+            return (string) decrypt($raw);
+        } catch (DecryptException) {
+            return $raw;
+        }
     }
 
     /**

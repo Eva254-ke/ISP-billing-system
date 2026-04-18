@@ -241,9 +241,29 @@
             }
 
             // Modal compatibility helper (supports Bootstrap 5, Bootstrap 4, or no Bootstrap JS)
-            var hasBs5Modal = window.bootstrap && window.bootstrap.Modal;
+            var hasBootstrapModal = window.bootstrap && window.bootstrap.Modal;
             var hasBs4Modal = window.jQuery && window.jQuery.fn && window.jQuery.fn.modal;
             var openModal = null;
+
+            function getBootstrapModalInstance(modal) {
+                if (!hasBootstrapModal || !modal) return null;
+
+                var modalApi = window.bootstrap.Modal;
+
+                if (typeof modalApi.getOrCreateInstance === 'function') {
+                    return modalApi.getOrCreateInstance(modal);
+                }
+
+                if (typeof modalApi.getInstance === 'function') {
+                    return modalApi.getInstance(modal) || new modalApi(modal);
+                }
+
+                try {
+                    return new modalApi(modal);
+                } catch (error) {
+                    return null;
+                }
+            }
 
             function ensureBackdrop() {
                 var backdrop = document.querySelector('.modal-backdrop[data-fallback-backdrop]');
@@ -286,8 +306,9 @@
 
             function showModal(modal) {
                 if (!modal) return;
-                if (hasBs5Modal) {
-                    window.bootstrap.Modal.getOrCreateInstance(modal).show();
+                var modalInstance = getBootstrapModalInstance(modal);
+                if (modalInstance && typeof modalInstance.show === 'function') {
+                    modalInstance.show();
                     return;
                 }
                 if (hasBs4Modal) {
@@ -299,8 +320,9 @@
 
             function hideModal(modal) {
                 if (!modal) return;
-                if (hasBs5Modal) {
-                    window.bootstrap.Modal.getOrCreateInstance(modal).hide();
+                var modalInstance = getBootstrapModalInstance(modal);
+                if (modalInstance && typeof modalInstance.hide === 'function') {
+                    modalInstance.hide();
                     return;
                 }
                 if (hasBs4Modal) {
@@ -320,7 +342,7 @@
                 hideModal(modal);
             };
 
-            if (!hasBs5Modal && !hasBs4Modal) {
+            if (!hasBootstrapModal && !hasBs4Modal) {
                 document.addEventListener('click', function (e) {
                     var trigger = e.target.closest('[data-bs-toggle="modal"], [data-toggle="modal"]');
                     if (trigger) {

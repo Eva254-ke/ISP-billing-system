@@ -479,8 +479,25 @@ document.addEventListener('DOMContentLoaded', function () {
         if (!modal) return;
 
         if (window.bootstrap && window.bootstrap.Modal) {
-            window.bootstrap.Modal.getOrCreateInstance(modal).hide();
-            return;
+            const modalApi = window.bootstrap.Modal;
+            let instance = null;
+
+            if (typeof modalApi.getOrCreateInstance === 'function') {
+                instance = modalApi.getOrCreateInstance(modal);
+            } else if (typeof modalApi.getInstance === 'function') {
+                instance = modalApi.getInstance(modal) || new modalApi(modal);
+            } else {
+                try {
+                    instance = new modalApi(modal);
+                } catch (_) {
+                    instance = null;
+                }
+            }
+
+            if (instance && typeof instance.hide === 'function') {
+                instance.hide();
+                return;
+            }
         }
 
         if (window.jQuery && window.jQuery.fn && window.jQuery.fn.modal) {
