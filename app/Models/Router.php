@@ -520,10 +520,12 @@ class Router extends Model
             $query = new Query('/system/resource/print');
             $result = $this->executeQuery($query);
             $resource = $result[0] ?? [];
+            $cpuUsage = $this->toPercent($resource['cpu-load'] ?? null);
+            $memoryUsage = $this->extractMemoryUsagePercent($resource);
             
             $this->update([
-                'cpu_usage' => (int) trim($resource['cpu-load'] ?? '0', '%'),
-                'memory_usage' => (int) trim($resource['memory-usage'] ?? '0', '%'),
+                'cpu_usage' => $cpuUsage,
+                'memory_usage' => $memoryUsage,
                 'uptime_seconds' => $this->parseUptime($resource['uptime'] ?? '0s'),
                 'last_sync_at' => now(),
             ]);
@@ -538,6 +540,39 @@ class Router extends Model
             
             return false;
         }
+    }
+
+    protected function toPercent(mixed $value): ?int
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        $numeric = preg_replace('/[^0-9.]+/', '', (string) $value);
+        if ($numeric === '' || !is_numeric($numeric)) {
+            return null;
+        }
+
+        $percent = (int) round((float) $numeric);
+        return max(0, min(100, $percent));
+    }
+
+    protected function extractMemoryUsagePercent(array $resource): ?int
+    {
+        $direct = $this->toPercent($resource['memory-usage'] ?? null);
+        if ($direct !== null) {
+            return $direct;
+        }
+
+        $total = isset($resource['total-memory']) ? (float) $resource['total-memory'] : 0.0;
+        $free = isset($resource['free-memory']) ? (float) $resource['free-memory'] : 0.0;
+
+        if ($total <= 0) {
+            return null;
+        }
+
+        $usedPercent = (int) round((($total - $free) / $total) * 100);
+        return max(0, min(100, $usedPercent));
     }
 
     protected function parseUptime(string $uptime): int
@@ -726,7 +761,7 @@ class Router extends Model
         ]);
     }
 
-    public function markWarning(string $reason = null): void
+    public function markWarning(?string $reason = null): void
     {
         $this->update([
             'status' => self::STATUS_WARNING,

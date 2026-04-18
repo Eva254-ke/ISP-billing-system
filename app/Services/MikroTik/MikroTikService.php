@@ -334,24 +334,59 @@ class MikroTikService
             }
             
             $data = $info[0];
+            $cpuLoad = $this->toPercent($data['cpu-load'] ?? null);
+            $memoryUsage = $this->extractMemoryUsagePercent($data);
             
             // Update router health metrics
             $router->update([
-                'cpu_usage' => (int) rtrim($data['cpu-load'] ?? '0', '%'),
-                'memory_usage' => (int) rtrim($data['memory-usage'] ?? '0', '%'),
+                'cpu_usage' => $cpuLoad,
+                'memory_usage' => $memoryUsage,
                 'uptime_seconds' => $this->parseUptime($data['uptime'] ?? '0'),
                 'last_sync_at' => now(),
             ]);
             
             return [
-                'cpu_load' => rtrim($data['cpu-load'] ?? '0', '%'),
-                'memory_usage' => rtrim($data['memory-usage'] ?? '0', '%'),
+                'cpu_load' => $cpuLoad,
+                'memory_usage' => $memoryUsage,
                 'uptime' => $data['uptime'] ?? null,
                 'version' => $data['version'] ?? null,
                 'board_name' => $data['board-name'] ?? null,
             ];
             
         }, $router, 'getRouterSystemInfo') ?? [];
+    }
+
+    private function toPercent(mixed $value): ?int
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        $numeric = preg_replace('/[^0-9.]+/', '', (string) $value);
+        if ($numeric === '' || !is_numeric($numeric)) {
+            return null;
+        }
+
+        $percent = (int) round((float) $numeric);
+        return max(0, min(100, $percent));
+    }
+
+    private function extractMemoryUsagePercent(array $data): ?int
+    {
+        $direct = $this->toPercent($data['memory-usage'] ?? null);
+        if ($direct !== null) {
+            return $direct;
+        }
+
+        $total = isset($data['total-memory']) ? (float) $data['total-memory'] : 0.0;
+        $free = isset($data['free-memory']) ? (float) $data['free-memory'] : 0.0;
+
+        if ($total <= 0) {
+            return null;
+        }
+
+        $usedPercent = (int) round((($total - $free) / $total) * 100);
+        return max(0, min(100, $usedPercent));
     }
 
     /**
