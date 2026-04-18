@@ -227,7 +227,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
         const payload = await response.json().catch(() => ({}));
 
-        if (!response.ok) {
+        if (!response.ok || payload?.success === false) {
             throw new Error(payload?.message || `Request failed: ${response.status}`);
         }
 

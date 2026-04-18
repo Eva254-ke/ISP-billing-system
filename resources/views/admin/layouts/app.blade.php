@@ -15,7 +15,7 @@
     @include('partials.vite-assets', ['entries' => ['resources/css/app.css', 'resources/js/app.js']])
     <link rel="stylesheet" href="{{ asset('css/admin-overrides.css') }}?v=20260416-6">
     <!-- Font Awesome CDN fallback (prevents missing icons showing as squares if local build assets fail) -->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" integrity="sha512-+4z5X5NQx1mENxvupwJzU3N4v2d8OmiW9zZVcGiGJkV8OjFg2p/X6s6lpxWQYa2Zs8r7K1QUqYEFIF2xqg8RFw==" crossorigin="anonymous" referrerpolicy="no-referrer">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" crossorigin="anonymous" referrerpolicy="no-referrer">
 </head>
 <body class="hold-transition sidebar-mini layout-fixed layout-navbar-fixed">
     @php

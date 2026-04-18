@@ -393,7 +393,7 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
                         'ip_address' => $router->ip_address,
                     ],
                     'commands' => $commands,
-                ], 503);
+                ]);
             }
 
             $systemInfo = $mikroTikService->getRouterSystemInfo($router);
@@ -509,7 +509,7 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
                     'success' => false,
                     'message' => 'Router is offline or unreachable',
                     'router' => $router->id,
-                ], 503);
+                ]);
             }
 
             $systemInfo = $mikroTikService->getRouterSystemInfo($router);
