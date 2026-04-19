@@ -14,10 +14,18 @@ use RouterOS\Exception\ClientException;
 use Illuminate\Contracts\Encryption\DecryptException;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Schema;
 
 class Router extends Model
 {
     use HasFactory, SoftDeletes;
+
+    /**
+     * Cache table-column existence checks to avoid repeated schema queries.
+     *
+     * @var array<string, bool>
+     */
+    protected static array $columnExistenceCache = [];
 
     protected $fillable = [
         'tenant_id',
@@ -791,6 +799,11 @@ class Router extends Model
 
     protected function persistRouterState(array $changes): void
     {
+        $changes = $this->filterPersistableColumns($changes);
+        if (empty($changes)) {
+            return;
+        }
+
         if (!$this->exists) {
             $this->forceFill($changes);
             return;
@@ -798,6 +811,53 @@ class Router extends Model
 
         static::query()->whereKey($this->getKey())->update($changes);
         $this->forceFill($changes)->syncOriginalAttributes(array_keys($changes));
+    }
+
+    protected function filterPersistableColumns(array $changes): array
+    {
+        $filtered = [];
+        $dropped = [];
+
+        foreach ($changes as $column => $value) {
+            if ($this->hasTableColumn((string) $column)) {
+                $filtered[$column] = $value;
+                continue;
+            }
+
+            $dropped[] = (string) $column;
+        }
+
+        if (!empty($dropped)) {
+            Log::channel('mikrotik')->warning('Skipped unsupported router columns during state persistence', [
+                'router_id' => $this->id,
+                'table' => $this->getTable(),
+                'columns' => $dropped,
+            ]);
+        }
+
+        return $filtered;
+    }
+
+    protected function hasTableColumn(string $column): bool
+    {
+        $cacheKey = $this->getTable() . ':' . $column;
+
+        if (!array_key_exists($cacheKey, self::$columnExistenceCache)) {
+            try {
+                self::$columnExistenceCache[$cacheKey] = Schema::hasColumn($this->getTable(), $column);
+            } catch (\Throwable $e) {
+                // Fail open if schema inspection is unavailable to avoid blocking status updates.
+                Log::channel('mikrotik')->warning('Unable to inspect router table schema; assuming column exists', [
+                    'router_id' => $this->id,
+                    'table' => $this->getTable(),
+                    'column' => $column,
+                    'error' => $e->getMessage(),
+                ]);
+                self::$columnExistenceCache[$cacheKey] = true;
+            }
+        }
+
+        return self::$columnExistenceCache[$cacheKey];
     }
 
     public function getRecommendedAccountingInterval(): int
