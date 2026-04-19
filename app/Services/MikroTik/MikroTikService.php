@@ -45,9 +45,8 @@ class MikroTikService
         int $durationMinutes,
         ?string $macAddress = null,
         ?string $ipAddress = null
-    ): array
-    {
-        return $this->withRetry(function () use ($router, $username, $password, $durationMinutes, $macAddress, $ipAddress) {
+    ): array {
+        $result = $this->withRetry(function () use ($router, $username, $password, $durationMinutes, $macAddress, $ipAddress) {
             $client = $this->getClient($router);
             
             // Calculate expiry time
@@ -92,6 +91,21 @@ class MikroTikService
             ];
             
         }, $router, 'createHotspotSession');
+
+        // Ensure we always return an array (fix return type contract)
+        if (is_array($result) && isset($result['success'])) {
+            return $result;
+        }
+
+        // Fallback response when retries exhausted
+        $this->pingRouter($router);
+        $router = $router->fresh();
+
+        return [
+            'success' => false,
+            'error' => 'Unable to create hotspot session after retries.',
+            'queued' => (string) ($router->status ?? '') === Router::STATUS_OFFLINE,
+        ];
     }
 
     /**
@@ -117,7 +131,7 @@ class MikroTikService
         }
 
         try {
-            return $client->query($query)->read();
+            return $client->query($query)->read() ?? [];
         } catch (QueryException $error) {
             // Backward-compatible fallback for older setups.
             $legacyQuery = (new Query('/ip/hotspot/login'))
@@ -137,7 +151,7 @@ class MikroTikService
                 'error' => $error->getMessage(),
             ]);
 
-            return $client->query($legacyQuery)->read();
+            return $client->query($legacyQuery)->read() ?? [];
         }
     }
 
@@ -146,7 +160,7 @@ class MikroTikService
      */
     public function createPppoeSession(Router $router, string $username, string $password, int $durationMinutes): array
     {
-        return $this->withRetry(function () use ($router, $username, $password, $durationMinutes) {
+        $result = $this->withRetry(function () use ($router, $username, $password, $durationMinutes) {
             $client = $this->getClient($router);
             
             // Create PPPoE secret (user)
@@ -157,7 +171,7 @@ class MikroTikService
                 ->equal('profile', 'default') // Will be overridden by package profile
                 ->equal('limit-uptime', "{$durationMinutes}m");
             
-            $result = $client->query($query)->read();
+            $result = $client->query($query)->read() ?? [];
             
             Log::channel('mikrotik')->info('PPPoE session created', [
                 'router' => $router->name,
@@ -172,6 +186,19 @@ class MikroTikService
             ];
             
         }, $router, 'createPppoeSession');
+
+        if (is_array($result) && isset($result['success'])) {
+            return $result;
+        }
+
+        $this->pingRouter($router);
+        $router = $router->fresh();
+
+        return [
+            'success' => false,
+            'error' => 'Unable to create PPPoE session after retries.',
+            'queued' => (string) ($router->status ?? '') === Router::STATUS_OFFLINE,
+        ];
     }
 
     /**
@@ -179,14 +206,14 @@ class MikroTikService
      */
     public function disconnectSession(Router $router, string $identifier, string $type = 'username'): bool
     {
-        return $this->withRetry(function () use ($router, $identifier, $type) {
+        $result = $this->withRetry(function () use ($router, $identifier, $type) {
             $client = $this->getClient($router);
             
             // Find active session
             $query = (new Query('/ip/hotspot/active/print'))
                 ->where($type, $identifier);
             
-            $sessions = $client->query($query)->read();
+            $sessions = $client->query($query)->read() ?? [];
             
             if (empty($sessions)) {
                 Log::channel('mikrotik')->warning('Session not found for disconnect', [
@@ -200,9 +227,11 @@ class MikroTikService
             // Disconnect each matching session
             foreach ($sessions as $session) {
                 $logoutQuery = (new Query('/ip/hotspot/logout'))
-                    ->equal('session-id', $session['.id'] ?? $session['id']);
+                    ->equal('session-id', $session['.id'] ?? $session['id'] ?? null);
                 
-                $client->query($logoutQuery)->read();
+                if ($logoutQuery) {
+                    $client->query($logoutQuery)->read();
+                }
             }
             
             Log::channel('mikrotik')->info('Session disconnected', [
@@ -214,7 +243,9 @@ class MikroTikService
             
             return true;
             
-        }, $router, 'disconnectSession') ?? false;
+        }, $router, 'disconnectSession');
+
+        return $result === true;
     }
 
     /**
@@ -222,11 +253,11 @@ class MikroTikService
      */
     public function getActiveSessions(Router $router): array
     {
-        return $this->withRetry(function () use ($router) {
+        $result = $this->withRetry(function () use ($router) {
             $client = $this->getClient($router);
             
             $query = new Query('/ip/hotspot/active/print');
-            $sessions = $client->query($query)->read();
+            $sessions = $client->query($query)->read() ?? [];
             
             // Transform to consistent format
             return array_map(function ($session) {
@@ -242,7 +273,9 @@ class MikroTikService
                 ];
             }, $sessions);
             
-        }, $router, 'getActiveSessions') ?? [];
+        }, $router, 'getActiveSessions');
+
+        return is_array($result) ? $result : [];
     }
 
     /**
@@ -250,15 +283,19 @@ class MikroTikService
      */
     public function syncSessionUsage(UserSession $userSession): bool
     {
-        return $this->withRetry(function () use ($userSession) {
+        $result = $this->withRetry(function () use ($userSession) {
             $router = $userSession->router;
+            if (!$router) {
+                return false;
+            }
+            
             $client = $this->getClient($router);
             
             // Find session on router
             $query = (new Query('/ip/hotspot/active/print'))
                 ->where('user', $userSession->username);
             
-            $sessions = $client->query($query)->read();
+            $sessions = $client->query($query)->read() ?? [];
             
             if (empty($sessions)) {
                 // Session not found on router - may have been disconnected
@@ -284,7 +321,9 @@ class MikroTikService
             
             return true;
             
-        }, $userSession->router, 'syncSessionUsage') ?? false;
+        }, $userSession->router, 'syncSessionUsage');
+
+        return $result === true;
     }
 
     /**
@@ -381,7 +420,7 @@ class MikroTikService
      */
     public function getRouterSystemInfo(Router $router): array
     {
-        return $this->withRetry(function () use ($router) {
+        $result = $this->withRetry(function () use ($router) {
             $client = $this->getClient($router);
             
             $query = new Query('/system/resource/print');
@@ -411,7 +450,9 @@ class MikroTikService
                 'board_name' => $data['board-name'] ?? null,
             ];
             
-        }, $router, 'getRouterSystemInfo') ?? [];
+        }, $router, 'getRouterSystemInfo');
+
+        return is_array($result) ? $result : [];
     }
 
     private function toPercent(mixed $value): ?int
@@ -452,16 +493,21 @@ class MikroTikService
      */
     public function getHotspotUserProfiles(Router $router): array
     {
-        return $this->withRetry(function () use ($router) {
+        $result = $this->withRetry(function () use ($router) {
             $client = $this->getClient($router);
-            $response = $client->query(new Query('/ip/hotspot/user/profile/print'))->read();
+            if (!$client) {
+                return [];
+            }
+            $response = $client->query(new Query('/ip/hotspot/user/profile/print'))->read() ?? [];
 
             return collect($response)
                 ->map(fn ($row) => trim((string) ($row['name'] ?? '')))
                 ->filter()
                 ->values()
                 ->all();
-        }, $router, 'getHotspotUserProfiles') ?? [];
+        }, $router, 'getHotspotUserProfiles');
+
+        return is_array($result) ? $result : [];
     }
 
     /**
@@ -469,16 +515,21 @@ class MikroTikService
      */
     public function getPppProfiles(Router $router): array
     {
-        return $this->withRetry(function () use ($router) {
+        $result = $this->withRetry(function () use ($router) {
             $client = $this->getClient($router);
-            $response = $client->query(new Query('/ppp/profile/print'))->read();
+            if (!$client) {
+                return [];
+            }
+            $response = $client->query(new Query('/ppp/profile/print'))->read() ?? [];
 
             return collect($response)
                 ->map(fn ($row) => trim((string) ($row['name'] ?? '')))
                 ->filter()
                 ->values()
                 ->all();
-        }, $router, 'getPppProfiles') ?? [];
+        }, $router, 'getPppProfiles');
+
+        return is_array($result) ? $result : [];
     }
 
     /**
@@ -486,16 +537,7 @@ class MikroTikService
      */
     private function setSessionTimeout(Client $client, string $username, int $seconds): void
     {
-        // Use session timeout via user profile or direct limit
-        // This is router-specific; adjust based on your MikroTik config
-        
-        // Option 1: Update user profile with timeout
-        // $query = (new Query('/user/profile/set'))
-        //     ->equal('name', 'default')
-        //     ->equal('session-timeout', "{$seconds}s");
-        // $client->query($query)->read();
-        
-        // Option 2: Use hotspot user timeout (more reliable)
+        // Use hotspot user timeout (more reliable)
         $query = (new Query('/ip/hotspot/user/set'))
             ->where('name', $username)
             ->equal('limit-uptime', "{$seconds}s");
@@ -614,7 +656,7 @@ class MikroTikService
     /**
      * Get cached or new MikroTik API client
      */
-    private function getClient(Router $router, bool $forceNew = false): Client
+    private function getClient(Router $router, bool $forceNew = false): ?Client
     {
         if (!$forceNew) {
             $cacheKey = "mikrotik_client:{$router->id}";
@@ -628,31 +670,41 @@ class MikroTikService
     }
 
     /**
-     * Create new MikroTik API client
+     * Create new MikroTik API client - FIXED: Removed invalid ssl_verify parameter
      */
-    private function createClient(Router $router): Client
+    private function createClient(Router $router): ?Client
     {
-        $config = [
-            'host' => $router->ip_address,
-            'user' => $router->api_username,
-            'pass' => $this->resolveRouterPassword($router->api_password),
-            'port' => $router->api_port,
-            'timeout' => self::CONNECTION_TIMEOUT,
-            'attempts' => 1,
-        ];
-        
-        if ($router->api_ssl) {
-            $config['ssl'] = true;
-            // RouterOS client expects SSL context options under `ssl_options`.
-            // Keep cert verification permissive for common self-signed MikroTik certs.
-            $config['ssl_options'] = [
-                'verify_peer' => false,
-                'verify_peer_name' => false,
-                'allow_self_signed' => true,
+        try {
+            $config = [
+                'host' => $router->ip_address,
+                'user' => $router->api_username,
+                'pass' => $this->resolveRouterPassword($router->api_password),
+                'port' => (int) $router->api_port,
+                'timeout' => self::CONNECTION_TIMEOUT,
+                'socket_timeout' => self::COMMAND_TIMEOUT,
+                'attempts' => 1,
             ];
+            
+            // SSL config - only include supported parameters
+            if ($router->api_ssl) {
+                $config['ssl'] = true;
+                // Use ssl_options for SSL context (supported by routeros-api-php)
+                $config['ssl_options'] = [
+                    'verify_peer' => false,
+                    'verify_peer_name' => false,
+                    'allow_self_signed' => true,
+                ];
+            }
+            
+            return new Client($config);
+            
+        } catch (\Exception $e) {
+            Log::channel('mikrotik')->error('Failed to create MikroTik client', [
+                'router' => $router->name,
+                'error' => $e->getMessage(),
+            ]);
+            return null;
         }
-        
-        return new Client($config);
     }
 
     /**
@@ -675,8 +727,13 @@ class MikroTikService
     /**
      * Execute command with retry logic and error handling
      */
-    private function withRetry(callable $callback, Router $router, string $operation): mixed
+    private function withRetry(callable $callback, ?Router $router, string $operation): mixed
     {
+        if (!$router) {
+            Log::channel('error')->error("Router is null for operation: {$operation}");
+            return null;
+        }
+
         $lastException = null;
         
         for ($attempt = 1; $attempt <= self::MAX_RETRIES; $attempt++) {
