@@ -649,6 +649,14 @@ class MikroTikService
         }
 
         if (
+            str_contains($normalized, 'socket timeout reached')
+            || str_contains($normalized, 'socket timeout')
+            || str_contains($normalized, 'read timed out')
+        ) {
+            return $tcpReachable ? 'api_timeout' : 'network_error';
+        }
+
+        if (
             str_contains($normalized, 'timed out')
             || str_contains($normalized, 'no route')
             || str_contains($normalized, 'connection refused')
@@ -741,6 +749,7 @@ class MikroTikService
         return match ($errorType) {
             'auth_error' => 'Router is reachable, but MikroTik API authentication failed. Verify username/password and API permissions.',
             'tls_error' => 'Router API port is reachable, but SSL/TLS negotiation failed. Verify API SSL settings and certificates.',
+            'api_timeout' => 'Router API port is reachable, but the API handshake timed out. Verify API vs API-SSL mode, allowed source addresses, and firewall rules.',
             'network_error' => 'Router API port is unreachable from the server.',
             default => $this->buildGenericConnectivityMessage($apiPortReachable, $rawError),
         };
@@ -755,6 +764,10 @@ class MikroTikService
         $error = trim($rawError);
         if ($error === '') {
             return 'Router is reachable, but MikroTik API query failed.';
+        }
+
+        if (str_contains(strtolower($error), 'socket timeout')) {
+            return 'Router API port is reachable, but the API handshake timed out. Verify API vs API-SSL mode, allowed source addresses, and firewall rules.';
         }
 
         if (strlen($error) > 220) {
