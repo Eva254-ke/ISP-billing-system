@@ -47,7 +47,7 @@ class MikroTikService
         ?string $ipAddress = null
     ): array {
         $result = $this->withRetry(function () use ($router, $username, $password, $durationMinutes, $macAddress, $ipAddress) {
-            $client = $this->getClient($router);
+            $client = $this->getRequiredClient($router);
             
             // Calculate expiry time
             $expiresAt = now()->addMinutes($durationMinutes);
@@ -161,7 +161,7 @@ class MikroTikService
     public function createPppoeSession(Router $router, string $username, string $password, int $durationMinutes): array
     {
         $result = $this->withRetry(function () use ($router, $username, $password, $durationMinutes) {
-            $client = $this->getClient($router);
+            $client = $this->getRequiredClient($router);
             
             // Create PPPoE secret (user)
             $query = (new Query('/ppp/secret/add'))
@@ -207,7 +207,7 @@ class MikroTikService
     public function disconnectSession(Router $router, string $identifier, string $type = 'username'): bool
     {
         $result = $this->withRetry(function () use ($router, $identifier, $type) {
-            $client = $this->getClient($router);
+            $client = $this->getRequiredClient($router);
             
             // Find active session
             $query = (new Query('/ip/hotspot/active/print'))
@@ -254,7 +254,7 @@ class MikroTikService
     public function getActiveSessions(Router $router): array
     {
         $result = $this->withRetry(function () use ($router) {
-            $client = $this->getClient($router);
+            $client = $this->getRequiredClient($router);
             
             $query = new Query('/ip/hotspot/active/print');
             $sessions = $client->query($query)->read() ?? [];
@@ -289,7 +289,7 @@ class MikroTikService
                 return false;
             }
             
-            $client = $this->getClient($router);
+            $client = $this->getRequiredClient($router);
             
             // Find session on router
             $query = (new Query('/ip/hotspot/active/print'))
@@ -332,7 +332,7 @@ class MikroTikService
     public function pingRouter(Router $router): bool
     {
         try {
-            $client = $this->getClient($router, true); // Don't cache for health checks
+            $client = $this->getRequiredClient($router, true); // Don't cache for health checks
             
             // Simple system resource query to test connection
             $query = new Query('/system/resource/print');
@@ -352,7 +352,7 @@ class MikroTikService
             
             return true;
             
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             [$tcpReachable, $tcpProbeMessage] = $this->probeApiTcpPort($router);
             $errorType = $this->classifyConnectivityError($e->getMessage(), $tcpReachable);
 
@@ -421,7 +421,7 @@ class MikroTikService
     public function getRouterSystemInfo(Router $router): array
     {
         $result = $this->withRetry(function () use ($router) {
-            $client = $this->getClient($router);
+            $client = $this->getRequiredClient($router);
             
             $query = new Query('/system/resource/print');
             $info = $client->query($query)->read();
@@ -669,6 +669,17 @@ class MikroTikService
         return $this->createClient($router);
     }
 
+    private function getRequiredClient(Router $router, bool $forceNew = false): Client
+    {
+        $client = $this->getClient($router, $forceNew);
+
+        if ($client instanceof Client) {
+            return $client;
+        }
+
+        throw new \RuntimeException("Could not initialize MikroTik client for router {$router->name} ({$router->ip_address})");
+    }
+
     /**
      * Create new MikroTik API client - FIXED: Removed invalid ssl_verify parameter
      */
@@ -698,7 +709,7 @@ class MikroTikService
             
             return new Client($config);
             
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             Log::channel('mikrotik')->error('Failed to create MikroTik client', [
                 'router' => $router->name,
                 'error' => $e->getMessage(),
@@ -776,7 +787,7 @@ class MikroTikService
                 ]);
                 break;
                 
-            } catch (\Exception $e) {
+            } catch (\Throwable $e) {
                 $lastException = $e;
                 
                 // Unexpected error
