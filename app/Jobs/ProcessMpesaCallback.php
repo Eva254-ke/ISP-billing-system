@@ -5,6 +5,7 @@ namespace App\Jobs;
 use App\Models\Payment;
 use App\Models\UserSession;
 use App\Services\MikroTik\SessionManager;
+use App\Services\Radius\FreeRadiusProvisioningService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -33,7 +34,7 @@ class ProcessMpesaCallback implements ShouldQueue
         $this->onQueue('critical');
     }
 
-    public function handle(SessionManager $sessionManager): void
+    public function handle(SessionManager $sessionManager, FreeRadiusProvisioningService $radiusProvisioning): void
     {
         // ──────────────────────────────────────────────────────────────────
         // EDGE CASE #1: Missing CheckoutRequestID
@@ -279,42 +280,16 @@ class ProcessMpesaCallback implements ShouldQueue
                     return;
                 }
 
-                $sessionPhone = $this->normalizePhoneForStorage($mpesaPhone) ?? (string) $payment->phone;
-                $sessionUsername = $this->resolveRadiusUsernameFromPhone((string) $payment->phone, (int) $payment->id);
-                $durationMinutes = (int) ($payment->package?->duration_in_minutes ?? 60);
-                $session = UserSession::query()->where('payment_id', $payment->id)->first();
-
-                if (!$session) {
-                    $session = UserSession::create([
-                        'tenant_id' => $payment->tenant_id,
-                        'router_id' => $routerId,
-                        'package_id' => $payment->package_id,
-                        'username' => $sessionUsername,
-                        'phone' => $sessionPhone,
-                        'status' => 'pending',
-                        'started_at' => now(),
-                        'expires_at' => now()->addMinutes($durationMinutes),
-                        'grace_period_seconds' => 300,
+                $package = $payment->package;
+                if (!$package) {
+                    Log::channel('payment')->error('Payment confirmed but package is missing; cannot activate access', [
                         'payment_id' => $payment->id,
+                        'tenant_id' => $payment->tenant_id,
                     ]);
-                } else {
-                    $session->update([
-                        'router_id' => $session->router_id ?: $routerId,
-                        'package_id' => $session->package_id ?: $payment->package_id,
-                        'username' => ((string) $session->status === 'active')
-                            ? ($session->username ?: $sessionUsername)
-                            : $sessionUsername,
-                        'phone' => $session->phone ?: $sessionPhone,
-                        'started_at' => $session->started_at ?: now(),
-                        'expires_at' => $session->expires_at ?: now()->addMinutes($durationMinutes),
-                    ]);
-                }
 
-                if ((string) $session->status === 'active') {
                     $payment->update([
-                        'status' => 'completed',
-                        'completed_at' => $payment->completed_at ?? now(),
-                        'session_id' => $session->id,
+                        'status' => 'confirmed',
+                        'reconciliation_notes' => 'Payment confirmed but package is missing; manual intervention required.',
                     ]);
 
                     DB::commit();
@@ -322,13 +297,87 @@ class ProcessMpesaCallback implements ShouldQueue
                     return;
                 }
 
-                $result = $sessionManager->activateSession($session, $payment->package);
+                $sessionPhone = $this->normalizePhoneForStorage($mpesaPhone) ?? (string) $payment->phone;
+                $sessionUsername = $this->resolveRadiusUsernameFromPhone((string) $payment->phone, (int) $payment->id);
+                $durationMinutes = max(1, (int) ($package->duration_in_minutes ?? 60));
+                $session = UserSession::query()->where('payment_id', $payment->id)->first();
+
+                if (!$session) {
+                    $startAt = now();
+                    $session = UserSession::create([
+                        'tenant_id' => $payment->tenant_id,
+                        'router_id' => $routerId,
+                        'package_id' => $payment->package_id,
+                        'username' => $sessionUsername,
+                        'phone' => $sessionPhone,
+                        'status' => 'idle',
+                        'started_at' => $startAt,
+                        'expires_at' => $startAt->copy()->addMinutes($durationMinutes),
+                        'grace_period_seconds' => 300,
+                        'payment_id' => $payment->id,
+                    ]);
+                } else {
+                    $startedAt = $session->started_at ?: now();
+                    $targetExpiry = $session->expires_at;
+                    if (!$targetExpiry || $targetExpiry->isPast()) {
+                        $targetExpiry = $startedAt->copy()->addMinutes($durationMinutes);
+                    }
+
+                    $session->update([
+                        'router_id' => $session->router_id ?: $routerId,
+                        'package_id' => $session->package_id ?: $payment->package_id,
+                        'username' => ((string) $session->status === 'active')
+                            ? ($session->username ?: $sessionUsername)
+                            : $sessionUsername,
+                        'phone' => $session->phone ?: $sessionPhone,
+                        'status' => ((string) $session->status === 'active') ? 'active' : 'idle',
+                        'started_at' => $startedAt,
+                        'expires_at' => $targetExpiry,
+                    ]);
+                }
+
+                $session = $session->fresh();
+                $expiresAt = $session?->expires_at ?? now()->addMinutes($durationMinutes);
+
+                if ((bool) config('radius.enabled', false)) {
+                    $radiusProvisioning->provisionUser(
+                        username: $sessionUsername,
+                        password: $sessionUsername,
+                        package: $package,
+                        expiresAt: $expiresAt
+                    );
+
+                    Log::channel('payment')->info('RADIUS provisioned for confirmed callback payment', [
+                        'payment_id' => $payment->id,
+                        'session_id' => $session->id,
+                        'username' => $sessionUsername,
+                        'expires_at' => $expiresAt->toIso8601String(),
+                    ]);
+                }
+
+                if ((string) $session->status === 'active') {
+                    $payment->update([
+                        'status' => 'completed',
+                        'completed_at' => $payment->completed_at ?? now(),
+                        'activated_at' => $payment->activated_at ?? now(),
+                        'session_id' => $session->id,
+                        'reconciliation_notes' => null,
+                    ]);
+
+                    DB::commit();
+                    $lock->release();
+                    return;
+                }
+
+                $result = $sessionManager->activateSession($session, $package);
 
                 if ($result['success']) {
                     $payment->update([
                         'status' => 'completed',
                         'completed_at' => now(),
+                        'activated_at' => now(),
                         'session_id' => $session->id,
+                        'reconciliation_notes' => null,
                     ]);
                     
                     Log::channel('payment')->info('Session activated successfully', [
@@ -342,17 +391,41 @@ class ProcessMpesaCallback implements ShouldQueue
                     // ──────────────────────────────────────────────────────────
                     Log::channel('mikrotik')->error('Session activation failed', [
                         'payment_id' => $payment->id,
+                        'session_id' => $session->id,
                         'error' => $result['error'] ?? 'Unknown error',
                     ]);
                     
-                    $payment->update([
-                        'status' => 'completed',
-                        'completed_at' => now(),
-                        'reconciliation_notes' => 'Session activation failed: ' . ($result['error'] ?? 'Unknown'),
-                    ]);
-                    
-                    // Queue retry for session activation
-                    \App\Jobs\ActivateSession::dispatch($session)->onQueue('high');
+                    if ((bool) config('radius.enabled', false)) {
+                        $session->update([
+                            'status' => 'active',
+                            'started_at' => $session->started_at ?: now(),
+                            'expires_at' => $expiresAt,
+                            'last_synced_at' => now(),
+                        ]);
+
+                        $payment->update([
+                            'status' => 'completed',
+                            'completed_at' => now(),
+                            'activated_at' => now(),
+                            'session_id' => $session->id,
+                            'reconciliation_notes' => 'Activated via RADIUS fallback after MikroTik activation error: ' . ($result['error'] ?? 'Unknown'),
+                        ]);
+
+                        Log::channel('payment')->warning('Session marked active via RADIUS fallback after MikroTik activation failure', [
+                            'payment_id' => $payment->id,
+                            'session_id' => $session->id,
+                            'username' => $session->username,
+                        ]);
+                    } else {
+                        $payment->update([
+                            'status' => 'confirmed',
+                            'session_id' => $session->id,
+                            'reconciliation_notes' => 'Session activation failed: ' . ($result['error'] ?? 'Unknown'),
+                        ]);
+
+                        // Queue retry for session activation
+                        \App\Jobs\ActivateSession::dispatch($session->fresh())->onQueue('high');
+                    }
                 }
 
             } 

@@ -147,19 +147,21 @@ Route::post('/mpesa/callback/{tenant?}', function (Request $request, ?int $tenan
     ]);
 
     try {
-        ProcessMpesaCallback::dispatch($normalized)->onQueue('critical');
-    } catch (\Throwable $queueException) {
-        Log::channel('payment')->error('Failed to queue M-Pesa callback job, falling back to sync processing', [
+        // Process immediately so paid users are activated without queue latency.
+        ProcessMpesaCallback::dispatchSync($normalized);
+    } catch (\Throwable $syncException) {
+        Log::channel('payment')->error('Synchronous M-Pesa callback processing failed, queuing retry', [
             'checkout_request_id' => $normalized['CheckoutRequestID'] ?? null,
-            'error' => $queueException->getMessage(),
+            'error' => $syncException->getMessage(),
         ]);
 
         try {
-            ProcessMpesaCallback::dispatchSync($normalized);
-        } catch (\Throwable $syncException) {
-            Log::channel('payment')->critical('Synchronous M-Pesa callback fallback failed', [
+            ProcessMpesaCallback::dispatch($normalized)->onQueue('critical');
+        } catch (\Throwable $queueException) {
+            Log::channel('payment')->critical('Failed to queue M-Pesa callback retry after sync failure', [
                 'checkout_request_id' => $normalized['CheckoutRequestID'] ?? null,
-                'error' => $syncException->getMessage(),
+                'sync_error' => $syncException->getMessage(),
+                'queue_error' => $queueException->getMessage(),
             ]);
         }
     }

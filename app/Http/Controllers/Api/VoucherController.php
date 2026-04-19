@@ -195,7 +195,7 @@ class VoucherController extends Controller
                 'username' => $voucher->code,
                 'phone' => $request->phone,
                 'mac_address' => $request->mac_address,
-                'status' => 'pending',
+                'status' => 'idle',
                 'started_at' => now(),
                 'expires_at' => now()->addMinutes($voucher->package->duration_in_minutes),
                 'grace_period_seconds' => 300,

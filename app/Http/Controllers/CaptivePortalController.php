@@ -933,7 +933,7 @@ class CaptivePortalController extends Controller
             amount: (float) $package->price,
             accountReference: (string) $payment->mpesa_checkout_request_id,
             description: ($flow === 'session_extension' ? 'CloudBridge Session Extension - ' : 'CloudBridge WiFi - ') . $package->name,
-            callbackUrl: $this->resolveDarajaCallbackUrl()
+            callbackUrl: $this->resolveDarajaCallbackUrl((int) $payment->tenant_id)
         );
 
         $newCheckoutId = $this->extractDarajaCheckoutRequestId($response);
@@ -1341,7 +1341,7 @@ class CaptivePortalController extends Controller
                 'phone' => $payment->phone,
                 'mac_address' => $clientMac,
                 'ip_address' => $clientIp,
-                'status' => 'pending',
+                'status' => 'idle',
                 'started_at' => now(),
                 'expires_at' => $expiresAt,
             ]
@@ -1436,7 +1436,7 @@ class CaptivePortalController extends Controller
 
         if (!($activation['success'] ?? false)) {
             $session->update([
-                'status' => 'pending',
+                'status' => 'idle',
                 'expires_at' => $expiresAt,
                 'metadata' => array_merge($session->metadata ?? [], [
                     'activation' => array_merge(
@@ -1604,11 +1604,15 @@ class CaptivePortalController extends Controller
         return 'cbu' . (int) $paymentId;
     }
 
-    private function resolveDarajaCallbackUrl(): string
+    private function resolveDarajaCallbackUrl(?int $tenantId = null): string
     {
         $configured = trim((string) config('services.mpesa.callback_url', ''));
         if ($configured !== '') {
             return $configured;
+        }
+
+        if (($tenantId ?? 0) > 0 && \Route::has('api.mpesa.callback')) {
+            return route('api.mpesa.callback', ['tenant' => $tenantId]);
         }
 
         return url('/api/mpesa/callback');
