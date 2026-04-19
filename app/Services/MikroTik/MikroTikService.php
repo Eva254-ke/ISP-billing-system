@@ -36,6 +36,11 @@ class MikroTikService
     private const CONNECTION_CACHE_TTL = 300; // 5 minutes
 
     /**
+     * Last client initialization error captured during createClient().
+     */
+    private ?string $lastClientInitError = null;
+
+    /**
      * Create user session on MikroTik (Hotspot login)
      */
     public function createHotspotSession(
@@ -394,14 +399,8 @@ class MikroTikService
         $metadata = is_array($router->metadata) ? $router->metadata : [];
         $errorType = $metadata['last_connectivity_error_type'] ?? null;
         $apiPortReachable = (bool) ($metadata['api_port_reachable'] ?? false);
-        $message = match ($errorType) {
-            'auth_error' => 'Router is reachable, but MikroTik API authentication failed.',
-            'tls_error' => 'Router API port is reachable, but SSL/TLS negotiation failed.',
-            'network_error' => 'Router API port is unreachable from the server.',
-            default => $apiPortReachable
-                ? 'Router is reachable, but MikroTik API query failed.'
-                : 'Router is unreachable or API is blocked.',
-        };
+        $rawError = (string) ($metadata['last_connectivity_error'] ?? '');
+        $message = $this->buildConnectivityMessage($errorType, $apiPortReachable, $rawError);
 
         return [
             'status' => (string) ($router->status ?? Router::STATUS_OFFLINE),
@@ -628,6 +627,13 @@ class MikroTikService
             || str_contains($normalized, 'not enough permissions')
             || str_contains($normalized, 'login failed')
             || str_contains($normalized, 'authentication')
+            || str_contains($normalized, 'invalid username')
+            || str_contains($normalized, 'invalid user name')
+            || str_contains($normalized, 'username or password')
+            || str_contains($normalized, 'wrong password')
+            || str_contains($normalized, 'bad user')
+            || str_contains($normalized, 'invalid password')
+            || str_contains($normalized, 'permission denied')
         ) {
             return 'auth_error';
         }
@@ -636,6 +642,8 @@ class MikroTikService
             str_contains($normalized, 'ssl')
             || str_contains($normalized, 'tls')
             || str_contains($normalized, 'certificate')
+            || str_contains($normalized, 'handshake')
+            || str_contains($normalized, 'peer')
         ) {
             return 'tls_error';
         }
@@ -646,6 +654,9 @@ class MikroTikService
             || str_contains($normalized, 'connection refused')
             || str_contains($normalized, 'unable to connect')
             || str_contains($normalized, 'network is unreachable')
+            || str_contains($normalized, 'socket session')
+            || str_contains($normalized, 'forbidden by its access permissions')
+            || str_contains($normalized, 'actively refused')
         ) {
             return 'network_error';
         }
@@ -677,7 +688,10 @@ class MikroTikService
             return $client;
         }
 
-        throw new \RuntimeException("Could not initialize MikroTik client for router {$router->name} ({$router->ip_address})");
+        $reason = trim((string) $this->lastClientInitError);
+        $suffix = $reason !== '' ? " Reason: {$reason}" : '';
+
+        throw new \RuntimeException("Could not initialize MikroTik client for router {$router->name} ({$router->ip_address}).{$suffix}");
     }
 
     /**
@@ -706,16 +720,48 @@ class MikroTikService
                     'allow_self_signed' => true,
                 ];
             }
-            
-            return new Client($config);
+
+            $client = new Client($config);
+            $this->lastClientInitError = null;
+
+            return $client;
             
         } catch (\Throwable $e) {
+            $this->lastClientInitError = $e->getMessage();
             Log::channel('mikrotik')->error('Failed to create MikroTik client', [
                 'router' => $router->name,
                 'error' => $e->getMessage(),
             ]);
             return null;
         }
+    }
+
+    private function buildConnectivityMessage(?string $errorType, bool $apiPortReachable, string $rawError): string
+    {
+        return match ($errorType) {
+            'auth_error' => 'Router is reachable, but MikroTik API authentication failed. Verify username/password and API permissions.',
+            'tls_error' => 'Router API port is reachable, but SSL/TLS negotiation failed. Verify API SSL settings and certificates.',
+            'network_error' => 'Router API port is unreachable from the server.',
+            default => $this->buildGenericConnectivityMessage($apiPortReachable, $rawError),
+        };
+    }
+
+    private function buildGenericConnectivityMessage(bool $apiPortReachable, string $rawError): string
+    {
+        if (!$apiPortReachable) {
+            return 'Router is unreachable or API is blocked.';
+        }
+
+        $error = trim($rawError);
+        if ($error === '') {
+            return 'Router is reachable, but MikroTik API query failed.';
+        }
+
+        if (strlen($error) > 220) {
+            $error = substr($error, 0, 220) . '...';
+        }
+
+        return "Router is reachable, but MikroTik API query failed: {$error}";
     }
 
     /**

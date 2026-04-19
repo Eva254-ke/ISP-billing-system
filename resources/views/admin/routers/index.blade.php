@@ -228,7 +228,10 @@ document.addEventListener('DOMContentLoaded', function () {
         const payload = await response.json().catch(() => ({}));
 
         if (!response.ok || payload?.success === false) {
-            throw new Error(payload?.message || `Request failed: ${response.status}`);
+            const error = new Error(payload?.message || `Request failed: ${response.status}`);
+            error.payload = payload;
+            error.status = response.status;
+            throw error;
         }
 
         return payload;
@@ -413,7 +416,16 @@ document.addEventListener('DOMContentLoaded', function () {
             await showAlert('Router reachable', lines.join('\n') || (payload?.message || 'Router is online'), 'success');
             await loadRouters();
         } catch (error) {
-            await showAlert('Connection failed', error.message || 'Router is offline or unreachable.', 'error');
+            const diagnostics = error?.payload?.diagnostics || null;
+            const detailLines = [
+                diagnostics?.error ? `Error: ${diagnostics.error}` : null,
+                diagnostics?.error_type ? `Type: ${diagnostics.error_type}` : null,
+                diagnostics?.tcp_probe_message ? `TCP Probe: ${diagnostics.tcp_probe_message}` : null,
+            ].filter(Boolean);
+
+            const detailText = detailLines.join('\n');
+            const fallback = error?.message || 'Router is offline or unreachable.';
+            await showAlert('Connection failed', detailText || fallback, 'error');
         }
     };
 
