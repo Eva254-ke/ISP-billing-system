@@ -18,7 +18,20 @@ class SessionManager
      */
     public function activateSession(UserSession $session, Package $package): array
     {
-        $router = $session->router;
+        $router = $this->resolveActivationRouter($session);
+        if (!$router) {
+            Log::channel('mikrotik')->warning('Session activation skipped: no router resolved for session', [
+                'session_id' => $session->id,
+                'tenant_id' => $session->tenant_id,
+                'router_id' => $session->router_id,
+            ]);
+
+            return [
+                'success' => false,
+                'error' => 'No router available for activation.',
+                'queued' => true,
+            ];
+        }
         
         // Calculate duration in minutes
         $durationMinutes = $package->duration_in_minutes;
@@ -145,6 +158,14 @@ class SessionManager
     public function terminateSession(UserSession $session, string $reason): bool
     {
         $router = $session->router;
+        if (!$router) {
+            Log::channel('mikrotik')->warning('Session termination skipped router disconnect because router is missing', [
+                'session_id' => $session->id,
+                'router_id' => $session->router_id,
+            ]);
+            $session->markTerminated($reason);
+            return true;
+        }
         
         // Disconnect on MikroTik
         $disconnected = $this->mikrotikService->disconnectSession(
@@ -221,5 +242,52 @@ class SessionManager
         ]);
         
         return $synced;
+    }
+
+    private function resolveActivationRouter(UserSession $session): ?Router
+    {
+        $router = $session->router;
+        if ($router) {
+            return $router;
+        }
+
+        $fallback = Router::query()
+            ->where('tenant_id', $session->tenant_id)
+            ->whereIn('status', [Router::STATUS_ONLINE, Router::STATUS_WARNING])
+            ->orderByRaw(
+                "CASE WHEN status = ? THEN 0 WHEN status = ? THEN 1 ELSE 2 END",
+                [Router::STATUS_ONLINE, Router::STATUS_WARNING]
+            )
+            ->orderByDesc('last_seen_at')
+            ->orderBy('id')
+            ->first();
+
+        if (!$fallback) {
+            $fallback = Router::query()
+                ->where('tenant_id', $session->tenant_id)
+                ->orderByDesc('last_seen_at')
+                ->orderBy('id')
+                ->first();
+        }
+
+        if (!$fallback) {
+            return null;
+        }
+
+        $originalRouterId = (int) ($session->router_id ?? 0);
+
+        if ($originalRouterId !== (int) $fallback->id) {
+            $session->update(['router_id' => $fallback->id]);
+            $session->refresh();
+        }
+
+        Log::channel('mikrotik')->warning('Resolved fallback router for session activation', [
+            'session_id' => $session->id,
+            'original_router_id' => $originalRouterId,
+            'resolved_router_id' => $fallback->id,
+            'resolved_router_status' => $fallback->status,
+        ]);
+
+        return $fallback;
     }
 }
