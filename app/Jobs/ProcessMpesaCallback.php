@@ -569,7 +569,7 @@ class ProcessMpesaCallback implements ShouldQueue
     private function getRouterForTenant(int $tenantId): ?int
     {
         return \App\Models\Router::where('tenant_id', $tenantId)
-            ->where('status', 'online')
+            ->whereIn('status', ['online', 'warning'])
             ->orderBy('last_seen_at', 'desc')
             ->value('id');
     }

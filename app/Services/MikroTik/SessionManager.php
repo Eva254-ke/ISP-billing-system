@@ -20,25 +20,25 @@ class SessionManager
     {
         $router = $session->router;
         
-        // Check router is online first
-        if (!$this->mikrotikService->pingRouter($router)) {
-            Log::channel('mikrotik')->warning('Router offline, queuing session activation', [
-                'session_id' => $session->id,
-                'router' => $router->name,
-            ]);
-            
-            // Queue for retry when router comes back online
-            // (Implement queue job in production)
-            
-            return [
-                'success' => false,
-                'error' => 'Router offline',
-                'queued' => true,
-            ];
-        }
-        
         // Calculate duration in minutes
         $durationMinutes = $package->duration_in_minutes;
+
+        // Non-RADIUS mode: make sure a local hotspot user exists before triggering login.
+        if (!(bool) config('radius.enabled', false)) {
+            $userProvisioned = $router->addHotspotUser(
+                $session->username,
+                $session->username,
+                $package
+            );
+
+            if (!$userProvisioned) {
+                Log::channel('mikrotik')->warning('Hotspot user provisioning did not complete before login attempt', [
+                    'session_id' => $session->id,
+                    'router' => $router->name,
+                    'username' => $session->username,
+                ]);
+            }
+        }
         
         // Create session on MikroTik
         $result = $this->mikrotikService->createHotspotSession(
@@ -51,12 +51,32 @@ class SessionManager
         );
         
         if (!is_array($result) || !($result['success'] ?? false)) {
+            // Refresh router connectivity state for more accurate retry decisions.
+            $this->mikrotikService->pingRouter($router);
+            $router = $router->fresh();
+
+            $error = is_array($result)
+                ? (string) ($result['error'] ?? 'Router activation failed.')
+                : 'No response from router during activation.';
+
+            $queued = (string) ($router?->status ?? '') === Router::STATUS_OFFLINE;
+
+            if ((string) ($router?->status ?? '') === Router::STATUS_WARNING) {
+                $error = 'Router reachable but MikroTik API login/command failed. Verify API username/password and permissions.';
+            }
+
+            Log::channel('mikrotik')->warning('Session activation failed', [
+                'session_id' => $session->id,
+                'router' => $router?->name,
+                'router_status' => $router?->status,
+                'queued' => $queued,
+                'error' => $error,
+            ]);
+
             return [
                 'success' => false,
-                'error' => is_array($result)
-                    ? (string) ($result['error'] ?? 'Router activation failed.')
-                    : 'No response from router during activation.',
-                'queued' => false,
+                'error' => $error,
+                'queued' => $queued,
             ];
         }
         
