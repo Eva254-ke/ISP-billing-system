@@ -57,14 +57,58 @@ class MikroTikService
             // Calculate expiry time
             $expiresAt = now()->addMinutes($durationMinutes);
             
-            // Login user to hotspot
-            $result = $this->loginHotspotUser(
+            // Login user to hotspot.
+            $loginResponse = $this->loginHotspotUser(
                 client: $client,
                 username: $username,
                 password: $password,
                 macAddress: $macAddress,
                 ipAddress: $ipAddress
             );
+
+            $normalizedMac = $this->normalizeMacAddressForQuery($macAddress);
+            $normalizedIp = is_string($ipAddress) ? trim($ipAddress) : null;
+
+            $activeSession = null;
+            for ($attempt = 1; $attempt <= 3; $attempt++) {
+                $activeSession = $this->findActiveHotspotSession(
+                    client: $client,
+                    username: $username,
+                    macAddress: $normalizedMac,
+                    ipAddress: $normalizedIp
+                );
+
+                if ($activeSession !== null) {
+                    break;
+                }
+
+                usleep(300000); // Router may take a short moment to materialize active sessions.
+            }
+
+            if ($activeSession === null) {
+                $missingClientContext = ($normalizedMac === null || $normalizedMac === '')
+                    && ($normalizedIp === null || $normalizedIp === '');
+
+                $error = $missingClientContext
+                    ? 'Hotspot login command sent, but no active session was created. Missing client MAC/IP context.'
+                    : 'Hotspot login command sent, but no active session was detected on the router.';
+
+                Log::channel('mikrotik')->warning('Hotspot login did not create an active session', [
+                    'router' => $router->name,
+                    'username' => $username,
+                    'mac_address' => $normalizedMac,
+                    'ip_address' => $normalizedIp,
+                    'missing_client_context' => $missingClientContext,
+                    'login_response' => $loginResponse,
+                ]);
+
+                return [
+                    'success' => false,
+                    'error' => $error,
+                    'queued' => false,
+                    'missing_client_context' => $missingClientContext,
+                ];
+            }
             
             // Set session timeout (MikroTik uses seconds)
             $timeoutSeconds = $durationMinutes * 60;
@@ -84,15 +128,18 @@ class MikroTikService
                 'username' => $username,
                 'expires_at' => $expiresAt->toIso8601String(),
                 'duration_minutes' => $durationMinutes,
-                'mac_address' => $macAddress,
-                'ip_address' => $ipAddress,
+                'mac_address' => $normalizedMac,
+                'ip_address' => $normalizedIp,
+                'active_host_mac' => $activeSession['mac-address'] ?? null,
+                'active_host_ip' => $activeSession['address'] ?? null,
             ]);
             
             return [
                 'success' => true,
                 'username' => $username,
                 'expires_at' => $expiresAt,
-                'mikrotik_response' => $result,
+                'mikrotik_response' => $loginResponse,
+                'active_session' => $activeSession,
             ];
             
         }, $router, 'createHotspotSession');
@@ -158,6 +205,52 @@ class MikroTikService
 
             return $client->query($legacyQuery)->read() ?? [];
         }
+    }
+
+    private function findActiveHotspotSession(
+        Client $client,
+        string $username,
+        ?string $macAddress = null,
+        ?string $ipAddress = null
+    ): ?array {
+        $query = (new Query('/ip/hotspot/active/print'))
+            ->where('user', $username);
+
+        $sessions = $client->query($query)->read() ?? [];
+        if (!is_array($sessions) || $sessions === []) {
+            return null;
+        }
+
+        foreach ($sessions as $session) {
+            if (!is_array($session)) {
+                continue;
+            }
+
+            $sessionMac = $this->normalizeMacAddressForQuery((string) ($session['mac-address'] ?? ''));
+            $sessionIp = trim((string) ($session['address'] ?? ''));
+
+            if ($macAddress !== null && $macAddress !== '' && $sessionMac !== $macAddress) {
+                continue;
+            }
+
+            if ($ipAddress !== null && $ipAddress !== '' && $sessionIp !== $ipAddress) {
+                continue;
+            }
+
+            return $session;
+        }
+
+        return null;
+    }
+
+    private function normalizeMacAddressForQuery(?string $value): ?string
+    {
+        $candidate = strtoupper(trim((string) ($value ?? '')));
+        if ($candidate === '') {
+            return null;
+        }
+
+        return $candidate;
     }
 
     /**

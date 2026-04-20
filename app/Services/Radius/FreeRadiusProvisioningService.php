@@ -4,11 +4,16 @@ namespace App\Services\Radius;
 
 use App\Models\Package;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class FreeRadiusProvisioningService
 {
     public function provisionUser(string $username, string $password, Package $package, ?\DateTimeInterface $expiresAt = null): void
     {
+        if (trim($username) === '' || trim($password) === '') {
+            throw new \InvalidArgumentException('RADIUS username/password cannot be empty.');
+        }
+
         $connection = (string) config('radius.db_connection', 'radius');
         $radcheck = (string) config('radius.tables.radcheck', 'radcheck');
         $radreply = (string) config('radius.tables.radreply', 'radreply');
@@ -28,13 +33,13 @@ class FreeRadiusProvisioningService
             $db
                 ->table($radcheck)
                 ->where('username', $username)
-            ->whereIn('attribute', [$cleartextPasswordAttribute, $expirationAttribute])
+                ->whereIn('attribute', [$cleartextPasswordAttribute, $expirationAttribute, $simultaneousUseAttribute])
                 ->delete();
 
             $db
                 ->table($radreply)
                 ->where('username', $username)
-                ->whereIn('attribute', [$sessionTimeoutAttribute, $rateLimitAttribute, $simultaneousUseAttribute])
+                ->whereIn('attribute', [$sessionTimeoutAttribute, $rateLimitAttribute])
                 ->delete();
 
             $db
@@ -45,6 +50,12 @@ class FreeRadiusProvisioningService
                         'attribute' => $cleartextPasswordAttribute,
                         'op' => ':=',
                         'value' => $password,
+                    ],
+                    [
+                        'username' => $username,
+                        'attribute' => $simultaneousUseAttribute,
+                        'op' => ':=',
+                        'value' => (string) $simultaneousUse,
                     ],
                 ]);
 
@@ -74,14 +85,19 @@ class FreeRadiusProvisioningService
                         'op' => ':=',
                         'value' => $rateLimit,
                     ],
-                    [
-                        'username' => $username,
-                        'attribute' => $simultaneousUseAttribute,
-                        'op' => ':=',
-                        'value' => (string) $simultaneousUse,
-                    ],
                 ]);
         });
+
+        Log::channel('radius')->info('Provisioned FreeRADIUS user profile', [
+            'username' => $username,
+            'package_id' => $package->id,
+            'package_name' => $package->name,
+            'session_timeout_seconds' => $sessionTimeout,
+            'rate_limit' => $rateLimit,
+            'simultaneous_use' => $simultaneousUse,
+            'expires_at' => $expiresAt?->format(\DateTimeInterface::ATOM),
+            'connection' => $connection,
+        ]);
     }
 
     private function buildMikrotikRateLimit(Package $package): string

@@ -1330,6 +1330,17 @@ class CaptivePortalController extends Controller
         $paymentClientContext = is_array($paymentMetadata['client_context'] ?? null) ? $paymentMetadata['client_context'] : [];
         $clientMac = $this->normalizeMacAddress((string) ($paymentClientContext['mac'] ?? ''));
         $clientIp = $this->normalizeClientIpAddress((string) ($paymentClientContext['ip'] ?? ''));
+        $radiusEnabled = (bool) config('radius.enabled', false);
+
+        if ($radiusEnabled && $clientMac === null && $clientIp === null) {
+            Log::warning('Paid access activation missing captive client MAC/IP context in RADIUS mode', [
+                'payment_id' => $payment->id,
+                'tenant_id' => $payment->tenant_id,
+                'router_id' => $routerId,
+                'phone' => $payment->phone,
+                'status' => $payment->status,
+            ]);
+        }
 
         $session = UserSession::firstOrCreate(
             ['payment_id' => $payment->id],
@@ -1384,7 +1395,7 @@ class CaptivePortalController extends Controller
             return $session->fresh();
         }
 
-        if ((bool) config('radius.enabled', false) && $payment->package) {
+        if ($radiusEnabled && $payment->package) {
             try {
                 $radiusProvisioning = app(FreeRadiusProvisioningService::class);
                 $radiusProvisioning->provisionUser(
@@ -1476,7 +1487,11 @@ class CaptivePortalController extends Controller
     {
         return (int) (\App\Models\Router::query()
             ->where('tenant_id', $payment->tenant_id)
-            ->orderByDesc('status')
+            ->orderByRaw(
+                "CASE WHEN status = ? THEN 0 WHEN status = ? THEN 1 ELSE 2 END",
+                [\App\Models\Router::STATUS_ONLINE, \App\Models\Router::STATUS_WARNING]
+            )
+            ->orderByDesc('last_seen_at')
             ->orderBy('id')
             ->value('id') ?? 0) ?: null;
     }

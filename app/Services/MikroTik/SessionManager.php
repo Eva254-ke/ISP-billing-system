@@ -35,9 +35,19 @@ class SessionManager
         
         // Calculate duration in minutes
         $durationMinutes = $package->duration_in_minutes;
+        $radiusEnabled = (bool) config('radius.enabled', false);
+
+        if ($radiusEnabled && empty($session->mac_address) && empty($session->ip_address)) {
+            Log::channel('mikrotik')->warning('RADIUS activation is missing client MAC/IP context', [
+                'session_id' => $session->id,
+                'tenant_id' => $session->tenant_id,
+                'router_id' => $router->id,
+                'username' => $session->username,
+            ]);
+        }
 
         // Non-RADIUS mode: make sure a local hotspot user exists before triggering login.
-        if (!(bool) config('radius.enabled', false)) {
+        if (!$radiusEnabled) {
             $userProvisioned = $router->addHotspotUser(
                 $session->username,
                 $session->username,
@@ -80,16 +90,24 @@ class SessionManager
 
             Log::channel('mikrotik')->warning('Session activation failed', [
                 'session_id' => $session->id,
+                'tenant_id' => $session->tenant_id,
+                'router_id' => $router?->id,
                 'router' => $router?->name,
                 'router_status' => $router?->status,
+                'username' => $session->username,
+                'radius_enabled' => $radiusEnabled,
+                'mac_address' => $session->mac_address,
+                'ip_address' => $session->ip_address,
                 'queued' => $queued,
                 'error' => $error,
+                'missing_client_context' => (bool) (is_array($result) && ($result['missing_client_context'] ?? false)),
             ]);
 
             return [
                 'success' => false,
                 'error' => $error,
                 'queued' => $queued,
+                'missing_client_context' => (bool) (is_array($result) && ($result['missing_client_context'] ?? false)),
             ];
         }
         
@@ -104,8 +122,13 @@ class SessionManager
         
         Log::channel('mikrotik')->info('Session activated', [
             'session_id' => $session->id,
+            'tenant_id' => $session->tenant_id,
+            'router_id' => $router->id,
             'username' => $session->username,
             'router' => $router->name,
+            'radius_enabled' => $radiusEnabled,
+            'mac_address' => $session->mac_address,
+            'ip_address' => $session->ip_address,
             'expires_at' => $result['expires_at']->toIso8601String(),
         ]);
         

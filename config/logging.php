@@ -113,6 +113,15 @@ return [
             'processors' => [PsrLogMessageProcessor::class, UidProcessor::class],
         ],
 
+        'radius' => [
+            'driver' => 'daily',
+            'path' => storage_path('logs/radius.log'),
+            'level' => env('LOG_RADIUS_LEVEL', 'info'),
+            'days' => env('LOG_RADIUS_DAYS', 30),
+            'replace_placeholders' => true,
+            'processors' => [PsrLogMessageProcessor::class, UidProcessor::class],
+        ],
+
         // ──────────────────────────────────────────────────────────────────
         // 🧾 INTASEND LOGS (Gateway requests, responses, callback diagnostics)
         // ──────────────────────────────────────────────────────────────────

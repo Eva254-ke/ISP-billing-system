@@ -4,11 +4,16 @@ namespace Tests\Feature;
 
 use App\Models\Package;
 use App\Models\Payment;
+use App\Models\Router;
 use App\Models\Tenant;
+use App\Models\UserSession;
+use App\Jobs\ActivateSession;
 use App\Jobs\ProcessMpesaCallback;
 use App\Services\MikroTik\SessionManager;
 use App\Services\Mpesa\DarajaService;
+use App\Services\Radius\FreeRadiusProvisioningService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Queue;
 use Mockery;
 use Tests\TestCase;
 
@@ -247,7 +252,9 @@ class CaptivePortalPaymentStatusTest extends TestCase
             'Amount' => 50,
         ]);
 
-        $job->handle(Mockery::mock(SessionManager::class));
+        $radiusProvisioning = Mockery::mock(FreeRadiusProvisioningService::class);
+        $radiusProvisioning->shouldIgnoreMissing();
+        $job->handle(Mockery::mock(SessionManager::class), $radiusProvisioning);
 
         $payment->refresh();
         $this->assertSame('ws_CO_real_checkout_001', $payment->mpesa_checkout_request_id);
@@ -466,13 +473,79 @@ class CaptivePortalPaymentStatusTest extends TestCase
             'Amount' => 50,
         ]);
 
-        $job->handle(Mockery::mock(SessionManager::class));
+        $radiusProvisioning = Mockery::mock(FreeRadiusProvisioningService::class);
+        $radiusProvisioning->shouldIgnoreMissing();
+        $job->handle(Mockery::mock(SessionManager::class), $radiusProvisioning);
 
         $payment->refresh();
         $this->assertSame('failed', $payment->status);
         $this->assertSame('underpaid_amount', data_get($payment->metadata, 'daraja_last_status'));
         $this->assertSame(100.0, (float) data_get($payment->metadata, 'underpaid_expected_amount'));
         $this->assertSame(50.0, (float) data_get($payment->metadata, 'underpaid_received_amount'));
+    }
+
+    public function test_mpesa_callback_keeps_payment_confirmed_when_activation_fails_and_queues_retry(): void
+    {
+        Queue::fake();
+        config()->set('radius.enabled', true);
+
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant);
+        $router = $this->createRouter($tenant, [
+            'status' => 'online',
+            'last_seen_at' => now(),
+        ]);
+
+        $payment = $this->createPayment($tenant, $package, [
+            'status' => 'pending',
+            'mpesa_checkout_request_id' => 'ws_CO_pending_activation_001',
+        ]);
+
+        $session = UserSession::query()->create([
+            'tenant_id' => $tenant->id,
+            'router_id' => $router->id,
+            'package_id' => $package->id,
+            'username' => 'cb0712345678',
+            'phone' => '0712345678',
+            'status' => 'idle',
+            'started_at' => now(),
+            'expires_at' => now()->addMinutes((int) $package->duration_in_minutes),
+            'payment_id' => $payment->id,
+        ]);
+
+        $sessionManager = Mockery::mock(SessionManager::class);
+        $sessionManager->shouldReceive('activateSession')->once()->andReturn([
+            'success' => false,
+            'error' => 'Hotspot login command sent, but no active session was created. Missing client MAC/IP context.',
+            'queued' => false,
+            'missing_client_context' => true,
+        ]);
+
+        $radiusProvisioning = Mockery::mock(FreeRadiusProvisioningService::class);
+        $radiusProvisioning->shouldReceive('provisionUser')->once();
+
+        $job = new ProcessMpesaCallback([
+            'CheckoutRequestID' => 'ws_CO_pending_activation_001',
+            'ResultCode' => 0,
+            'ResultDesc' => 'The service request is processed successfully.',
+            'MpesaReceiptNumber' => 'QKPENDING001',
+            'PhoneNumber' => '254712345678',
+            'Amount' => 50,
+        ]);
+
+        $job->handle($sessionManager, $radiusProvisioning);
+
+        $payment->refresh();
+        $session->refresh();
+
+        $this->assertSame('confirmed', $payment->status);
+        $this->assertSame($session->id, (int) $payment->session_id);
+        $this->assertStringContainsString('activation is pending', (string) $payment->reconciliation_notes);
+        $this->assertTrue((bool) data_get($payment->metadata, 'activation.missing_client_context'));
+
+        Queue::assertPushed(ActivateSession::class, function (ActivateSession $job) use ($session) {
+            return (int) $job->session->id === (int) $session->id;
+        });
     }
 
     private function createTenant(array $overrides = []): Tenant
@@ -491,6 +564,21 @@ class CaptivePortalPaymentStatusTest extends TestCase
             'next_billing_date' => now()->addMonth()->toDateString(),
             'max_routers' => 1,
             'max_users' => 100,
+        ], $overrides));
+    }
+
+    private function createRouter(Tenant $tenant, array $overrides = []): Router
+    {
+        return Router::query()->create(array_merge([
+            'tenant_id' => $tenant->id,
+            'name' => 'Test Router',
+            'model' => 'RB750Gr3',
+            'ip_address' => '10.10.10.10',
+            'api_port' => 8728,
+            'api_username' => 'admin',
+            'api_password' => 'plain-test-password',
+            'status' => 'online',
+            'last_seen_at' => now(),
         ], $overrides));
     }
 

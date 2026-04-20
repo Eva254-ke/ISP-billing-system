@@ -77,6 +77,32 @@ bash scripts/queue/install-systemd.sh
 bash scripts/queue/check-worker.sh
 ```
 
+## RADIUS Production Checklist
+Before going live with captive portal authentication:
+
+```bash
+php artisan radius:health-check --strict
+```
+
+What this now validates:
+- RADIUS enabled and non-placeholder shared secret
+- Non-loopback RADIUS server in production
+- Auth/accounting port sanity
+- FreeRADIUS SQL connectivity and required tables
+- Remote DB TLS CA configuration
+
+## Captive Portal Activation Debug
+When payment is successful but user is not online yet, check:
+
+- `storage/logs/payment.log` (payment confirmation and activation state)
+- `storage/logs/mikrotik.log` (router login attempt and activation errors)
+- `storage/logs/radius.log` (provisioned username/profile details)
+
+Typical high-signal fields in logs:
+- `payment_id`, `session_id`, `checkout_request_id`
+- `router_id`, `username`, `client_mac`, `client_ip`
+- `missing_client_context` (true means router login had no host binding context)
+
 ## Build Notes
 This project uses Vite for compiled assets. For critical UI adjustments without a rebuild, a runtime override stylesheet is loaded:
 - `public/css/admin-overrides.css`
