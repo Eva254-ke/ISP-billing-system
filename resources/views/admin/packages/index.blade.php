@@ -87,7 +87,6 @@
                     <tr class="{{ $package->is_active ? '' : 'text-muted' }}">
                         <td>
                             <strong>{{ $package->name }}</strong>
-                            <div class="text-muted small">{{ $package->description ?? 'No description' }}</div>
                         </td>
                         <td>
                             <span class="badge bg-secondary">{{ $duration }}</span>
@@ -118,7 +117,6 @@
                                     onclick="window.openEditPackageFromButton(this)"
                                     data-id="{{ $package->id }}"
                                     data-name="{{ $package->name }}"
-                                    data-description="{{ $package->description ?? '' }}"
                                     data-duration-value="{{ $package->duration_value }}"
                                     data-duration-unit="{{ $package->duration_unit }}"
                                     data-price="{{ $package->price }}"
@@ -185,13 +183,9 @@
 
                 <form id="addPackageForm">
                     <div class="row">
-                        <div class="col-md-6 mb-3">
+                        <div class="col-12 mb-3">
                             <label class="form-label">Package Name *</label>
                             <input type="text" class="form-control" name="name" placeholder="e.g., 1 Hour Pass" required>
-                        </div>
-                        <div class="col-md-6 mb-3">
-                            <label class="form-label">Description</label>
-                            <input type="text" class="form-control" name="description" placeholder="e.g., Quick browsing session">
                         </div>
                     </div>
                     <div class="row">
@@ -223,17 +217,19 @@
                         </div>
                     </div>
                     <div class="mb-3">
-                        <label class="form-label">MikroTik User Profile</label>
-                        <select class="form-select" name="mikrotik_profile">
-                            <option value="">-- Auto-generate --</option>
-                            <option value="" disabled>Loading MikroTik profiles...</option>
-                            <option value="__custom__">-- Custom --</option>
+                        <label class="form-label">Router *</label>
+                        <select class="form-select" name="router_id" required>
+                            <option value="">Select router</option>
+                            <option value="" disabled>Loading routers...</option>
                         </select>
-                        <small class="text-muted">Leave empty to auto-generate from package name</small>
+                        <small class="text-muted">Profiles are loaded from the selected router only.</small>
                     </div>
                     <div class="mb-3">
-                        <label class="form-label">Custom Profile Name</label>
-                        <input type="text" class="form-control" name="custom_profile" placeholder="e.g., custom-profile-name" disabled>
+                        <label class="form-label">MikroTik User Profile</label>
+                        <select class="form-select" name="mikrotik_profile" required>
+                            <option value="">Select MikroTik profile</option>
+                            <option value="" disabled>Loading MikroTik profiles...</option>
+                        </select>
                     </div>
                     <div class="form-check mb-3">
                         <input class="form-check-input" type="checkbox" name="is_active" id="isActive" checked>
@@ -265,13 +261,9 @@
                 <form id="editPackageForm">
                     <input type="hidden" name="id" value="">
                     <div class="row">
-                        <div class="col-md-6 mb-3">
+                        <div class="col-12 mb-3">
                             <label class="form-label">Package Name *</label>
                             <input type="text" class="form-control" name="name" value="" required>
-                        </div>
-                        <div class="col-md-6 mb-3">
-                            <label class="form-label">Description</label>
-                            <input type="text" class="form-control" name="description" value="">
                         </div>
                     </div>
                     <div class="row">
@@ -305,17 +297,19 @@
                         </div>
                     </div>
                     <div class="mb-3">
-                        <label class="form-label">MikroTik User Profile</label>
-                        <select class="form-select" name="mikrotik_profile">
-                            <option value="">-- Auto-generate --</option>
-                            <option value="" disabled>Loading MikroTik profiles...</option>
-                            <option value="__custom__">-- Custom --</option>
+                        <label class="form-label">Router *</label>
+                        <select class="form-select" name="router_id" required>
+                            <option value="">Select router</option>
+                            <option value="" disabled>Loading routers...</option>
                         </select>
-                        <small class="text-muted">Use a router profile when available, or choose custom.</small>
+                        <small class="text-muted">Profiles are loaded from the selected router only.</small>
                     </div>
                     <div class="mb-3">
-                        <label class="form-label">Custom Profile Name</label>
-                        <input type="text" class="form-control" name="custom_profile" placeholder="e.g., custom-profile-name" disabled>
+                        <label class="form-label">MikroTik User Profile</label>
+                        <select class="form-select" name="mikrotik_profile" required>
+                            <option value="">Select MikroTik profile</option>
+                            <option value="" disabled>Loading MikroTik profiles...</option>
+                        </select>
                     </div>
                     <div class="form-check mb-3">
                         <input class="form-check-input" type="checkbox" name="is_active" id="editIsActive">
@@ -390,177 +384,258 @@ function withTenantScope(url) {
     return `${url}${glue}tenant_id=${tenantId}`;
 }
 
-const PROFILE_CUSTOM_VALUE = '__custom__';
+const routerProfilesCache = new Map();
+let cachedRouters = [];
 
-function getProfileSelects() {
-    return Array.from(document.querySelectorAll('select[name="mikrotik_profile"]'));
+function getPackageForms() {
+    return [document.getElementById('addPackageForm'), document.getElementById('editPackageForm')].filter(Boolean);
 }
 
-function getCurrentProfileValue(form) {
-    const profileSelect = form.querySelector('select[name="mikrotik_profile"]');
-    const customProfile = form.querySelector('input[name="custom_profile"]')?.value?.trim() || '';
-    const rawProfile = profileSelect ? profileSelect.value : '';
-
-    return rawProfile === PROFILE_CUSTOM_VALUE ? customProfile : rawProfile;
+function getRouterSelects() {
+    return getPackageForms()
+        .map((form) => form.querySelector('select[name="router_id"]'))
+        .filter(Boolean);
 }
 
-function toggleCustomProfileInput(select, focusWhenCustom = false) {
-    if (!select) return;
-
-    const form = select.closest('form');
-    const customInput = form ? form.querySelector('input[name="custom_profile"]') : null;
-    if (!customInput) return;
-
-    const isCustom = select.value === PROFILE_CUSTOM_VALUE;
-    customInput.disabled = !isCustom;
-    customInput.required = isCustom;
-
-    if (!isCustom) {
-        customInput.value = '';
-    } else if (focusWhenCustom) {
-        customInput.focus();
-    }
+function escapeOption(value) {
+    return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
 }
 
-function attachProfileSelectHandlers() {
-    getProfileSelects().forEach((select) => {
-        if (select.dataset.profileHandlerBound === '1') {
-            return;
-        }
-
-        select.addEventListener('change', function() {
-            toggleCustomProfileInput(this, true);
-        });
-
-        select.dataset.profileHandlerBound = '1';
-        toggleCustomProfileInput(select, false);
-    });
-}
-
-function setProfileValue(form, profileName) {
+function setProfileSelectMessage(form, message) {
     const select = form.querySelector('select[name="mikrotik_profile"]');
-    const customInput = form.querySelector('input[name="custom_profile"]');
-    const normalized = String(profileName || '').trim();
-
     if (!select) {
         return;
     }
 
-    if (normalized === '') {
-        select.value = '';
-        if (customInput) {
-            customInput.value = '';
-        }
-        toggleCustomProfileInput(select, false);
-        return;
-    }
-
-    const hasOption = Array.from(select.options).some((option) => option.value === normalized);
-    if (hasOption) {
-        select.value = normalized;
-        if (customInput) {
-            customInput.value = '';
-        }
-        toggleCustomProfileInput(select, false);
-        return;
-    }
-
-    if (customInput) {
-        select.value = PROFILE_CUSTOM_VALUE;
-        customInput.value = normalized;
-    } else {
-        select.value = '';
-    }
-
-    toggleCustomProfileInput(select, false);
+    select.innerHTML = `
+        <option value="">Select MikroTik profile</option>
+        <option value="" disabled>${escapeOption(message)}</option>
+    `;
+    select.value = '';
 }
 
-function renderProfileSelectOptions(profileNames = []) {
-    const options = ['<option value="">-- Auto-generate --</option>'];
-
-    for (const name of profileNames) {
-        const safeName = String(name)
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#39;');
-        options.push(`<option value="${safeName}">${safeName}</option>`);
+function setProfileLoadingState(form) {
+    const select = form.querySelector('select[name="mikrotik_profile"]');
+    if (!select) {
+        return;
     }
 
-    options.push('<option value="__custom__">-- Custom --</option>');
+    select.innerHTML = `
+        <option value="">Select MikroTik profile</option>
+        <option value="" disabled>Loading MikroTik profiles...</option>
+    `;
+    select.value = '';
+}
 
-    const forms = [document.getElementById('addPackageForm'), document.getElementById('editPackageForm')].filter(Boolean);
-    forms.forEach((form) => {
-        const selectedValue = getCurrentProfileValue(form);
-        const select = form.querySelector('select[name="mikrotik_profile"]');
-        if (!select) return;
+function renderProfileSelectOptions(form, profiles, preferredProfile = '') {
+    const select = form.querySelector('select[name="mikrotik_profile"]');
+    if (!select) {
+        return;
+    }
 
+    const normalizedProfiles = Array.isArray(profiles)
+        ? profiles.map((name) => String(name || '').trim()).filter(Boolean)
+        : [];
+
+    if (!normalizedProfiles.length) {
+        setProfileSelectMessage(form, 'No profiles found on selected router');
+        return;
+    }
+
+    const options = ['<option value="">Select MikroTik profile</option>'];
+    for (const name of normalizedProfiles) {
+        const safe = escapeOption(name);
+        options.push(`<option value="${safe}">${safe}</option>`);
+    }
+
+    select.innerHTML = options.join('');
+
+    const requestedValue = String(preferredProfile || '').trim();
+    if (requestedValue === '') {
+        select.value = '';
+        return;
+    }
+
+    const matched = normalizedProfiles.find((name) => name.toLowerCase() === requestedValue.toLowerCase());
+    select.value = matched || '';
+}
+
+function renderRouterSelectOptions(routers = []) {
+    const options = ['<option value="">Select router</option>'];
+    for (const router of routers) {
+        const id = Number(router?.id || 0);
+        if (id <= 0) {
+            continue;
+        }
+
+        const name = escapeOption(router?.name || `Router ${id}`);
+        const ip = escapeOption(router?.ip_address || 'unknown IP');
+        const status = String(router?.status || '').trim();
+        const statusLabel = status !== '' ? ` [${escapeOption(status)}]` : '';
+        options.push(`<option value="${id}">${name} (${ip})${statusLabel}</option>`);
+    }
+
+    getRouterSelects().forEach((select) => {
+        const current = String(select.value || '').trim();
         select.innerHTML = options.join('');
-        setProfileValue(form, selectedValue);
+        if (current !== '' && routers.some((router) => String(router?.id || '') === current)) {
+            select.value = current;
+        }
+    });
+}
+
+function buildProfilesUrl(routerId = 0) {
+    let url = withTenantScope('/admin/api/mikrotik/profiles');
+    const normalizedRouterId = Number(routerId || 0);
+    if (normalizedRouterId > 0) {
+        const glue = url.includes('?') ? '&' : '?';
+        url = `${url}${glue}router_id=${normalizedRouterId}`;
+    }
+
+    return url;
+}
+
+async function fetchMikroTikProfilePayload(routerId = 0, force = false) {
+    const normalizedRouterId = Number(routerId || 0);
+
+    if (normalizedRouterId > 0 && !force && routerProfilesCache.has(normalizedRouterId)) {
+        return routerProfilesCache.get(normalizedRouterId);
+    }
+
+    const res = await fetch(buildProfilesUrl(normalizedRouterId), {
+        headers: { 'Accept': 'application/json' },
+        credentials: 'same-origin',
     });
 
-    attachProfileSelectHandlers();
+    const payload = await res.json().catch(() => ({}));
+    if (!res.ok || !payload?.success) {
+        throw new Error(payload?.message || 'Failed to load MikroTik profiles');
+    }
+
+    if (normalizedRouterId > 0) {
+        routerProfilesCache.set(normalizedRouterId, payload);
+    }
+
+    return payload;
 }
 
-function renderProfileLoadingState() {
-    const options = [
-        '<option value="">-- Auto-generate --</option>',
-        '<option value="" disabled>Loading MikroTik profiles...</option>',
-        '<option value="__custom__">-- Custom --</option>',
-    ].join('');
+async function loadProfilesForForm(form, { force = false, preferredProfile = '' } = {}) {
+    const routerSelect = form.querySelector('select[name="router_id"]');
+    const profileSelect = form.querySelector('select[name="mikrotik_profile"]');
+    if (!routerSelect || !profileSelect) {
+        return;
+    }
 
-    getProfileSelects().forEach((select) => {
-        const selected = select.value;
-        select.innerHTML = options;
-        if (selected === PROFILE_CUSTOM_VALUE) {
-            select.value = PROFILE_CUSTOM_VALUE;
+    const routerId = Number(routerSelect.value || 0);
+    if (routerId <= 0) {
+        setProfileSelectMessage(form, 'Select a router first');
+        return;
+    }
+
+    const fallbackProfile = profileSelect.dataset.pendingProfile || profileSelect.value || '';
+    setProfileLoadingState(form);
+
+    try {
+        const payload = await fetchMikroTikProfilePayload(routerId, force);
+        const profiles = Array.isArray(payload?.data?.profiles) ? payload.data.profiles : [];
+        if (!profiles.length) {
+            setProfileSelectMessage(form, payload?.message || 'No profiles found on selected router');
+            return;
         }
+
+        const desiredProfile = String(preferredProfile || fallbackProfile).trim();
+        renderProfileSelectOptions(form, profiles, desiredProfile);
+    } catch (error) {
+        console.warn('Unable to load MikroTik profiles:', error);
+        setProfileSelectMessage(form, error?.message || 'Unable to load profiles from selected router');
+    } finally {
+        delete profileSelect.dataset.pendingProfile;
+    }
+}
+
+function bindRouterSelectHandlers() {
+    getRouterSelects().forEach((select) => {
+        if (select.dataset.routerHandlerBound === '1') {
+            return;
+        }
+
+        select.addEventListener('change', function () {
+            routerProfilesCache.delete(Number(this.value || 0));
+            const form = this.closest('form');
+            if (!form) {
+                return;
+            }
+
+            loadProfilesForForm(form, { force: true });
+        });
+
+        select.dataset.routerHandlerBound = '1';
     });
 }
 
 async function loadMikroTikProfiles() {
     const tenantSelect = document.getElementById('packageTenantId');
     if (tenantSelect && getScopedTenantId() <= 0) {
-        renderProfileSelectOptions([]);
+        cachedRouters = [];
+        renderRouterSelectOptions([]);
+        getPackageForms().forEach((form) => setProfileSelectMessage(form, 'Select tenant first'));
         return;
     }
 
-    renderProfileLoadingState();
-
     try {
-        const res = await fetch(withTenantScope('/admin/api/mikrotik/profiles'), {
-            headers: { 'Accept': 'application/json' },
-            credentials: 'same-origin',
-        });
+        const payload = await fetchMikroTikProfilePayload(0, true);
+        cachedRouters = Array.isArray(payload?.data?.routers) ? payload.data.routers : [];
 
-        const payload = await res.json().catch(() => ({}));
-        if (!res.ok || !payload?.success) {
-            throw new Error(payload?.message || 'Failed to load MikroTik profiles');
+        renderRouterSelectOptions(cachedRouters);
+        bindRouterSelectHandlers();
+
+        if (!cachedRouters.length) {
+            getPackageForms().forEach((form) => setProfileSelectMessage(form, 'No routers found. Add a router first.'));
+            return;
         }
 
-        const profiles = Array.isArray(payload?.data?.profiles) ? payload.data.profiles : [];
-        renderProfileSelectOptions(profiles);
+        const defaultRouterId = Number(payload?.data?.router?.id || cachedRouters[0]?.id || 0);
+
+        await Promise.all(getPackageForms().map(async (form) => {
+            const routerSelect = form.querySelector('select[name="router_id"]');
+            const profileSelect = form.querySelector('select[name="mikrotik_profile"]');
+            if (!routerSelect || !profileSelect) {
+                return;
+            }
+
+            if (Number(routerSelect.value || 0) <= 0 && defaultRouterId > 0) {
+                routerSelect.value = String(defaultRouterId);
+            }
+
+            const pendingProfile = profileSelect.dataset.pendingProfile || profileSelect.value || '';
+            await loadProfilesForForm(form, { preferredProfile: pendingProfile });
+        }));
     } catch (error) {
-        console.warn('Unable to load MikroTik profiles:', error);
-        renderProfileSelectOptions([]);
+        console.warn('Unable to load MikroTik routers/profiles:', error);
+        cachedRouters = [];
+        renderRouterSelectOptions([]);
+        getPackageForms().forEach((form) => setProfileSelectMessage(form, 'Unable to load routers and profiles'));
     }
 }
 
 function buildPackagePayload(form) {
-    const customProfile = form.querySelector('input[name="custom_profile"]')?.value?.trim() || '';
-    const rawProfile = form.querySelector('select[name="mikrotik_profile"]')?.value || '';
-    const selectedProfile = rawProfile === PROFILE_CUSTOM_VALUE ? customProfile : rawProfile;
+    const selectedRouterId = Number(form.querySelector('select[name="router_id"]')?.value || 0);
+    const selectedProfile = (form.querySelector('select[name="mikrotik_profile"]')?.value || '').trim();
     const tenantId = getScopedTenantId();
 
     const payload = {
         name: form.querySelector('input[name="name"]').value.trim(),
-        description: form.querySelector('input[name="description"]').value.trim(),
         duration_value: Number(form.querySelector('input[name="duration"]').value || 0),
         duration_unit: form.querySelector('select[name="duration_unit"]').value,
         price: Number(form.querySelector('input[name="price"]').value || 0),
         download_limit_mbps: form.querySelector('input[name="download_speed"]').value ? Number(form.querySelector('input[name="download_speed"]').value) : null,
         upload_limit_mbps: form.querySelector('input[name="upload_speed"]').value ? Number(form.querySelector('input[name="upload_speed"]').value) : null,
+        router_id: selectedRouterId,
         mikrotik_profile_name: selectedProfile || null,
         is_active: !!form.querySelector('input[name="is_active"]')?.checked,
     };
@@ -598,6 +673,18 @@ window.savePackage = function savePackage() {
         return;
     }
 
+    const selectedRouter = Number(form.querySelector('select[name="router_id"]')?.value || 0);
+    if (selectedRouter <= 0) {
+        Swal.fire('Router Required', 'Select a router before creating a package.', 'warning');
+        return;
+    }
+
+    const selectedProfile = (form.querySelector('select[name="mikrotik_profile"]')?.value || '').trim();
+    if (selectedProfile === '') {
+        Swal.fire('Profile Required', 'Select a MikroTik profile from the selected router.', 'warning');
+        return;
+    }
+
     const payload = buildPackagePayload(form);
 
     Swal.fire({
@@ -627,6 +714,18 @@ window.updatePackage = function updatePackage() {
     const packageId = Number(form.querySelector('input[name="id"]').value || 0);
     if (!packageId) {
         Swal.fire('Error', 'Select a package to edit first', 'error');
+        return;
+    }
+
+    const selectedRouter = Number(form.querySelector('select[name="router_id"]')?.value || 0);
+    if (selectedRouter <= 0) {
+        Swal.fire('Router Required', 'Select a router before updating this package.', 'warning');
+        return;
+    }
+
+    const selectedProfile = (form.querySelector('select[name="mikrotik_profile"]')?.value || '').trim();
+    if (selectedProfile === '') {
+        Swal.fire('Profile Required', 'Select a MikroTik profile from the selected router.', 'warning');
         return;
     }
 
@@ -701,13 +800,34 @@ window.openEditPackageFromButton = function openEditPackageFromButton(button) {
 
     form.querySelector('input[name="id"]').value = button.dataset.id || '';
     form.querySelector('input[name="name"]').value = button.dataset.name || '';
-    form.querySelector('input[name="description"]').value = button.dataset.description || '';
     form.querySelector('input[name="duration"]').value = button.dataset.durationValue || '';
     form.querySelector('select[name="duration_unit"]').value = button.dataset.durationUnit || 'minutes';
     form.querySelector('input[name="price"]').value = button.dataset.price || '';
     form.querySelector('input[name="download_speed"]').value = button.dataset.download || '';
     form.querySelector('input[name="upload_speed"]').value = button.dataset.upload || '';
-    setProfileValue(form, button.dataset.profile || '');
+    const profileName = String(button.dataset.profile || '').trim();
+    const profileSelect = form.querySelector('select[name="mikrotik_profile"]');
+    if (profileSelect) {
+        profileSelect.dataset.pendingProfile = profileName;
+    }
+
+    const routerSelect = form.querySelector('select[name="router_id"]');
+    if (routerSelect && profileName !== '') {
+        for (const [routerId, payload] of routerProfilesCache.entries()) {
+            const profiles = Array.isArray(payload?.data?.profiles) ? payload.data.profiles : [];
+            const exists = profiles.some((name) => String(name || '').toLowerCase() === profileName.toLowerCase());
+            if (exists) {
+                routerSelect.value = String(routerId);
+                break;
+            }
+        }
+    }
+
+    if (routerSelect && Number(routerSelect.value || 0) <= 0 && cachedRouters.length > 0) {
+        routerSelect.value = String(cachedRouters[0]?.id || '');
+    }
+
+    loadProfilesForForm(form, { force: true, preferredProfile: profileName });
     form.querySelector('input[name="is_active"]').checked = String(button.dataset.active || '0') === '1';
 };
 
@@ -736,12 +856,13 @@ function bindStatusToggles() {
     });
 }
 
-attachProfileSelectHandlers();
+bindRouterSelectHandlers();
 loadMikroTikProfiles();
 
 const packageTenantSelect = document.getElementById('packageTenantId');
 if (packageTenantSelect) {
     packageTenantSelect.addEventListener('change', function() {
+        routerProfilesCache.clear();
         loadMikroTikProfiles();
     });
 }
@@ -804,7 +925,6 @@ document.addEventListener('DOMContentLoaded', function() {
             <tr class="${row.is_active ? '' : 'text-muted'}">
                 <td>
                     <strong>${escapeAttr(row.name || '-')}</strong>
-                    <div class="text-muted small">${escapeAttr(row.description || 'No description')}</div>
                 </td>
                 <td>${formatDuration(row)}</td>
                 <td><strong>KES ${Number(row.price || 0).toLocaleString()}</strong></td>
@@ -831,7 +951,6 @@ document.addEventListener('DOMContentLoaded', function() {
                             onclick="window.openEditPackageFromButton(this)"
                             data-id="${row.id || 0}"
                             data-name="${escapeAttr(row.name)}"
-                            data-description="${escapeAttr(row.description)}"
                             data-duration-value="${row.duration_value || ''}"
                             data-duration-unit="${row.duration_unit || ''}"
                             data-price="${row.price || 0}"

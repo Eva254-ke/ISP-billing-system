@@ -644,7 +644,32 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
             ], 422);
         };
 
-        Route::get('/mikrotik/profiles', function (Request $request, MikroTikService $mikroTikService) use ($resolveTenantForPackageWrite, $tenantScopeError) {
+        $resolveTenantRouter = function (Tenant $tenant, int $routerId): ?Router {
+            if ($routerId <= 0) {
+                return null;
+            }
+
+            return Router::query()
+                ->where('tenant_id', $tenant->id)
+                ->find($routerId);
+        };
+
+        $collectRouterProfiles = function (Router $router, MikroTikService $mikroTikService): array {
+            $profiles = array_merge(
+                $mikroTikService->getHotspotUserProfiles($router),
+                $mikroTikService->getPppProfiles($router)
+            );
+
+            return collect($profiles)
+                ->map(fn ($name) => trim((string) $name))
+                ->filter()
+                ->unique(fn ($name) => Str::lower($name))
+                ->sort(fn ($a, $b) => strnatcasecmp($a, $b))
+                ->values()
+                ->all();
+        };
+
+        Route::get('/mikrotik/profiles', function (Request $request, MikroTikService $mikroTikService) use ($resolveTenantForPackageWrite, $tenantScopeError, $resolveTenantRouter, $collectRouterProfiles) {
             $tenant = $resolveTenantForPackageWrite($request);
 
             if (!$tenant) {
@@ -657,53 +682,68 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
                     "CASE WHEN status = ? THEN 0 WHEN status = ? THEN 1 ELSE 2 END",
                     [Router::STATUS_ONLINE, Router::STATUS_WARNING]
                 )
+                ->orderBy('name')
                 ->orderBy('id')
-                ->limit(5)
                 ->get();
 
-            $routerProfiles = [];
-            $onlineRouter = null;
+            $routerRows = $routers->map(fn (Router $router) => [
+                'id' => $router->id,
+                'name' => $router->name,
+                'ip_address' => $router->ip_address,
+                'status' => $router->status,
+                'location' => $router->location,
+            ])->values()->all();
 
-            foreach ($routers as $router) {
-                if (!$mikroTikService->pingRouter($router)) {
-                    continue;
-                }
-
-                $onlineRouter = $router;
-                $routerProfiles = array_merge(
-                    $routerProfiles,
-                    $mikroTikService->getHotspotUserProfiles($router),
-                    $mikroTikService->getPppProfiles($router)
-                );
-
-                if (!empty($routerProfiles)) {
-                    break;
-                }
+            if (empty($routerRows)) {
+                return response()->json([
+                    'success' => true,
+                    'message' => 'No routers found. Add a router first.',
+                    'data' => [
+                        'profiles' => [],
+                        'router' => null,
+                        'routers' => [],
+                        'source' => 'none',
+                    ],
+                ]);
             }
 
-            $databaseProfiles = Package::query()
-                ->where('tenant_id', $tenant->id)
-                ->whereNotNull('mikrotik_profile_name')
-                ->pluck('mikrotik_profile_name')
-                ->map(fn ($name) => trim((string) $name))
-                ->filter()
-                ->values()
-                ->all();
+            $requestedRouterId = (int) $request->query('router_id', 0);
+            $selectedRouter = $requestedRouterId > 0
+                ? $resolveTenantRouter($tenant, $requestedRouterId)
+                : $routers->first();
 
-            $profiles = collect(array_merge($routerProfiles, $databaseProfiles))
-                ->map(fn ($name) => trim((string) $name))
-                ->filter()
-                ->unique(fn ($name) => Str::lower($name))
-                ->sort(fn ($a, $b) => strnatcasecmp($a, $b))
-                ->values()
-                ->all();
+            if ($requestedRouterId > 0 && !$selectedRouter) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Selected router was not found for this tenant.',
+                    'data' => [
+                        'profiles' => [],
+                        'router' => null,
+                        'routers' => $routerRows,
+                        'source' => 'none',
+                    ],
+                ], 404);
+            }
 
-            $message = $onlineRouter
-                ? 'MikroTik profiles loaded successfully.'
-                : 'Router is offline; showing saved profile names only.';
+            $profiles = [];
+            $message = 'Select a router to load MikroTik profiles.';
+            $source = 'none';
 
-            if (empty($profiles)) {
-                $message = 'No MikroTik profiles found yet. Create one on your router or enter a custom name.';
+            if ($selectedRouter) {
+                $isOnline = $mikroTikService->pingRouter($selectedRouter);
+                $selectedRouter->refresh();
+
+                if ($isOnline) {
+                    $profiles = $collectRouterProfiles($selectedRouter, $mikroTikService);
+                    $message = empty($profiles)
+                        ? 'No MikroTik profiles found on the selected router.'
+                        : 'MikroTik profiles loaded successfully.';
+                    $source = 'router';
+                } else {
+                    $diagnostics = $mikroTikService->getConnectivityDiagnostics($selectedRouter);
+                    $message = (string) ($diagnostics['message'] ?? 'Selected router is offline or unreachable.');
+                    $source = 'router_offline';
+                }
             }
 
             return response()->json([
@@ -711,14 +751,15 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
                 'message' => $message,
                 'data' => [
                     'profiles' => $profiles,
-                    'router' => $onlineRouter ? [
-                        'id' => $onlineRouter->id,
-                        'name' => $onlineRouter->name,
-                        'ip_address' => $onlineRouter->ip_address,
+                    'router' => $selectedRouter ? [
+                        'id' => $selectedRouter->id,
+                        'name' => $selectedRouter->name,
+                        'ip_address' => $selectedRouter->ip_address,
+                        'status' => $selectedRouter->status,
+                        'location' => $selectedRouter->location,
                     ] : null,
-                    'source' => $onlineRouter
-                        ? (!empty($databaseProfiles) ? 'router+database' : 'router')
-                        : 'database',
+                    'routers' => $routerRows,
+                    'source' => $source,
                 ],
             ]);
         })->name('mikrotik.profiles');
@@ -866,7 +907,7 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
             ]);
         })->name('packages.index');
 
-        Route::post('/packages', function (Request $request) use ($resolveTenantForPackageWrite, $tenantScopeError) {
+        Route::post('/packages', function (Request $request, MikroTikService $mikroTikService) use ($resolveTenantForPackageWrite, $tenantScopeError, $resolveTenantRouter, $collectRouterProfiles) {
             $tenant = $resolveTenantForPackageWrite($request);
 
             if (!$tenant) {
@@ -875,15 +916,53 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
 
             $validated = $request->validate([
                 'name' => 'required|string|max:120',
-                'description' => 'nullable|string|max:255',
                 'price' => 'required|numeric|min:0',
                 'duration_value' => 'required|integer|min:1|max:100000',
                 'duration_unit' => 'required|in:minutes,hours,days,weeks,months',
                 'download_limit_mbps' => 'nullable|integer|min:1|max:100000',
                 'upload_limit_mbps' => 'nullable|integer|min:1|max:100000',
-                'mikrotik_profile_name' => 'nullable|string|max:120',
+                'router_id' => 'required|integer|min:1',
+                'mikrotik_profile_name' => 'required|string|max:120',
                 'is_active' => 'nullable|boolean',
             ]);
+
+            $router = $resolveTenantRouter($tenant, (int) $validated['router_id']);
+            if (!$router) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Selected router was not found for this tenant.',
+                ], 422);
+            }
+
+            if (!$mikroTikService->pingRouter($router)) {
+                $router->refresh();
+                $diagnostics = $mikroTikService->getConnectivityDiagnostics($router);
+
+                return response()->json([
+                    'success' => false,
+                    'message' => (string) ($diagnostics['message'] ?? 'Selected router is offline or unreachable.'),
+                ], 422);
+            }
+
+            $availableProfiles = $collectRouterProfiles($router, $mikroTikService);
+            if (empty($availableProfiles)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'No MikroTik profiles were found on the selected router.',
+                ], 422);
+            }
+
+            $requestedProfile = trim((string) $validated['mikrotik_profile_name']);
+            $selectedProfile = collect($availableProfiles)->first(
+                fn ($profile) => Str::lower((string) $profile) === Str::lower($requestedProfile)
+            );
+
+            if (!$selectedProfile) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Selected MikroTik profile does not exist on the chosen router.',
+                ], 422);
+            }
 
             $codeBase = strtoupper(preg_replace('/[^A-Z0-9]+/', '-', (string) $validated['name']));
             $codeBase = trim($codeBase, '-');
@@ -905,7 +984,7 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
             $package = Package::create([
                 'tenant_id' => $tenant->id,
                 'name' => $validated['name'],
-                'description' => $validated['description'] ?? null,
+                'description' => null,
                 'code' => $code,
                 'price' => $validated['price'],
                 'currency' => 'KES',
@@ -913,7 +992,7 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
                 'duration_unit' => $validated['duration_unit'],
                 'download_limit_mbps' => $validated['download_limit_mbps'] ?? null,
                 'upload_limit_mbps' => $validated['upload_limit_mbps'] ?? null,
-                'mikrotik_profile_name' => $validated['mikrotik_profile_name'] ?? null,
+                'mikrotik_profile_name' => $selectedProfile,
                 'is_active' => (bool) ($validated['is_active'] ?? true),
                 'sort_order' => $sortOrder,
             ]);
@@ -928,7 +1007,7 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
             ], 201);
         })->name('packages.create');
 
-        Route::put('/packages/{package}', function (Request $request, Package $package) use ($resolveTenantForPackageWrite, $tenantScopeError) {
+        Route::put('/packages/{package}', function (Request $request, Package $package, MikroTikService $mikroTikService) use ($resolveTenantForPackageWrite, $tenantScopeError, $resolveTenantRouter, $collectRouterProfiles) {
             $tenant = $resolveTenantForPackageWrite($request);
 
             if (!$tenant) {
@@ -944,25 +1023,63 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
 
             $validated = $request->validate([
                 'name' => 'required|string|max:120',
-                'description' => 'nullable|string|max:255',
                 'price' => 'required|numeric|min:0',
                 'duration_value' => 'required|integer|min:1|max:100000',
                 'duration_unit' => 'required|in:minutes,hours,days,weeks,months',
                 'download_limit_mbps' => 'nullable|integer|min:1|max:100000',
                 'upload_limit_mbps' => 'nullable|integer|min:1|max:100000',
-                'mikrotik_profile_name' => 'nullable|string|max:120',
+                'router_id' => 'required|integer|min:1',
+                'mikrotik_profile_name' => 'required|string|max:120',
                 'is_active' => 'nullable|boolean',
             ]);
 
+            $router = $resolveTenantRouter($tenant, (int) $validated['router_id']);
+            if (!$router) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Selected router was not found for this tenant.',
+                ], 422);
+            }
+
+            if (!$mikroTikService->pingRouter($router)) {
+                $router->refresh();
+                $diagnostics = $mikroTikService->getConnectivityDiagnostics($router);
+
+                return response()->json([
+                    'success' => false,
+                    'message' => (string) ($diagnostics['message'] ?? 'Selected router is offline or unreachable.'),
+                ], 422);
+            }
+
+            $availableProfiles = $collectRouterProfiles($router, $mikroTikService);
+            if (empty($availableProfiles)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'No MikroTik profiles were found on the selected router.',
+                ], 422);
+            }
+
+            $requestedProfile = trim((string) $validated['mikrotik_profile_name']);
+            $selectedProfile = collect($availableProfiles)->first(
+                fn ($profile) => Str::lower((string) $profile) === Str::lower($requestedProfile)
+            );
+
+            if (!$selectedProfile) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Selected MikroTik profile does not exist on the chosen router.',
+                ], 422);
+            }
+
             $package->update([
                 'name' => $validated['name'],
-                'description' => $validated['description'] ?? null,
+                'description' => null,
                 'price' => $validated['price'],
                 'duration_value' => $validated['duration_value'],
                 'duration_unit' => $validated['duration_unit'],
                 'download_limit_mbps' => $validated['download_limit_mbps'] ?? null,
                 'upload_limit_mbps' => $validated['upload_limit_mbps'] ?? null,
-                'mikrotik_profile_name' => $validated['mikrotik_profile_name'] ?? null,
+                'mikrotik_profile_name' => $selectedProfile,
                 'is_active' => (bool) ($validated['is_active'] ?? false),
             ]);
 
