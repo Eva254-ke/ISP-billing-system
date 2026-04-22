@@ -61,19 +61,20 @@
                 <input type="number" min="1" class="form-control" name="upload_limit_mbps" placeholder="Optional">
             </div>
             <div class="col-md-6">
-                <label class="form-label">Router *</label>
-                <select class="form-select" name="router_id" required>
-                    <option value="">Select router</option>
+                <label class="form-label">Router for Profile Lookup</label>
+                <select class="form-select" name="router_id">
+                    <option value="">No router profile</option>
                     <option value="" disabled>Loading routers...</option>
                 </select>
-                <small class="text-muted">Profiles are loaded from the selected router only.</small>
+                <small class="text-muted">Optional. Leave this blank if the package should work using direct per-user limits only.</small>
             </div>
             <div class="col-md-6">
-                <label class="form-label">MikroTik Profile *</label>
-                <select class="form-select" name="mikrotik_profile_name" required>
-                    <option value="">Select MikroTik profile</option>
+                <label class="form-label">MikroTik Profile</label>
+                <select class="form-select" name="mikrotik_profile_name">
+                    <option value="">No router profile</option>
                     <option value="" disabled>Loading MikroTik profiles...</option>
                 </select>
+                <small class="text-muted">Optional. Only use this if the same profile exists on every router that may activate the package.</small>
             </div>
             <div class="col-12 d-flex gap-2 justify-content-end">
                 <a href="{{ route('admin.packages.index') }}" class="btn btn-outline-secondary">Cancel</a>
@@ -106,7 +107,7 @@ function setProfileMessage(message) {
     }
 
     profileField.innerHTML = `
-        <option value="">Select MikroTik profile</option>
+        <option value="">No router profile</option>
         <option value="" disabled>${String(message || 'No profiles found')}</option>
     `;
     profileField.value = '';
@@ -119,12 +120,12 @@ async function loadProfilesForRouter(routerId) {
 
     const normalizedRouterId = Number(routerId || 0);
     if (normalizedRouterId <= 0) {
-        setProfileMessage('Select router first');
+        setProfileMessage('Choose a router only if you want to use one of its profiles');
         return;
     }
 
     profileField.innerHTML = `
-        <option value="">Select MikroTik profile</option>
+        <option value="">No router profile</option>
         <option value="" disabled>Loading MikroTik profiles...</option>
     `;
 
@@ -145,7 +146,7 @@ async function loadProfilesForRouter(routerId) {
             return;
         }
 
-        const options = ['<option value="">Select MikroTik profile</option>'];
+        const options = ['<option value="">No router profile</option>'];
         for (const profileName of profiles) {
             const safe = String(profileName || '')
                 .replace(/&/g, '&amp;')
@@ -169,7 +170,7 @@ async function loadRouters() {
 
     if (tenantField && Number(tenantField.value || 0) <= 0) {
         routerField.innerHTML = `
-            <option value="">Select router</option>
+            <option value="">No router profile</option>
             <option value="" disabled>Select tenant first</option>
         `;
         setProfileMessage('Select tenant first');
@@ -177,7 +178,7 @@ async function loadRouters() {
     }
 
     routerField.innerHTML = `
-        <option value="">Select router</option>
+        <option value="">No router profile</option>
         <option value="" disabled>Loading routers...</option>
     `;
 
@@ -193,7 +194,7 @@ async function loadRouters() {
         }
 
         const routers = Array.isArray(payload?.data?.routers) ? payload.data.routers : [];
-        const options = ['<option value="">Select router</option>'];
+        const options = ['<option value="">No router profile</option>'];
 
         for (const router of routers) {
             const id = Number(router?.id || 0);
@@ -218,10 +219,8 @@ async function loadRouters() {
 
         routerField.innerHTML = options.join('');
 
-        const defaultRouterId = Number(payload?.data?.router?.id || routers[0]?.id || 0);
-        if (defaultRouterId > 0) {
-            routerField.value = String(defaultRouterId);
-            await loadProfilesForRouter(defaultRouterId);
+        if (routers.length > 0) {
+            setProfileMessage('Choose a router only if you want to use one of its profiles');
         } else {
             setProfileMessage('No routers found. Add a router first.');
         }
@@ -247,20 +246,11 @@ createPackageForm?.addEventListener('submit', async function (event) {
     const selectedRouterId = Number(form.querySelector('[name="router_id"]').value || 0);
     const selectedProfile = (form.querySelector('[name="mikrotik_profile_name"]').value || '').trim();
 
-    if (selectedRouterId <= 0) {
+    if (selectedProfile !== '' && selectedRouterId <= 0) {
         if (window.Swal) {
-            Swal.fire('Router Required', 'Select a router before saving this package.', 'warning');
+            Swal.fire('Router Needed', 'Select a router only if you want to use one of its MikroTik profiles.', 'warning');
         } else {
-            alert('Select a router before saving this package.');
-        }
-        return;
-    }
-
-    if (selectedProfile === '') {
-        if (window.Swal) {
-            Swal.fire('Profile Required', 'Select a MikroTik profile from the selected router.', 'warning');
-        } else {
-            alert('Select a MikroTik profile from the selected router.');
+            alert('Select a router only if you want to use one of its MikroTik profiles.');
         }
         return;
     }
@@ -272,8 +262,8 @@ createPackageForm?.addEventListener('submit', async function (event) {
         duration_unit: form.querySelector('[name="duration_unit"]').value,
         download_limit_mbps: form.querySelector('[name="download_limit_mbps"]').value ? Number(form.querySelector('[name="download_limit_mbps"]').value) : null,
         upload_limit_mbps: form.querySelector('[name="upload_limit_mbps"]').value ? Number(form.querySelector('[name="upload_limit_mbps"]').value) : null,
-        router_id: selectedRouterId,
-        mikrotik_profile_name: selectedProfile,
+        router_id: selectedRouterId > 0 ? selectedRouterId : null,
+        mikrotik_profile_name: selectedProfile || null,
         is_active: !!form.querySelector('[name="is_active"]').checked,
     };
 

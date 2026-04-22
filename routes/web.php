@@ -995,36 +995,40 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
                 'duration_unit' => 'required|in:minutes,hours,days,weeks,months',
                 'download_limit_mbps' => 'nullable|integer|min:1|max:100000',
                 'upload_limit_mbps' => 'nullable|integer|min:1|max:100000',
-                'router_id' => 'required|integer|min:1',
-                'mikrotik_profile_name' => 'required|string|max:120',
+                'router_id' => 'nullable|integer|min:1',
+                'mikrotik_profile_name' => 'nullable|string|max:120',
                 'is_active' => 'nullable|boolean',
             ]);
 
-            $router = $resolveTenantRouter($tenant, (int) $validated['router_id']);
-            if (!$router) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Selected router was not found for this tenant.',
-                ], 422);
-            }
-
-            $resolvedProfiles = $resolveRouterProfilesForUse($router, $mikroTikService);
-            $availableProfiles = $resolvedProfiles['profiles'];
-            if (empty($availableProfiles)) {
-                return response()->json([
-                    'success' => false,
-                    'message' => (string) ($resolvedProfiles['message'] ?? 'No MikroTik profiles were found on the selected router.'),
-                ], 422);
-            }
-
             $requestedProfile = trim((string) $validated['mikrotik_profile_name']);
-            $selectedProfile = $matchSelectedProfile($availableProfiles, $requestedProfile);
+            $selectedProfile = null;
 
-            if (!$selectedProfile) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Selected MikroTik profile does not exist on the chosen router.',
-                ], 422);
+            if ($requestedProfile !== '') {
+                $router = $resolveTenantRouter($tenant, (int) ($validated['router_id'] ?? 0));
+                if (!$router) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Select a router if you want to use a MikroTik profile.',
+                    ], 422);
+                }
+
+                $resolvedProfiles = $resolveRouterProfilesForUse($router, $mikroTikService);
+                $availableProfiles = $resolvedProfiles['profiles'];
+                if (empty($availableProfiles)) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => (string) ($resolvedProfiles['message'] ?? 'No MikroTik profiles were found on the selected router.'),
+                    ], 422);
+                }
+
+                $selectedProfile = $matchSelectedProfile($availableProfiles, $requestedProfile);
+
+                if (!$selectedProfile) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Selected MikroTik profile does not exist on the chosen router.',
+                    ], 422);
+                }
             }
 
             $codeBase = strtoupper(preg_replace('/[^A-Z0-9]+/', '-', (string) $validated['name']));
@@ -1091,36 +1095,40 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
                 'duration_unit' => 'required|in:minutes,hours,days,weeks,months',
                 'download_limit_mbps' => 'nullable|integer|min:1|max:100000',
                 'upload_limit_mbps' => 'nullable|integer|min:1|max:100000',
-                'router_id' => 'required|integer|min:1',
-                'mikrotik_profile_name' => 'required|string|max:120',
+                'router_id' => 'nullable|integer|min:1',
+                'mikrotik_profile_name' => 'nullable|string|max:120',
                 'is_active' => 'nullable|boolean',
             ]);
 
-            $router = $resolveTenantRouter($tenant, (int) $validated['router_id']);
-            if (!$router) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Selected router was not found for this tenant.',
-                ], 422);
-            }
-
-            $resolvedProfiles = $resolveRouterProfilesForUse($router, $mikroTikService);
-            $availableProfiles = $resolvedProfiles['profiles'];
-            if (empty($availableProfiles)) {
-                return response()->json([
-                    'success' => false,
-                    'message' => (string) ($resolvedProfiles['message'] ?? 'No MikroTik profiles were found on the selected router.'),
-                ], 422);
-            }
-
             $requestedProfile = trim((string) $validated['mikrotik_profile_name']);
-            $selectedProfile = $matchSelectedProfile($availableProfiles, $requestedProfile);
+            $selectedProfile = null;
 
-            if (!$selectedProfile) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Selected MikroTik profile does not exist on the chosen router.',
-                ], 422);
+            if ($requestedProfile !== '') {
+                $router = $resolveTenantRouter($tenant, (int) ($validated['router_id'] ?? 0));
+                if (!$router) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Select a router if you want to use a MikroTik profile.',
+                    ], 422);
+                }
+
+                $resolvedProfiles = $resolveRouterProfilesForUse($router, $mikroTikService);
+                $availableProfiles = $resolvedProfiles['profiles'];
+                if (empty($availableProfiles)) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => (string) ($resolvedProfiles['message'] ?? 'No MikroTik profiles were found on the selected router.'),
+                    ], 422);
+                }
+
+                $selectedProfile = $matchSelectedProfile($availableProfiles, $requestedProfile);
+
+                if (!$selectedProfile) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Selected MikroTik profile does not exist on the chosen router.',
+                    ], 422);
+                }
             }
 
             $package->update([
