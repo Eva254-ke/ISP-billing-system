@@ -669,7 +669,91 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
                 ->all();
         };
 
-        Route::get('/mikrotik/profiles', function (Request $request, MikroTikService $mikroTikService) use ($resolveTenantForPackageWrite, $tenantScopeError, $resolveTenantRouter, $collectRouterProfiles) {
+        $readCachedRouterProfiles = function (Router $router): array {
+            $metadata = is_array($router->metadata) ? $router->metadata : [];
+            $rawProfiles = $metadata['cached_profiles'] ?? [];
+
+            return collect(is_array($rawProfiles) ? $rawProfiles : [])
+                ->map(fn ($name) => trim((string) $name))
+                ->filter()
+                ->unique(fn ($name) => Str::lower($name))
+                ->sort(fn ($a, $b) => strnatcasecmp($a, $b))
+                ->values()
+                ->all();
+        };
+
+        $cacheRouterProfiles = function (Router $router, array $profiles): void {
+            if (empty($profiles)) {
+                return;
+            }
+
+            $metadata = is_array($router->metadata) ? $router->metadata : [];
+            $metadata['cached_profiles'] = array_values($profiles);
+            $metadata['cached_profiles_synced_at'] = now()->toIso8601String();
+
+            $router->update([
+                'metadata' => $metadata,
+            ]);
+        };
+
+        $resolveRouterProfilesForUse = function (Router $router, MikroTikService $mikroTikService) use ($collectRouterProfiles, $readCachedRouterProfiles, $cacheRouterProfiles): array {
+            $isOnline = $mikroTikService->pingRouter($router);
+            $router->refresh();
+
+            if ($isOnline) {
+                $profiles = $collectRouterProfiles($router, $mikroTikService);
+                if (!empty($profiles)) {
+                    $cacheRouterProfiles($router, $profiles);
+                }
+
+                return [
+                    'profiles' => $profiles,
+                    'source' => 'router',
+                    'message' => empty($profiles)
+                        ? 'No MikroTik profiles found on the selected router.'
+                        : 'MikroTik profiles loaded successfully.',
+                ];
+            }
+
+            $cachedProfiles = $readCachedRouterProfiles($router);
+            if (!empty($cachedProfiles)) {
+                $metadata = is_array($router->metadata) ? $router->metadata : [];
+                $cachedAt = trim((string) ($metadata['cached_profiles_synced_at'] ?? ''));
+                $suffix = $cachedAt !== '' ? " Last synced: {$cachedAt}." : '';
+
+                return [
+                    'profiles' => $cachedProfiles,
+                    'source' => 'router_cache',
+                    'message' => "Router is currently unreachable. Using last synced router profiles.{$suffix}",
+                ];
+            }
+
+            $diagnostics = $mikroTikService->getConnectivityDiagnostics($router);
+
+            return [
+                'profiles' => [],
+                'source' => 'router_offline',
+                'message' => (string) ($diagnostics['message'] ?? 'Selected router is offline or unreachable.'),
+            ];
+        };
+
+        $matchSelectedProfile = function (array $availableProfiles, string $requestedProfile): ?string {
+            $normalizedRequested = Str::lower(trim($requestedProfile));
+            if ($normalizedRequested === '') {
+                return null;
+            }
+
+            foreach ($availableProfiles as $profile) {
+                $candidate = trim((string) $profile);
+                if ($candidate !== '' && Str::lower($candidate) === $normalizedRequested) {
+                    return $candidate;
+                }
+            }
+
+            return null;
+        };
+
+        Route::get('/mikrotik/profiles', function (Request $request, MikroTikService $mikroTikService) use ($resolveTenantForPackageWrite, $tenantScopeError, $resolveTenantRouter, $resolveRouterProfilesForUse) {
             $tenant = $resolveTenantForPackageWrite($request);
 
             if (!$tenant) {
@@ -730,20 +814,10 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
             $source = 'none';
 
             if ($selectedRouter) {
-                $isOnline = $mikroTikService->pingRouter($selectedRouter);
-                $selectedRouter->refresh();
-
-                if ($isOnline) {
-                    $profiles = $collectRouterProfiles($selectedRouter, $mikroTikService);
-                    $message = empty($profiles)
-                        ? 'No MikroTik profiles found on the selected router.'
-                        : 'MikroTik profiles loaded successfully.';
-                    $source = 'router';
-                } else {
-                    $diagnostics = $mikroTikService->getConnectivityDiagnostics($selectedRouter);
-                    $message = (string) ($diagnostics['message'] ?? 'Selected router is offline or unreachable.');
-                    $source = 'router_offline';
-                }
+                $resolvedProfiles = $resolveRouterProfilesForUse($selectedRouter, $mikroTikService);
+                $profiles = $resolvedProfiles['profiles'];
+                $message = $resolvedProfiles['message'];
+                $source = $resolvedProfiles['source'];
             }
 
             return response()->json([
@@ -907,7 +981,7 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
             ]);
         })->name('packages.index');
 
-        Route::post('/packages', function (Request $request, MikroTikService $mikroTikService) use ($resolveTenantForPackageWrite, $tenantScopeError, $resolveTenantRouter, $collectRouterProfiles) {
+        Route::post('/packages', function (Request $request, MikroTikService $mikroTikService) use ($resolveTenantForPackageWrite, $tenantScopeError, $resolveTenantRouter, $resolveRouterProfilesForUse, $matchSelectedProfile) {
             $tenant = $resolveTenantForPackageWrite($request);
 
             if (!$tenant) {
@@ -934,28 +1008,17 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
                 ], 422);
             }
 
-            if (!$mikroTikService->pingRouter($router)) {
-                $router->refresh();
-                $diagnostics = $mikroTikService->getConnectivityDiagnostics($router);
-
-                return response()->json([
-                    'success' => false,
-                    'message' => (string) ($diagnostics['message'] ?? 'Selected router is offline or unreachable.'),
-                ], 422);
-            }
-
-            $availableProfiles = $collectRouterProfiles($router, $mikroTikService);
+            $resolvedProfiles = $resolveRouterProfilesForUse($router, $mikroTikService);
+            $availableProfiles = $resolvedProfiles['profiles'];
             if (empty($availableProfiles)) {
                 return response()->json([
                     'success' => false,
-                    'message' => 'No MikroTik profiles were found on the selected router.',
+                    'message' => (string) ($resolvedProfiles['message'] ?? 'No MikroTik profiles were found on the selected router.'),
                 ], 422);
             }
 
             $requestedProfile = trim((string) $validated['mikrotik_profile_name']);
-            $selectedProfile = collect($availableProfiles)->first(
-                fn ($profile) => Str::lower((string) $profile) === Str::lower($requestedProfile)
-            );
+            $selectedProfile = $matchSelectedProfile($availableProfiles, $requestedProfile);
 
             if (!$selectedProfile) {
                 return response()->json([
@@ -1007,7 +1070,7 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
             ], 201);
         })->name('packages.create');
 
-        Route::put('/packages/{package}', function (Request $request, Package $package, MikroTikService $mikroTikService) use ($resolveTenantForPackageWrite, $tenantScopeError, $resolveTenantRouter, $collectRouterProfiles) {
+        Route::put('/packages/{package}', function (Request $request, Package $package, MikroTikService $mikroTikService) use ($resolveTenantForPackageWrite, $tenantScopeError, $resolveTenantRouter, $resolveRouterProfilesForUse, $matchSelectedProfile) {
             $tenant = $resolveTenantForPackageWrite($request);
 
             if (!$tenant) {
@@ -1041,28 +1104,17 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
                 ], 422);
             }
 
-            if (!$mikroTikService->pingRouter($router)) {
-                $router->refresh();
-                $diagnostics = $mikroTikService->getConnectivityDiagnostics($router);
-
-                return response()->json([
-                    'success' => false,
-                    'message' => (string) ($diagnostics['message'] ?? 'Selected router is offline or unreachable.'),
-                ], 422);
-            }
-
-            $availableProfiles = $collectRouterProfiles($router, $mikroTikService);
+            $resolvedProfiles = $resolveRouterProfilesForUse($router, $mikroTikService);
+            $availableProfiles = $resolvedProfiles['profiles'];
             if (empty($availableProfiles)) {
                 return response()->json([
                     'success' => false,
-                    'message' => 'No MikroTik profiles were found on the selected router.',
+                    'message' => (string) ($resolvedProfiles['message'] ?? 'No MikroTik profiles were found on the selected router.'),
                 ], 422);
             }
 
             $requestedProfile = trim((string) $validated['mikrotik_profile_name']);
-            $selectedProfile = collect($availableProfiles)->first(
-                fn ($profile) => Str::lower((string) $profile) === Str::lower($requestedProfile)
-            );
+            $selectedProfile = $matchSelectedProfile($availableProfiles, $requestedProfile);
 
             if (!$selectedProfile) {
                 return response()->json([
