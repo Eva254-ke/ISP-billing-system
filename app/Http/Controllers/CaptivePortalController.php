@@ -200,8 +200,9 @@ class CaptivePortalController extends Controller
                     'currency' => $package->currency ?? 'KES',
                     'mpesa_checkout_request_id' => 'CP-' . strtoupper(uniqid()),
                     'status' => 'pending',
+                    'type' => Payment::TYPE_CAPTIVE_PORTAL,
                     'initiated_at' => now(),
-                    'payment_channel' => 'captive_portal',
+                    'payment_channel' => Payment::CHANNEL_CAPTIVE_PORTAL,
                     'metadata' => [
                         'gateway' => $gateway,
                         'created_via' => 'captive_portal',
@@ -268,10 +269,10 @@ class CaptivePortalController extends Controller
 
     private function resolveTenant(Request $request): ?Tenant
     {
-        // 1) Explicit tenant_id from query has highest priority.
-        $queryTenantId = (int) $request->query('tenant_id', 0);
-        if ($queryTenantId > 0) {
-            return Tenant::active()->find($queryTenantId);
+        // 1) Explicit tenant_id from query/form body has highest priority.
+        $explicitTenantId = $this->extractExplicitTenantId($request);
+        if ($explicitTenantId > 0) {
+            return Tenant::active()->find($explicitTenantId);
         }
 
         // 2) Tenant domain/subdomain mapping for public captive traffic.
@@ -303,6 +304,10 @@ class CaptivePortalController extends Controller
         if ($tenant) {
             session(['captive_tenant_id' => $tenant->id]);
             return (int) $tenant->id;
+        }
+
+        if ($this->extractExplicitTenantId($request) > 0) {
+            return 0;
         }
 
         $sessionTenantId = (int) session('captive_tenant_id', 0);
@@ -457,6 +462,7 @@ class CaptivePortalController extends Controller
             'captive_payment_id' => $payment->id,
         ]);
 
+        $payment = $this->captureClientContextForPayment($request, $payment);
         $this->reconcileDarajaPaymentIfNeeded($payment, $request->boolean('recheck'));
         $payment = $payment->fresh();
 
@@ -571,10 +577,11 @@ class CaptivePortalController extends Controller
                         'currency' => 'KES',
                         'mpesa_checkout_request_id' => 'VCH-' . strtoupper(uniqid()),
                         'status' => Payment::STATUS_COMPLETED,
+                        'type' => Payment::TYPE_VOUCHER,
                         'initiated_at' => now(),
                         'confirmed_at' => now(),
                         'completed_at' => now(),
-                        'payment_channel' => 'voucher',
+                        'payment_channel' => Payment::CHANNEL_VOUCHER,
                         'metadata' => [
                             'voucher_id' => $voucher->id,
                             'voucher_code' => $voucher->code_display,
@@ -783,8 +790,9 @@ class CaptivePortalController extends Controller
                 'currency' => $package->currency ?? 'KES',
                 'mpesa_checkout_request_id' => 'EXT-' . strtoupper(uniqid()),
                 'status' => 'pending',
+                'type' => Payment::TYPE_SESSION_EXTENSION,
                 'initiated_at' => now(),
-                'payment_channel' => 'session_extension',
+                'payment_channel' => Payment::CHANNEL_SESSION_EXTENSION,
                 'metadata' => [
                     'gateway' => $gateway,
                     'parent_payment_id' => $activeSession->payment_id,
@@ -872,6 +880,7 @@ class CaptivePortalController extends Controller
             'captive_payment_id' => $payment->id,
         ]);
 
+        $payment = $this->captureClientContextForPayment($request, $payment);
         $this->reconcileDarajaPaymentIfNeeded($payment, $request->boolean('recheck'));
         $payment = $payment->fresh();
 
@@ -904,22 +913,6 @@ class CaptivePortalController extends Controller
         ]);
     }
     
-    /**
-     * Paystack is disabled for captive portal production flow.
-     */
-    public function paystackCallback(Request $request)
-    {
-        Log::warning('Paystack callback ignored: captive portal is Daraja-only', [
-            'ip' => $request->ip(),
-            'user_agent' => $request->userAgent(),
-        ]);
-
-        return response()->json([
-            'status' => 'disabled',
-            'message' => 'Paystack is disabled. Use M-Pesa Daraja STK Push.',
-        ], 410);
-    }
-
     private function initiateStkPush(Payment $payment, Package $package, string $phone, string $flow): array
     {
         return $this->initiateDarajaStkPush($payment, $package, $phone, $flow);
@@ -1547,10 +1540,58 @@ class CaptivePortalController extends Controller
         return null;
     }
 
+    private function extractExplicitTenantId(Request $request): int
+    {
+        foreach ([
+            $request->query('tenant_id'),
+            $request->input('tenant_id'),
+        ] as $candidate) {
+            $tenantId = (int) $candidate;
+            if ($tenantId > 0) {
+                return $tenantId;
+            }
+        }
+
+        return 0;
+    }
+
     private function resolveClientContext(Request $request): array
     {
-        $macInput = (string) $request->input('mac', $request->query('mac', session('captive_client_mac', '')));
-        $ipInput = (string) $request->input('ip', $request->query('ip', session('captive_client_ip', '')));
+        $macInput = '';
+        foreach ([
+            (string) $request->input('mac', ''),
+            (string) $request->input('mac-address', ''),
+            (string) $request->input('client_mac', ''),
+            (string) $request->input('clientMac', ''),
+            (string) $request->query('mac', ''),
+            (string) $request->query('mac-address', ''),
+            (string) $request->query('client_mac', ''),
+            (string) $request->query('clientMac', ''),
+            (string) session('captive_client_mac', ''),
+        ] as $candidate) {
+            if (trim($candidate) !== '') {
+                $macInput = $candidate;
+                break;
+            }
+        }
+
+        $ipInput = '';
+        foreach ([
+            (string) $request->input('ip', ''),
+            (string) $request->input('ip-address', ''),
+            (string) $request->input('client_ip', ''),
+            (string) $request->input('clientIp', ''),
+            (string) $request->query('ip', ''),
+            (string) $request->query('ip-address', ''),
+            (string) $request->query('client_ip', ''),
+            (string) $request->query('clientIp', ''),
+            (string) session('captive_client_ip', ''),
+        ] as $candidate) {
+            if (trim($candidate) !== '') {
+                $ipInput = $candidate;
+                break;
+            }
+        }
 
         $mac = $this->normalizeMacAddress($macInput);
         $ip = $this->normalizeClientIpAddress($ipInput);
@@ -1587,6 +1628,47 @@ class CaptivePortalController extends Controller
         }
 
         return $meta;
+    }
+
+    private function captureClientContextForPayment(Request $request, Payment $payment): Payment
+    {
+        $clientContext = $this->resolveClientContext($request);
+        $clientContextMeta = $this->buildClientContextMeta($clientContext, $request);
+
+        if ($clientContextMeta === []) {
+            return $payment;
+        }
+
+        $paymentMetadata = is_array($payment->metadata) ? $payment->metadata : [];
+        $existingClientMeta = is_array($paymentMetadata['client_context'] ?? null) ? $paymentMetadata['client_context'] : [];
+        $mergedClientMeta = array_merge($existingClientMeta, $clientContextMeta);
+
+        if ($mergedClientMeta !== $existingClientMeta) {
+            $paymentMetadata['client_context'] = $mergedClientMeta;
+            $payment->update(['metadata' => $paymentMetadata]);
+            $payment->refresh();
+        }
+
+        $session = UserSession::query()->where('payment_id', $payment->id)->first();
+        if ($session && (string) $session->status !== 'active') {
+            $sessionUpdates = [];
+            $clientMac = $clientContext['mac'] ?? null;
+            $clientIp = $clientContext['ip'] ?? null;
+
+            if ($clientMac !== null && $session->mac_address !== $clientMac) {
+                $sessionUpdates['mac_address'] = $clientMac;
+            }
+
+            if ($clientIp !== null && $session->ip_address !== $clientIp) {
+                $sessionUpdates['ip_address'] = $clientIp;
+            }
+
+            if ($sessionUpdates !== []) {
+                $session->update($sessionUpdates);
+            }
+        }
+
+        return $payment;
     }
 
     private function normalizeMacAddress(string $mac): ?string

@@ -21,6 +21,32 @@ class CaptivePortalPaymentStatusTest extends TestCase
 {
     use RefreshDatabase;
 
+    public function test_daraja_service_is_configured_without_global_callback_url_when_runtime_callback_will_be_supplied(): void
+    {
+        $service = new DarajaService([
+            'consumer_key' => 'consumer-key',
+            'consumer_secret' => 'consumer-secret',
+            'passkey' => 'passkey',
+            'business_shortcode' => '123456',
+            'callback_url' => '',
+        ]);
+
+        $this->assertTrue($service->isConfigured());
+    }
+
+    public function test_packages_view_posts_payments_with_explicit_tenant_context(): void
+    {
+        $tenant = $this->createTenant();
+        $this->createPackage($tenant);
+
+        $response = $this->get(route('wifi.packages', ['tenant_id' => $tenant->id]));
+
+        $response->assertOk();
+        $response->assertSee(route('wifi.pay', ['tenant_id' => $tenant->id]), false);
+        $response->assertSee('name="tenant_id"', false);
+        $response->assertSee('value="' . $tenant->id . '"', false);
+    }
+
     public function test_status_route_uses_explicit_payment_query_parameter(): void
     {
         $tenant = $this->createTenant();
@@ -167,6 +193,50 @@ class CaptivePortalPaymentStatusTest extends TestCase
         $this->assertSame('ws_CO_987654321', $payment->mpesa_checkout_request_id);
         $this->assertSame('pending_verification', data_get($payment->metadata, 'daraja_last_status'));
         $this->assertTrue((bool) data_get($payment->metadata, 'daraja_verification_required'));
+    }
+
+    public function test_pay_accepts_tenant_id_from_post_body_without_relying_on_existing_session(): void
+    {
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant);
+
+        $daraja = Mockery::mock(DarajaService::class);
+        $daraja->shouldReceive('isConfigured')->once()->andReturn(true);
+        $daraja->shouldReceive('stkPush')->once()->andReturn([
+            'success' => true,
+            'stage' => 'stk_push',
+            'http_status' => 200,
+            'response_code' => '0',
+            'response_description' => 'Success. Request accepted for processing',
+            'customer_message' => 'Success. Request accepted for processing',
+            'checkout_request_id' => 'ws_CO_sessionless_001',
+            'merchant_request_id' => '29115-44444-1',
+            'raw' => [
+                'ResponseCode' => '0',
+                'CheckoutRequestID' => 'ws_CO_sessionless_001',
+                'MerchantRequestID' => '29115-44444-1',
+            ],
+            'error' => null,
+        ]);
+        $this->app->instance(DarajaService::class, $daraja);
+
+        $response = $this->post(route('wifi.pay'), [
+            'tenant_id' => $tenant->id,
+            'phone' => '0712345678',
+            'package_id' => $package->id,
+        ]);
+
+        $payment = Payment::query()->latest('id')->firstOrFail();
+
+        $response->assertRedirect(route('wifi.status', [
+            'phone' => '0712345678',
+            'tenant_id' => $tenant->id,
+            'payment' => $payment->id,
+        ]));
+
+        $this->assertSame($tenant->id, (int) $payment->tenant_id);
+        $this->assertSame(Payment::CHANNEL_CAPTIVE_PORTAL, (string) $payment->payment_channel);
+        $this->assertSame(Payment::TYPE_CAPTIVE_PORTAL, (string) $payment->type);
     }
 
     public function test_check_status_recheck_can_reconcile_recent_failed_payment(): void
@@ -546,6 +616,24 @@ class CaptivePortalPaymentStatusTest extends TestCase
         Queue::assertPushed(ActivateSession::class, function (ActivateSession $job) use ($session) {
             return (int) $job->session->id === (int) $session->id;
         });
+    }
+
+    public function test_router_walled_garden_rules_include_portal_and_daraja_hosts_without_intasend(): void
+    {
+        config()->set('app.url', 'https://app.cloudbridge.network');
+
+        $tenant = $this->createTenant();
+        $router = $this->createRouter($tenant, [
+            'captive_portal_url' => 'https://portal.example.com/wifi',
+        ]);
+
+        $rules = $router->walled_garden_rules;
+
+        $this->assertContains('app.cloudbridge.network', $rules);
+        $this->assertContains('portal.example.com', $rules);
+        $this->assertContains('api.safaricom.co.ke', $rules);
+        $this->assertContains('sandbox.safaricom.co.ke', $rules);
+        $this->assertNotContains('intasend.com', $rules);
     }
 
     private function createTenant(array $overrides = []): Tenant

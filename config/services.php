@@ -8,7 +8,7 @@ return [
     |--------------------------------------------------------------------------
     |
     | This file is for storing the credentials for third party services such
-    | as Mailgun, Postmark, AWS, IntaSend, MikroTik and more. This file 
+    | as Mailgun, Postmark, AWS, Safaricom Daraja, MikroTik and more. This file 
     | provides the de facto location for this type of information, allowing 
     | packages to have a conventional file to locate the various service 
     | credentials.
@@ -66,66 +66,6 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | Payment Services - INTASEND (Primary)
-    |--------------------------------------------------------------------------
-    |
-    | IntaSend is our primary payment processor for M-Pesa STK Push and 
-    | auto-settlement to tenant Tills.
-    |
-    | Docs: https://docs.intasend.com
-    |
-    */
-
-    'intasend' => [
-        // API Credentials
-        'public_key' => env('INTASEND_PUBLIC_KEY'),
-        'secret_key' => env('INTASEND_SECRET_KEY'),
-        
-        // Webhook Security
-        'webhook_secret' => env('INTASEND_WEBHOOK_SECRET'),
-        
-        // Environment: 'sandbox' or 'live'
-        'env' => env('INTASEND_ENV', 'sandbox'),
-        
-        // Base URLs (auto-selected by env)
-        'sandbox_url' => 'https://sandbox.intasend.com/api/v1/',
-        'live_url' => 'https://payment.intasend.com/api/v1/',
-        
-        // Callback URL (set this in IntaSend Dashboard)
-        'callback_url' => env('INTASEND_CALLBACK_URL', 'https://app.cloudbridge.network/api/payment/callback'),
-        
-        // Payout Settings
-        'auto_payout' => env('INTASEND_AUTO_PAYOUT', true),
-        'payout_fee' => env('INTASEND_PAYOUT_FEE', 10), // KES per payout
-        
-        // Fee Configuration
-        'transaction_fee_percent' => env('INTASEND_FEE_PERCENT', 1.0), // 1%
-        'absorb_fee' => env('INTASEND_ABSORB_FEE', false), // If true, CloudBridge pays the 1%
-    ],
-
-    /*
-    |--------------------------------------------------------------------------
-    | Payment Services - PAYSTACK (Backup/Alternative)
-    |--------------------------------------------------------------------------
-    |
-    | Paystack can be used as a backup processor or for card payments.
-    | Disabled by default; enable if needed.
-    |
-    */
-
-    'paystack' => [
-        'public_key' => env('PAYSTACK_PUBLIC_KEY'),
-        'secret_key' => env('PAYSTACK_SECRET_KEY'),
-        'merchant_email' => env('PAYSTACK_MERCHANT_EMAIL'),
-        'base_url' => env('PAYSTACK_BASE_URL', 'https://api.paystack.co'),
-        'env' => env('PAYSTACK_ENV', 'sandbox'),
-        'mobile_money_provider' => env('PAYSTACK_MOBILE_MONEY_PROVIDER', 'mpesa'),
-        'callback_url' => env('PAYSTACK_CALLBACK_URL', 'https://wifi.cloubridge.com/api/paystack/webhook'),
-        'success_url' => env('PAYSTACK_SUCCESS_URL', 'https://wifi.cloubridge.com/portal/payment/success'),
-    ],
-
-    /*
-    |--------------------------------------------------------------------------
     | Payment Services - SAFARICOM DARAJA
     |--------------------------------------------------------------------------
     |
@@ -141,10 +81,12 @@ return [
         'passkey' => env('MPESA_PASSKEY'),
         
         'business_shortcode' => env('MPESA_BUSINESS_SHORTCODE'), // Your Paybill/Till
+        // Optional: when blank, captive portal generates the callback per tenant.
         'callback_url' => env('MPESA_CALLBACK_URL'),
         'transaction_type' => env('MPESA_TRANSACTION_TYPE', 'CustomerBuyGoodsOnline'),
         'timeout' => (int) env('MPESA_TIMEOUT', 30),
-        'partyb' => env('MPESA_PARTYB', '4953118'),
+        // Optional override. Defaults to business shortcode when omitted.
+        'partyb' => env('MPESA_PARTYB'),
         
         'env' => env('MPESA_ENV', 'live'),
         'sandbox_url' => 'https://sandbox.safaricom.co.ke',

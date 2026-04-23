@@ -18,6 +18,14 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->alias([
             'admin.auth' => \App\Http\Middleware\AdminAuth::class,
         ]);
+
+        // Captive-portal browsers can lose cookies between the package page
+        // and anonymous payment POSTs, so keep these public WiFi POSTs stateless.
+        $middleware->validateCsrfTokens(except: [
+            'wifi/pay',
+            'wifi/reconnect',
+            'wifi/extend',
+        ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         //

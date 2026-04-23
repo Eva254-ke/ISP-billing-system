@@ -300,6 +300,10 @@ class ProcessMpesaCallback implements ShouldQueue
                 $sessionPhone = $this->normalizePhoneForStorage($mpesaPhone) ?? (string) $payment->phone;
                 $sessionUsername = $this->resolveRadiusUsernameFromPhone((string) $payment->phone, (int) $payment->id);
                 $durationMinutes = max(1, (int) ($package->duration_in_minutes ?? 60));
+                $paymentMetadata = is_array($payment->metadata) ? $payment->metadata : [];
+                $paymentClientContext = is_array($paymentMetadata['client_context'] ?? null) ? $paymentMetadata['client_context'] : [];
+                $clientMac = $this->normalizeMacAddress((string) ($paymentClientContext['mac'] ?? ''));
+                $clientIp = $this->normalizeClientIpAddress((string) ($paymentClientContext['ip'] ?? ''));
                 $session = UserSession::query()->where('payment_id', $payment->id)->first();
 
                 if (!$session) {
@@ -310,6 +314,8 @@ class ProcessMpesaCallback implements ShouldQueue
                         'package_id' => $payment->package_id,
                         'username' => $sessionUsername,
                         'phone' => $sessionPhone,
+                        'mac_address' => $clientMac,
+                        'ip_address' => $clientIp,
                         'status' => 'idle',
                         'started_at' => $startAt,
                         'expires_at' => $startAt->copy()->addMinutes($durationMinutes),
@@ -330,6 +336,8 @@ class ProcessMpesaCallback implements ShouldQueue
                             ? ($session->username ?: $sessionUsername)
                             : $sessionUsername,
                         'phone' => $session->phone ?: $sessionPhone,
+                        'mac_address' => $clientMac ?? $session->mac_address,
+                        'ip_address' => $clientIp ?? $session->ip_address,
                         'status' => ((string) $session->status === 'active') ? 'active' : 'idle',
                         'started_at' => $startedAt,
                         'expires_at' => $targetExpiry,
@@ -650,6 +658,26 @@ class ProcessMpesaCallback implements ShouldQueue
         }
 
         return 'cbu' . $paymentId;
+    }
+
+    private function normalizeMacAddress(string $mac): ?string
+    {
+        $normalized = strtoupper(preg_replace('/[^0-9A-Fa-f]/', '', $mac) ?? '');
+        if (strlen($normalized) !== 12) {
+            return null;
+        }
+
+        return implode(':', str_split($normalized, 2));
+    }
+
+    private function normalizeClientIpAddress(string $ipAddress): ?string
+    {
+        $candidate = trim($ipAddress);
+        if ($candidate === '') {
+            return null;
+        }
+
+        return filter_var($candidate, FILTER_VALIDATE_IP) ? $candidate : null;
     }
 
     private function getRouterForTenant(int $tenantId): ?int

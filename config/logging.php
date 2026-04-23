@@ -125,15 +125,6 @@ return [
         // ──────────────────────────────────────────────────────────────────
         // 🧾 INTASEND LOGS (Gateway requests, responses, callback diagnostics)
         // ──────────────────────────────────────────────────────────────────
-        'intasend' => [
-            'driver' => 'daily',
-            'path' => storage_path('logs/intasend.log'),
-            'level' => env('LOG_INTASEND_LEVEL', 'info'),
-            'days' => env('LOG_INTASEND_DAYS', 90),
-            'replace_placeholders' => true,
-            'processors' => [PsrLogMessageProcessor::class, UidProcessor::class],
-        ],
-
         // ──────────────────────────────────────────────────────────────────
         // 📡 MIKROTIK LOGS (Router API calls, session management)
         // ──────────────────────────────────────────────────────────────────

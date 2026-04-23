@@ -17,6 +17,10 @@
         $supportTelHref = (is_string($supportDigits) && $supportDigits !== '')
             ? 'tel:+' . ltrim($supportDigits, '+')
             : 'tel:+254742939094';
+        $reconnectActionParams = array_filter([
+            'tenant_id' => old('tenant_id', $tenantId > 0 ? $tenantId : request()->query('tenant_id')),
+        ], static fn ($value) => $value !== null && $value !== '');
+        $tenantIdValue = (string) ($reconnectActionParams['tenant_id'] ?? '');
         $packagesParams = array_filter([
             'tenant_id' => $tenantId > 0 ? $tenantId : request()->query('tenant_id'),
             'phone' => old('phone', $phone ?? ''),
@@ -65,8 +69,9 @@
             <div class="cp-form-stack">
                 <section class="cp-form-card">
                     <h3 class="cp-form-title">Reconnect with M-Pesa code</h3>
-                    <form method="POST" action="{{ route('wifi.reconnect') }}">
+                    <form method="POST" action="{{ route('wifi.reconnect', $reconnectActionParams) }}">
                         @csrf
+                        <input type="hidden" name="tenant_id" value="{{ $tenantIdValue }}">
                         <input type="hidden" name="mac" value="{{ $clientMacValue }}">
                         <input type="hidden" name="ip" value="{{ $clientIpValue }}">
                         <div class="cp-field">
@@ -83,8 +88,9 @@
 
                 <section class="cp-form-card">
                     <h3 class="cp-form-title">Redeem voucher</h3>
-                    <form method="POST" action="{{ route('wifi.reconnect') }}">
+                    <form method="POST" action="{{ route('wifi.reconnect', $reconnectActionParams) }}">
                         @csrf
+                        <input type="hidden" name="tenant_id" value="{{ $tenantIdValue }}">
                         <input type="hidden" name="mac" value="{{ $clientMacValue }}">
                         <input type="hidden" name="ip" value="{{ $clientIpValue }}">
                         <div class="cp-field">

@@ -14,6 +14,7 @@ class DarajaService
     protected string $callbackUrl;
     protected string $environment;
     protected string $baseUrl;
+    protected string $partyB;
     protected string $transactionType;
     protected int $timeout;
 
@@ -26,12 +27,17 @@ class DarajaService
         $this->passkey = (string) ($overrides['passkey'] ?? config('services.mpesa.passkey', ''));
         $this->businessShortcode = (string) ($overrides['business_shortcode'] ?? config('services.mpesa.business_shortcode', ''));
         $this->callbackUrl = (string) ($overrides['callback_url'] ?? config('services.mpesa.callback_url', ''));
+        $this->partyB = (string) ($overrides['partyb'] ?? config('services.mpesa.partyb', ''));
         $this->environment = strtolower((string) ($overrides['env'] ?? config('services.mpesa.env', 'sandbox')));
         $transactionType = (string) ($overrides['transaction_type'] ?? config('services.mpesa.transaction_type', 'CustomerBuyGoodsOnline'));
         $this->transactionType = in_array($transactionType, ['CustomerBuyGoodsOnline', 'CustomerPayBillOnline'], true)
             ? $transactionType
             : 'CustomerBuyGoodsOnline';
         $this->timeout = (int) ($overrides['timeout'] ?? config('services.mpesa.timeout', 30));
+
+        if (trim($this->partyB) === '') {
+            $this->partyB = $this->businessShortcode;
+        }
 
         $configuredBaseUrl = (string) ($overrides['base_url'] ?? '');
         if ($configuredBaseUrl !== '') {
@@ -48,8 +54,7 @@ class DarajaService
     {
         return $this->hasCredentialPair()
             && trim($this->passkey) !== ''
-            && trim($this->businessShortcode) !== ''
-            && trim($this->callbackUrl) !== '';
+            && trim($this->businessShortcode) !== '';
     }
 
     public function hasCredentialPair(): bool
@@ -136,7 +141,7 @@ class DarajaService
             'TransactionType' => $this->transactionType,
             'Amount' => max(1, (int) round($amount)),
             'PartyA' => $stkPhone,
-            'PartyB' => config('services.mpesa.partyb', '4953118'),
+            'PartyB' => $this->partyB,
             'PhoneNumber' => $stkPhone,
             'CallBackURL' => $stkCallbackUrl,
             'AccountReference' => $reference,

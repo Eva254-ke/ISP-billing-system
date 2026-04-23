@@ -100,7 +100,9 @@ Route::prefix('portal')->name('portal.')->group(function () {
 Route::prefix('wifi')->name('wifi.')->group(function () {
     // Package selection and payment initiation
     Route::get('/', [\App\Http\Controllers\CaptivePortalController::class, 'packages'])->name('packages');
-    Route::post('/pay', [\App\Http\Controllers\CaptivePortalController::class, 'pay'])->name('pay');
+    Route::post('/pay', [\App\Http\Controllers\CaptivePortalController::class, 'pay'])
+        ->middleware('throttle:20,1')
+        ->name('pay');
     
     // Payment and session status
     Route::get('/status/{phone}', [\App\Http\Controllers\CaptivePortalController::class, 'status'])->name('status');
@@ -116,10 +118,14 @@ Route::prefix('wifi')->name('wifi.')->group(function () {
 
         return redirect()->route('wifi.packages', $params);
     })->name('reconnect.form');
-    Route::post('/reconnect', [\App\Http\Controllers\CaptivePortalController::class, 'reconnect'])->name('reconnect');
+    Route::post('/reconnect', [\App\Http\Controllers\CaptivePortalController::class, 'reconnect'])
+        ->middleware('throttle:20,1')
+        ->name('reconnect');
     
     // Session extension
-    Route::post('/extend', [\App\Http\Controllers\CaptivePortalController::class, 'extend'])->name('extend');
+    Route::post('/extend', [\App\Http\Controllers\CaptivePortalController::class, 'extend'])
+        ->middleware('throttle:20,1')
+        ->name('extend');
 });
 
 // Compatibility redirect: some users access captive via /admin/wifi by mistake.

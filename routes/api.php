@@ -53,57 +53,6 @@ Route::get('/health', function () {
 })->name('api.health');
 
 /**
- * IntaSend Webhook Callback
- * 
- * Called by IntaSend to notify of payment status changes.
- * 
- * Security:
- * - Signature verification via X-IntaSend-Signature header
- * - Rate limiting: 20 requests/minute per IP
- * - Idempotent processing via queued job
- * 
- * @see https://docs.intasend.com/webhooks
- */
-Route::post('/payment/callback', [PaymentController::class, 'callback'])
-    ->name('api.payment.callback')
-    ->withoutMiddleware(['auth:sanctum', 'web', 'throttle:api']); // Public webhook
-
-Route::post('/payment/paystack/callback', function (Request $request) {
-    \Log::channel('payment')->warning('Disabled Paystack webhook endpoint called', [
-        'path' => '/api/payment/paystack/callback',
-        'ip' => $request->ip(),
-        'user_agent' => $request->userAgent(),
-    ]);
-
-    return response()->json([
-        'status' => 'disabled',
-        'message' => 'Paystack webhook is disabled. Use M-Pesa Daraja callback.',
-    ], 410);
-})
-    ->name('api.payment.paystack.callback')
-    ->withoutMiddleware(['auth:sanctum', 'web', 'throttle:api']); // Public endpoint kept for backward compatibility
-
-Route::post('/paystack/webhook', function (Request $request) {
-    \Log::channel('payment')->warning('Disabled Paystack webhook endpoint called', [
-        'path' => '/api/paystack/webhook',
-        'ip' => $request->ip(),
-        'user_agent' => $request->userAgent(),
-    ]);
-
-    return response()->json([
-        'status' => 'disabled',
-        'message' => 'Paystack webhook is disabled. Use M-Pesa Daraja callback.',
-    ], 410);
-})
-    ->name('api.paystack.webhook')
-    ->withoutMiddleware(['auth:sanctum', 'web', 'throttle:api']); // Public endpoint kept for backward compatibility
-
-// Backward-compatible IntaSend webhook alias using the same callback pipeline.
-Route::post('/intasend/callback', [PaymentController::class, 'callback'])
-    ->name('intasend.callback')
-    ->withoutMiddleware(['auth:sanctum', 'web', 'throttle:api']);
-
-/**
  * M-Pesa Daraja Callback (Primary)
  * Public webhook endpoint for STK callbacks.
  */
@@ -339,7 +288,7 @@ Route::middleware(['throttle:api'])->group(function () {
     });
 
     // ──────────────────────────────────────────────────────────────────────
-    // PAYMENT MANAGEMENT (IntaSend Integration)
+    // PAYMENT MANAGEMENT (Daraja Reporting)
     // ──────────────────────────────────────────────────────────────────────
     
     Route::prefix('payments')->name('payments.')->group(function () {
@@ -373,47 +322,6 @@ Route::middleware(['throttle:api'])->group(function () {
             ->name('show')
             ->whereNumber('payment');
         
-        /**
-         * Initiate IntaSend STK Push payment
-         * 
-         * Payload:
-         * {
-         *   "phone": "254712345678",
-         *   "package_id": 123,
-         *   "session_code": "WIFI-ABC123"
-         * }
-         * 
-         * Response: 202 Accepted with checkout_request_id
-         */
-        Route::post('/initiate', [PaymentController::class, 'initiate'])
-            ->name('initiate');
-        
-        /**
-         * Retry a failed payment (idempotent)
-         */
-        Route::post('/{payment}/retry', [PaymentController::class, 'retry'])
-            ->name('retry')
-            ->whereNumber('payment');
-        
-        /**
-         * Refund payment (admin-only, requires approval workflow)
-         * 
-         * Permissions: refund-payments
-         */
-        Route::post('/{payment}/refund', [PaymentController::class, 'refund'])
-            ->name('refund')
-            ->whereNumber('payment')
-            ->can('refund-payments');
-        
-        /**
-         * Manual payout to tenant (override auto-payout)
-         * 
-         * Permissions: manage-payouts
-         */
-        Route::post('/{payment}/payout', [PaymentController::class, 'manualPayout'])
-            ->name('payout')
-            ->whereNumber('payment')
-            ->can('manage-payouts');
     });
 
     // ──────────────────────────────────────────────────────────────────────
@@ -560,7 +468,7 @@ Route::middleware(['throttle:api'])->group(function () {
     Route::prefix('settings')->name('settings.')->group(function () {
         
         /**
-         * Get tenant payment configuration (IntaSend settings)
+         * Get tenant payment configuration.
          */
         Route::get('/payment', function (Request $request) {
             $tenant = $request->user()->tenant;
@@ -568,9 +476,11 @@ Route::middleware(['throttle:api'])->group(function () {
             return response()->json([
                 'success' => true,
                 'data' => [
-                    'intasend_configured' => !empty($tenant->intasend_public_key),
+                    'daraja_only' => true,
+                    'daraja_configured' => !empty($tenant->payment_shortcode) || !empty($tenant->till_number),
                     'till_number' => $tenant->till_number,
                     'auto_payout_enabled' => $tenant->auto_payout_enabled ?? true,
+                    'callback_url' => $tenant->callback_url,
                     'commission' => [
                         'type' => $tenant->commission_type,
                         'rate' => $tenant->commission_rate,

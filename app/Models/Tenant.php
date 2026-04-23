@@ -53,9 +53,6 @@ class Tenant extends Model
         'bank_account',
         'bank_code',
         'personal_phone',
-        'intasend_public_key',
-        'intasend_secret_key',
-        'intasend_mode',
         
         // ──────────────────────────────────────────────────────────────────
         // COMMISSION SETTINGS
@@ -132,7 +129,6 @@ class Tenant extends Model
     protected $hidden = [
         'bank_account',
         'personal_phone',
-        'intasend_secret_key',
         'settings',
         'metadata',
     ];
@@ -304,8 +300,6 @@ class Tenant extends Model
             'bank_account' => $this->bank_account,
             'bank_code' => $this->bank_code,
             'personal_phone' => $this->personal_phone,
-            'intasend_public_key' => $this->intasend_public_key,
-            'intasend_mode' => $this->intasend_mode,
             'is_configured' => $this->payment_shortcode || $this->till_number || $this->bank_account || $this->personal_phone,
         ];
     }
@@ -475,11 +469,6 @@ class Tenant extends Model
         return $this->payment_method === self::PAYMENT_METHOD_PERSONAL;
     }
 
-    public function usesIntaSend(): bool
-    {
-        return !empty($this->intasend_public_key) && !empty($this->intasend_secret_key);
-    }
-
     public function getApiShortcodeAttribute(): ?string
     {
         return $this->payment_shortcode ?? $this->till_number;
@@ -488,20 +477,6 @@ class Tenant extends Model
     public function getApiAccountReferenceAttribute(): string
     {
         return $this->payment_account_name ?? $this->name ?? 'WiFi Payment';
-    }
-
-    public function getIntaSendConfigAttribute(): ?array
-    {
-        if (!$this->usesIntaSend()) {
-            return null;
-        }
-        
-        return [
-            'public_key' => $this->intasend_public_key,
-            'secret_key' => $this->intasend_secret_key,
-            'mode' => $this->intasend_mode ?? 'sandbox',
-            'callback_url' => $this->callback_url,
-        ];
     }
 
     // ──────────────────────────────────────────────────────────────────────

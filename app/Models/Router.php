@@ -268,17 +268,24 @@ class Router extends Model
     public function getWalledGardenRulesAttribute(): array
     {
         $domains = $this->walled_garden_domains ?? [];
+        $portalHosts = array_filter([
+            parse_url((string) config('app.url'), PHP_URL_HOST),
+            parse_url((string) ($this->attributes['captive_portal_url'] ?? ''), PHP_URL_HOST),
+        ]);
         $default = [
-            parse_url(config('app.url'), PHP_URL_HOST),
+            ...$portalHosts,
             'cloudbridge.network',
-            'intasend.com',
+            '*.cloudbridge.network',
             'mpesa.co.ke',
             'safaricom.co.ke',
+            '*.safaricom.co.ke',
+            'api.safaricom.co.ke',
+            'sandbox.safaricom.co.ke',
             '*.googleapis.com',
             '*.gstatic.com',
         ];
         
-        return array_unique(array_merge($default, $domains));
+        return array_values(array_filter(array_unique(array_merge($default, $domains))));
     }
 
     public function getRadiusNasIdentifierAttribute(): string

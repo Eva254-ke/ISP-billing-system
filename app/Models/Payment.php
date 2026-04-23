@@ -81,7 +81,9 @@ class Payment extends Model
     const TYPE_VOUCHER = 'voucher';
 
     const CHANNEL_MPESA = 'mpesa';
-    const CHANNEL_INTASEND = 'intasend';
+    const CHANNEL_CAPTIVE_PORTAL = 'captive_portal';
+    const CHANNEL_SESSION_EXTENSION = 'session_extension';
+    const CHANNEL_VOUCHER = 'voucher';
     const CHANNEL_CASH = 'cash';
 
     // ──────────────────────────────────────────────────────────────────────
@@ -159,7 +161,10 @@ class Payment extends Model
 
     public function scopeCaptivePortal($query)
     {
-        return $query->where('type', self::TYPE_CAPTIVE_PORTAL);
+        return $query->where(function ($inner) {
+            $inner->where('type', self::TYPE_CAPTIVE_PORTAL)
+                ->orWhere('payment_channel', self::CHANNEL_CAPTIVE_PORTAL);
+        });
     }
 
     public function scopeByPhone($query, $phone)
@@ -210,12 +215,14 @@ class Payment extends Model
 
     public function getIsCaptivePortalAttribute(): bool
     {
-        return $this->type === self::TYPE_CAPTIVE_PORTAL;
+        return $this->type === self::TYPE_CAPTIVE_PORTAL
+            || $this->payment_channel === self::CHANNEL_CAPTIVE_PORTAL;
     }
 
     public function getIsExtensionAttribute(): bool
     {
-        return $this->type === self::TYPE_SESSION_EXTENSION;
+        return $this->type === self::TYPE_SESSION_EXTENSION
+            || $this->payment_channel === self::CHANNEL_SESSION_EXTENSION;
     }
 
     public function getCanBeReconnectedAttribute(): bool
@@ -315,7 +322,7 @@ class Payment extends Model
         ]);
     }
 
-    public function markFailed(string $reason = null): void
+    public function markFailed(?string $reason = null): void
     {
         $this->update([
             'status' => self::STATUS_FAILED,
@@ -480,7 +487,7 @@ class Payment extends Model
             'status' => self::STATUS_PENDING,
             'type' => self::TYPE_CAPTIVE_PORTAL,
             'reference' => $reference,
-            'payment_channel' => self::CHANNEL_INTASEND,
+            'payment_channel' => self::CHANNEL_CAPTIVE_PORTAL,
             'metadata' => ['created_via' => 'captive_portal'],
         ], $extra));
     }
@@ -505,7 +512,7 @@ class Payment extends Model
             'type' => self::TYPE_SESSION_EXTENSION,
             'reference' => $reference,
             'parent_payment_id' => $parentPaymentId,
-            'payment_channel' => self::CHANNEL_INTASEND,
+            'payment_channel' => self::CHANNEL_SESSION_EXTENSION,
             'metadata' => ['created_via' => 'session_extension'],
         ], $extra));
     }
