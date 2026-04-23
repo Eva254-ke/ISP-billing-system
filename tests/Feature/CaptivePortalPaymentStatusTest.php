@@ -552,6 +552,96 @@ class CaptivePortalPaymentStatusTest extends TestCase
         $this->assertSame('query_pending', data_get($payment->metadata, 'daraja_last_status'));
     }
 
+    public function test_status_keeps_verifying_when_query_reports_gateway_timeout(): void
+    {
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant);
+        $payment = $this->createPayment($tenant, $package, [
+            'status' => 'pending',
+            'mpesa_checkout_request_id' => 'ws_CO_gateway_timeout_001',
+            'metadata' => [
+                'daraja_last_status' => 'pending_verification',
+            ],
+        ]);
+
+        $daraja = Mockery::mock(DarajaService::class);
+        $daraja->shouldReceive('queryStkStatus')->once()->with('ws_CO_gateway_timeout_001')->andReturn([
+            'success' => true,
+            'final' => true,
+            'is_pending' => false,
+            'is_success' => false,
+            'is_failed' => true,
+            'response_code' => '0',
+            'result_code' => 2002,
+            'result_desc' => 'Gateway timeout while processing the transaction.',
+            'merchant_request_id' => '29115-99999-1',
+            'checkout_request_id' => 'ws_CO_gateway_timeout_001',
+            'receipt_number' => null,
+            'phone_number' => null,
+            'amount' => null,
+            'raw' => [
+                'ResultCode' => 2002,
+                'ResultDesc' => 'Gateway timeout while processing the transaction.',
+                'CheckoutRequestID' => 'ws_CO_gateway_timeout_001',
+            ],
+            'error' => null,
+        ]);
+        $this->app->instance(DarajaService::class, $daraja);
+
+        $response = $this->getJson(route('wifi.status.check', [
+            'phone' => '0712345678',
+            'tenant_id' => $tenant->id,
+            'payment' => $payment->id,
+            'recheck' => 1,
+        ]));
+
+        $response->assertOk();
+        $response->assertJson([
+            'status' => 'verifying',
+            'payment_id' => $payment->id,
+            'session_active' => false,
+        ]);
+
+        $payment->refresh();
+        $this->assertSame('pending', $payment->status);
+        $this->assertSame('query_pending', data_get($payment->metadata, 'daraja_last_status'));
+        $this->assertTrue((bool) data_get($payment->metadata, 'daraja_verification_required'));
+    }
+
+    public function test_recent_failed_query_timeout_payment_stays_in_verifying_state(): void
+    {
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant);
+        $payment = $this->createPayment($tenant, $package, [
+            'status' => 'failed',
+            'failed_at' => now()->subMinutes(2),
+            'mpesa_checkout_request_id' => 'ws_CO_gateway_timeout_failed_001',
+            'callback_data' => [
+                'ResultCode' => 2002,
+                'ResultDesc' => 'Gateway timeout while processing the transaction.',
+            ],
+            'metadata' => [
+                'daraja_last_status' => 'failed_via_query',
+                'daraja_query_result_code' => 2002,
+                'daraja_query_result_desc' => 'Gateway timeout while processing the transaction.',
+                'daraja_last_query_at' => now()->toIso8601String(),
+            ],
+        ]);
+
+        $response = $this->getJson(route('wifi.status.check', [
+            'phone' => '0712345678',
+            'tenant_id' => $tenant->id,
+            'payment' => $payment->id,
+        ]));
+
+        $response->assertOk();
+        $response->assertJson([
+            'status' => 'verifying',
+            'payment_id' => $payment->id,
+            'session_active' => false,
+        ]);
+    }
+
     public function test_mpesa_callback_marks_underpaid_transaction_failed(): void
     {
         $tenant = $this->createTenant();

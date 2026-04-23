@@ -401,8 +401,7 @@ class CaptivePortalController extends Controller
 
         $metadata = is_array($payment->metadata) ? $payment->metadata : [];
         $lastStatus = trim((string) ($metadata['daraja_last_status'] ?? ''));
-        $callbackResultCode = data_get($payment->callback_data, 'ResultCode');
-        $hasFinalFailureFromCallback = is_numeric($callbackResultCode) && (int) $callbackResultCode !== 0;
+        $hasFinalFailureFromCallback = $this->hasFinalFailureFromCallback($payment, $metadata);
         $recentFailure = $payment->failed_at?->gt(now()->subMinutes(self::VERIFICATION_WINDOW_MINUTES)) ?? false;
         $likelyStillProcessing = $this->isPaymentFailureLikelyStillProcessing($payment, $metadata);
 
@@ -479,9 +478,27 @@ class CaptivePortalController extends Controller
             'captive_payment_id' => $payment->id,
         ]);
 
-        $payment = $this->captureClientContextForPayment($request, $payment);
-        $this->reconcileDarajaPaymentIfNeeded($payment, $request->boolean('recheck'));
-        $payment = $payment->fresh();
+        try {
+            $payment = $this->captureClientContextForPayment($request, $payment);
+        } catch (\Throwable $e) {
+            Log::warning('Captive client context capture skipped after transient payment update failure', [
+                'payment_id' => $payment->id,
+                'phone' => $phone,
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        try {
+            $this->reconcileDarajaPaymentIfNeeded($payment, $request->boolean('recheck'));
+        } catch (\Throwable $e) {
+            Log::warning('Captive status reconciliation skipped after transient payment update failure', [
+                'payment_id' => $payment->id,
+                'phone' => $phone,
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        $payment = $payment->fresh() ?? $payment;
 
         if (in_array($payment->status, ['completed', 'confirmed'], true)) {
             try {
@@ -1149,11 +1166,10 @@ class CaptivePortalController extends Controller
 
         if ($status === 'failed' && !$force) {
             $recentFailure = $payment->failed_at?->gt(now()->subMinutes(self::VERIFICATION_WINDOW_MINUTES)) ?? false;
-            $callbackResultCode = data_get($payment->callback_data, 'ResultCode');
             $lastStatus = trim((string) ($metadata['daraja_last_status'] ?? ''));
             $likelyStillProcessing = $this->isPaymentFailureLikelyStillProcessing($payment, $metadata);
+            $hasFinalFailureFromCallback = $this->hasFinalFailureFromCallback($payment, $metadata);
 
-            $hasFinalFailureFromCallback = is_numeric($callbackResultCode) && (int) $callbackResultCode !== 0;
             if (
                 !$recentFailure
                 || $hasFinalFailureFromCallback
@@ -1272,27 +1288,27 @@ class CaptivePortalController extends Controller
             return true;
         }
 
-        $resultCode = $result['result_code'] ?? null;
-        $resultDesc = strtolower(trim((string) ($result['result_desc'] ?? '')));
-
-        if (
-            str_contains($resultDesc, 'still under process')
-            || str_contains($resultDesc, 'still under processing')
-            || str_contains($resultDesc, 'under process')
-            || str_contains($resultDesc, 'under processing')
-            || str_contains($resultDesc, 'being processed')
-            || str_contains($resultDesc, 'in progress')
-            || str_contains($resultDesc, 'processing')
-        ) {
-            return true;
-        }
-
-        return is_numeric($resultCode) && (int) $resultCode === 1;
+        return $this->isDarajaQueryResultLikelyStillProcessing(
+            $this->normalizeDarajaResultCode($result['result_code'] ?? null),
+            (string) ($result['result_desc'] ?? '')
+        );
     }
 
     private function isPaymentFailureLikelyStillProcessing(Payment $payment, array $metadata = []): bool
     {
         $metadata = $metadata !== [] ? $metadata : (is_array($payment->metadata) ? $payment->metadata : []);
+        $queryResultCode = $this->normalizeDarajaResultCode(
+            $metadata['daraja_query_result_code'] ?? data_get($payment->callback_data, 'ResultCode')
+        );
+        $queryResultDesc = (string) (
+            $metadata['daraja_query_result_desc']
+            ?? data_get($payment->callback_data, 'ResultDesc')
+            ?? ''
+        );
+
+        if ($this->isDarajaQueryResultLikelyStillProcessing($queryResultCode, $queryResultDesc)) {
+            return true;
+        }
 
         $failureText = strtolower(trim((string) (
             $payment->reconciliation_notes
@@ -1312,6 +1328,46 @@ class CaptivePortalController extends Controller
             || str_contains($failureText, 'being processed')
             || str_contains($failureText, 'in progress')
             || str_contains($failureText, 'processing');
+    }
+
+    private function hasFinalFailureFromCallback(Payment $payment, array $metadata = []): bool
+    {
+        $metadata = $metadata !== [] ? $metadata : (is_array($payment->metadata) ? $payment->metadata : []);
+
+        if (trim((string) ($metadata['daraja_last_status'] ?? '')) !== 'failed_callback') {
+            return false;
+        }
+
+        $callbackResultCode = $this->normalizeDarajaResultCode(data_get($payment->callback_data, 'ResultCode'));
+
+        return $callbackResultCode !== null && $callbackResultCode !== 0;
+    }
+
+    private function normalizeDarajaResultCode(mixed $value): ?int
+    {
+        return is_numeric($value) ? (int) $value : null;
+    }
+
+    private function isDarajaQueryResultLikelyStillProcessing(?int $resultCode, string $resultDesc): bool
+    {
+        $resultDesc = strtolower(trim($resultDesc));
+
+        if (
+            str_contains($resultDesc, 'still under process')
+            || str_contains($resultDesc, 'still under processing')
+            || str_contains($resultDesc, 'under process')
+            || str_contains($resultDesc, 'under processing')
+            || str_contains($resultDesc, 'being processed')
+            || str_contains($resultDesc, 'in progress')
+            || str_contains($resultDesc, 'processing')
+            || str_contains($resultDesc, 'gateway timeout')
+            || str_contains($resultDesc, 'timed out')
+            || str_contains($resultDesc, 'timeout')
+        ) {
+            return true;
+        }
+
+        return in_array($resultCode, [1, 2002], true);
     }
 
     private function activatePaidAccess(Payment $payment): ?UserSession
@@ -1658,12 +1714,27 @@ class CaptivePortalController extends Controller
 
         $paymentMetadata = is_array($payment->metadata) ? $payment->metadata : [];
         $existingClientMeta = is_array($paymentMetadata['client_context'] ?? null) ? $paymentMetadata['client_context'] : [];
+
+        foreach (['user_agent', 'request_ip'] as $stickyKey) {
+            if (!empty($existingClientMeta[$stickyKey]) && !empty($clientContextMeta[$stickyKey])) {
+                $clientContextMeta[$stickyKey] = $existingClientMeta[$stickyKey];
+            }
+        }
+
         $mergedClientMeta = array_merge($existingClientMeta, $clientContextMeta);
 
         if ($mergedClientMeta !== $existingClientMeta) {
             $paymentMetadata['client_context'] = $mergedClientMeta;
-            $payment->update(['metadata' => $paymentMetadata]);
-            $payment->refresh();
+
+            try {
+                $payment->update(['metadata' => $paymentMetadata]);
+                $payment->refresh();
+            } catch (\Throwable $e) {
+                Log::warning('Captive client context update skipped after transient payment lock', [
+                    'payment_id' => $payment->id,
+                    'error' => $e->getMessage(),
+                ]);
+            }
         }
 
         $session = UserSession::query()->where('payment_id', $payment->id)->first();
@@ -1681,7 +1752,15 @@ class CaptivePortalController extends Controller
             }
 
             if ($sessionUpdates !== []) {
-                $session->update($sessionUpdates);
+                try {
+                    $session->update($sessionUpdates);
+                } catch (\Throwable $e) {
+                    Log::warning('Captive session context update skipped after transient lock', [
+                        'payment_id' => $payment->id,
+                        'session_id' => $session->id,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
             }
         }
 

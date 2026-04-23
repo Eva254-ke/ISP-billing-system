@@ -345,73 +345,6 @@ class ProcessMpesaCallback implements ShouldQueue
                 }
 
                 $session = $session->fresh();
-                $expiresAt = $session?->expires_at ?? now()->addMinutes($durationMinutes);
-                $activationContext = [
-                    'payment_id' => $payment->id,
-                    'checkout_request_id' => $checkoutRequestId,
-                    'tenant_id' => $payment->tenant_id,
-                    'router_id' => $routerId,
-                    'session_id' => $session->id,
-                    'username' => $sessionUsername,
-                    'radius_enabled' => (bool) config('radius.enabled', false),
-                    'client_mac' => $session->mac_address,
-                    'client_ip' => $session->ip_address,
-                ];
-
-                if ((bool) config('radius.enabled', false)) {
-                    try {
-                        $radiusProvisioning->provisionUser(
-                            username: $sessionUsername,
-                            password: $sessionUsername,
-                            package: $package,
-                            expiresAt: $expiresAt
-                        );
-
-                        $radiusMetadata = [
-                            'provisioned' => true,
-                            'username' => $sessionUsername,
-                            'provisioned_at' => now()->toIso8601String(),
-                            'expires_at' => $expiresAt->toIso8601String(),
-                            'auth_hint' => 'password_equals_username',
-                            'last_error' => null,
-                            'last_failed_at' => null,
-                        ];
-
-                        $this->attachRadiusMetadataToSession($session, $radiusMetadata);
-                        $this->attachRadiusMetadataToPayment($payment, $radiusMetadata);
-
-                        Log::channel('payment')->info('RADIUS provisioned for confirmed callback payment', [
-                            'payment_id' => $payment->id,
-                            'checkout_request_id' => $checkoutRequestId,
-                            'session_id' => $session->id,
-                            'username' => $sessionUsername,
-                            'router_id' => $routerId,
-                            'client_mac' => $session->mac_address,
-                            'client_ip' => $session->ip_address,
-                            'expires_at' => $expiresAt->toIso8601String(),
-                        ]);
-                    } catch (\Throwable $radiusError) {
-                        $radiusMetadata = [
-                            'provisioned' => false,
-                            'username' => $sessionUsername,
-                            'last_error' => $radiusError->getMessage(),
-                            'last_failed_at' => now()->toIso8601String(),
-                            'expires_at' => $expiresAt->toIso8601String(),
-                        ];
-
-                        $this->attachRadiusMetadataToSession($session, $radiusMetadata);
-                        $this->attachRadiusMetadataToPayment($payment, $radiusMetadata);
-
-                        Log::channel('radius')->error('RADIUS provisioning failed for confirmed callback payment', [
-                            'payment_id' => $payment->id,
-                            'checkout_request_id' => $checkoutRequestId,
-                            'session_id' => $session->id,
-                            'username' => $sessionUsername,
-                            'router_id' => $routerId,
-                            'error' => $radiusError->getMessage(),
-                        ]);
-                    }
-                }
 
                 if ((string) $session->status === 'active') {
                     $payment->update([
@@ -427,63 +360,24 @@ class ProcessMpesaCallback implements ShouldQueue
                     return;
                 }
 
-                $result = $sessionManager->activateSession($session, $package);
+                $payment->update([
+                    'status' => 'confirmed',
+                    'session_id' => $session->id,
+                    'reconciliation_notes' => 'Payment confirmed. Activating internet access.',
+                ]);
 
-                if ($result['success']) {
-                    $payment->update([
-                        'status' => 'completed',
-                        'completed_at' => now(),
-                        'activated_at' => now(),
-                        'session_id' => $session->id,
-                        'reconciliation_notes' => null,
-                    ]);
+                DB::commit();
+                $lock->release();
 
-                    Log::channel('payment')->info('Session activated successfully', [
-                        'payment_id' => $payment->id,
-                        'checkout_request_id' => $checkoutRequestId,
-                        'session_id' => $session->id,
-                        'username' => $session->username,
-                        'router_id' => $routerId,
-                    ]);
-                } else {
-                    Log::channel('mikrotik')->error('Session activation failed after payment confirmation', array_merge($activationContext, [
-                        'error' => $result['error'] ?? 'Unknown error',
-                        'queued' => (bool) ($result['queued'] ?? false),
-                        'missing_client_context' => (bool) ($result['missing_client_context'] ?? false),
-                    ]));
+                $this->activateConfirmedSessionNow(
+                    payment: $payment->fresh() ?? $payment,
+                    session: $session->fresh() ?? $session,
+                    checkoutRequestId: $checkoutRequestId,
+                    sessionManager: $sessionManager,
+                    radiusProvisioning: $radiusProvisioning
+                );
 
-                    $paymentMetadata = is_array($payment->metadata) ? $payment->metadata : [];
-                    $activationMetadata = is_array($paymentMetadata['activation'] ?? null) ? $paymentMetadata['activation'] : [];
-                    $activationMetadata = array_merge($activationMetadata, [
-                        'last_failed_at' => now()->toIso8601String(),
-                        'last_error' => (string) ($result['error'] ?? 'Unknown'),
-                        'queued' => (bool) ($result['queued'] ?? false),
-                        'missing_client_context' => (bool) ($result['missing_client_context'] ?? false),
-                        'router_id' => $routerId,
-                        'session_id' => $session->id,
-                        'radius_enabled' => (bool) config('radius.enabled', false),
-                        'checkout_request_id' => $checkoutRequestId,
-                    ]);
-
-                    $payment->update([
-                        'status' => 'confirmed',
-                        'session_id' => $session->id,
-                        'reconciliation_notes' => 'Payment confirmed but internet activation is pending: ' . ($result['error'] ?? 'Unknown'),
-                        'metadata' => array_merge($paymentMetadata, [
-                            'activation' => $activationMetadata,
-                        ]),
-                    ]);
-
-                    // Queue retry for session activation (for both RADIUS and local hotspot modes).
-                    \App\Jobs\ActivateSession::dispatch($session->fresh())->onQueue('high');
-
-                    Log::channel('payment')->warning('Payment confirmed but internet activation is still pending', array_merge($activationContext, [
-                        'error' => $result['error'] ?? 'Unknown',
-                        'queued' => (bool) ($result['queued'] ?? false),
-                        'missing_client_context' => (bool) ($result['missing_client_context'] ?? false),
-                        'retry_dispatched' => true,
-                    ]));
-                }
+                return;
 
             }
             // PROCESS FAILED PAYMENT
@@ -715,24 +609,6 @@ class ProcessMpesaCallback implements ShouldQueue
         return filter_var($candidate, FILTER_VALIDATE_IP) ? $candidate : null;
     }
 
-    private function attachRadiusMetadataToSession(UserSession $session, array $radiusMetadata): void
-    {
-        $sessionMetadata = is_array($session->metadata) ? $session->metadata : [];
-        $existingRadiusMetadata = is_array($sessionMetadata['radius'] ?? null) ? $sessionMetadata['radius'] : [];
-        $sessionMetadata['radius'] = array_merge($existingRadiusMetadata, $radiusMetadata);
-        $session->update(['metadata' => $sessionMetadata]);
-        $session->refresh();
-    }
-
-    private function attachRadiusMetadataToPayment(Payment $payment, array $radiusMetadata): void
-    {
-        $paymentMetadata = is_array($payment->metadata) ? $payment->metadata : [];
-        $existingRadiusMetadata = is_array($paymentMetadata['radius'] ?? null) ? $paymentMetadata['radius'] : [];
-        $paymentMetadata['radius'] = array_merge($existingRadiusMetadata, $radiusMetadata);
-        $payment->update(['metadata' => $paymentMetadata]);
-        $payment->refresh();
-    }
-
     private function getRouterForTenant(int $tenantId): ?int
     {
         return \App\Models\Router::where('tenant_id', $tenantId)
@@ -748,6 +624,73 @@ class ProcessMpesaCallback implements ShouldQueue
     // ──────────────────────────────────────────────────────────────────
     // FAILED JOB HANDLER
     // ──────────────────────────────────────────────────────────────────
+
+    private function activateConfirmedSessionNow(
+        Payment $payment,
+        UserSession $session,
+        string $checkoutRequestId,
+        SessionManager $sessionManager,
+        FreeRadiusProvisioningService $radiusProvisioning
+    ): void {
+        $activationContext = [
+            'payment_id' => $payment->id,
+            'checkout_request_id' => $checkoutRequestId,
+            'tenant_id' => $payment->tenant_id,
+            'router_id' => $session->router_id,
+            'session_id' => $session->id,
+            'username' => $session->username,
+            'radius_enabled' => (bool) config('radius.enabled', false),
+            'client_mac' => $session->mac_address,
+            'client_ip' => $session->ip_address,
+        ];
+
+        try {
+            (new ActivateSession($session->fresh() ?? $session))->handle($sessionManager, $radiusProvisioning);
+
+            $payment->refresh();
+            $session->refresh();
+
+            Log::channel('payment')->info('Session activated successfully after payment confirmation', array_merge($activationContext, [
+                'payment_status' => $payment->status,
+                'session_status' => $session->status,
+            ]));
+        } catch (\Throwable $activationError) {
+            $payment = $payment->fresh() ?? $payment;
+            $session = $session->fresh() ?? $session;
+
+            $paymentMetadata = is_array($payment->metadata) ? $payment->metadata : [];
+            $activationMetadata = is_array($paymentMetadata['activation'] ?? null) ? $paymentMetadata['activation'] : [];
+            $missingClientContext = empty($session->mac_address) && empty($session->ip_address);
+            $activationMetadata = array_merge($activationMetadata, [
+                'last_failed_at' => now()->toIso8601String(),
+                'last_error' => $activationError->getMessage(),
+                'queued' => true,
+                'missing_client_context' => $missingClientContext,
+                'router_id' => $session->router_id,
+                'session_id' => $session->id,
+                'radius_enabled' => (bool) config('radius.enabled', false),
+                'checkout_request_id' => $checkoutRequestId,
+            ]);
+
+            $payment->update([
+                'status' => 'confirmed',
+                'session_id' => $session->id,
+                'reconciliation_notes' => 'Payment confirmed but internet activation is pending: ' . $activationError->getMessage(),
+                'metadata' => array_merge($paymentMetadata, [
+                    'activation' => $activationMetadata,
+                ]),
+            ]);
+
+            ActivateSession::dispatch($session->fresh() ?? $session)->onQueue('high');
+
+            Log::channel('payment')->warning('Payment confirmed but internet activation is still pending', array_merge($activationContext, [
+                'error' => $activationError->getMessage(),
+                'queued' => true,
+                'missing_client_context' => $missingClientContext,
+                'retry_dispatched' => true,
+            ]));
+        }
+    }
 
     public function failed(\Throwable $exception): void
     {
