@@ -95,25 +95,37 @@ Route::post('/mpesa/callback/{tenant?}', function (Request $request, ?int $tenan
         'ip' => $request->ip(),
     ]);
 
-    try {
-        // Process immediately so paid users are activated without queue latency.
-        ProcessMpesaCallback::dispatchSync($normalized);
-    } catch (\Throwable $syncException) {
-        Log::channel('payment')->error('Synchronous M-Pesa callback processing failed, queuing retry', [
-            'checkout_request_id' => $normalized['CheckoutRequestID'] ?? null,
-            'error' => $syncException->getMessage(),
-        ]);
-
+    // Acknowledge the webhook immediately so Cloudflare/Safaricom do not wait
+    // on session activation work before receiving a 200.
+    app()->terminating(function () use ($normalized): void {
         try {
-            ProcessMpesaCallback::dispatch($normalized)->onQueue('critical');
-        } catch (\Throwable $queueException) {
-            Log::channel('payment')->critical('Failed to queue M-Pesa callback retry after sync failure', [
+            ProcessMpesaCallback::dispatchSync($normalized);
+        } catch (\Throwable $syncException) {
+            Log::channel('payment')->error('Post-response M-Pesa callback processing failed, queuing retry', [
                 'checkout_request_id' => $normalized['CheckoutRequestID'] ?? null,
-                'sync_error' => $syncException->getMessage(),
-                'queue_error' => $queueException->getMessage(),
+                'error' => $syncException->getMessage(),
             ]);
+
+            if ((string) config('queue.default', 'sync') === 'sync') {
+                Log::channel('payment')->critical('Failed to queue M-Pesa callback retry because the queue driver is sync', [
+                    'checkout_request_id' => $normalized['CheckoutRequestID'] ?? null,
+                    'sync_error' => $syncException->getMessage(),
+                ]);
+
+                return;
+            }
+
+            try {
+                ProcessMpesaCallback::dispatch($normalized)->onQueue('critical');
+            } catch (\Throwable $queueException) {
+                Log::channel('payment')->critical('Failed to queue M-Pesa callback retry after post-response failure', [
+                    'checkout_request_id' => $normalized['CheckoutRequestID'] ?? null,
+                    'sync_error' => $syncException->getMessage(),
+                    'queue_error' => $queueException->getMessage(),
+                ]);
+            }
         }
-    }
+    });
 
     return response()->json(['ResultCode' => 0, 'ResultDesc' => 'Accepted']);
 })

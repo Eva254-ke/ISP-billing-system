@@ -540,26 +540,10 @@ class CaptivePortalController extends Controller
         $activeSession = $this->resolveConnectedSession($payment);
 
         $statusView = $this->deriveStatusView($payment, $activeSession);
-        $identityResolver = app(RadiusIdentityResolver::class);
-        $radiusIdentity = $this->resolveRadiusIdentityForPayment($payment);
-        $radiusPureFlow = $statusView === 'paid'
-            && !$activeSession
-            && $identityResolver->shouldUsePureRadiusFlow($radiusIdentity);
-        $radiusPendingReauth = $statusView === 'paid'
-            && !$activeSession
-            && !$radiusPureFlow
-            && $identityResolver->shouldBypassRouterActivation($radiusIdentity);
-        $radiusAutoLogin = $radiusPureFlow
-            ? $this->buildHotspotAutoLoginPayload($payment, $radiusIdentity)
-            : null;
-
-        $radiusFallback = null;
-        if ($statusView === 'paid' && !$activeSession && (bool) config('radius.enabled', false) && !$radiusPendingReauth) {
-            $radiusFallback = [
-                'username' => $radiusIdentity['username'],
-                'password_hint' => 'Use the same value as username',
-            ];
-        }
+        $radiusPortalState = $this->resolveRadiusPortalState($payment, $statusView, $activeSession);
+        $radiusPendingReauth = (bool) $radiusPortalState['pending_reauth'];
+        $radiusAutoLogin = $radiusPortalState['auto_login'];
+        $radiusFallback = $radiusPortalState['fallback'];
         
         return view('captive.status', compact('payment', 'phone', 'activeSession', 'statusView', 'radiusFallback', 'radiusPendingReauth', 'radiusAutoLogin'));
     }
@@ -976,17 +960,57 @@ class CaptivePortalController extends Controller
         $session = $this->resolveConnectedSession($payment);
 
         $status = $this->deriveStatusView($payment, $session);
+        $radiusPortalState = $this->resolveRadiusPortalState($payment, $status, $session);
 
         return response()->json([
             'status' => $status,
             'payment_id' => $payment->id,
             'session_active' => $session ? true : false,
             'expires_at' => $session ? $session->expires_at->toIso8601String() : null,
+            'radius_auto_login' => $radiusPortalState['auto_login'],
+            'radius_pending_reauth' => (bool) $radiusPortalState['pending_reauth'],
             'package' => $payment->package ? [
                 'name' => $payment->package->name,
                 'duration_minutes' => $payment->package->duration_in_minutes,
             ] : null
         ]);
+    }
+
+    /**
+     * @return array{
+     *   auto_login:?array<string, string>,
+     *   pending_reauth:bool,
+     *   fallback:?array<string, string>
+     * }
+     */
+    private function resolveRadiusPortalState(Payment $payment, string $statusView, ?UserSession $activeSession = null): array
+    {
+        if ($statusView !== 'paid' || $activeSession || !(bool) config('radius.enabled', false)) {
+            return [
+                'auto_login' => null,
+                'pending_reauth' => false,
+                'fallback' => null,
+            ];
+        }
+
+        $identityResolver = app(RadiusIdentityResolver::class);
+        $radiusIdentity = $this->resolveRadiusIdentityForPayment($payment);
+        $radiusPureFlow = $identityResolver->shouldUsePureRadiusFlow($radiusIdentity);
+        $radiusPendingReauth = !$radiusPureFlow
+            && $identityResolver->shouldBypassRouterActivation($radiusIdentity);
+
+        return [
+            'auto_login' => $radiusPureFlow
+                ? $this->buildHotspotAutoLoginPayload($payment, $radiusIdentity)
+                : null,
+            'pending_reauth' => $radiusPendingReauth,
+            'fallback' => !$radiusPendingReauth
+                ? [
+                    'username' => $radiusIdentity['username'],
+                    'password_hint' => 'Use the same value as username',
+                ]
+                : null,
+        ];
     }
     
     private function initiateStkPush(Payment $payment, Package $package, string $phone, string $flow): array

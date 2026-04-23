@@ -85,6 +85,12 @@ return [
         'callback_url' => env('MPESA_CALLBACK_URL'),
         'transaction_type' => env('MPESA_TRANSACTION_TYPE', 'CustomerBuyGoodsOnline'),
         'timeout' => (int) env('MPESA_TIMEOUT', 30),
+        // Use shorter stage-specific defaults for browser-facing requests so a
+        // stalled Daraja round-trip does not sit behind Cloudflare until 524.
+        'connect_timeout' => env('MPESA_CONNECT_TIMEOUT', 5),
+        'oauth_timeout' => env('MPESA_OAUTH_TIMEOUT'),
+        'stk_push_timeout' => env('MPESA_STK_PUSH_TIMEOUT'),
+        'stk_query_timeout' => env('MPESA_STK_QUERY_TIMEOUT'),
         // Keep SSL verification enabled in production. Set MPESA_CA_BUNDLE to a PEM bundle
         // if the host OS trust store is missing the Safaricom certificate chain.
         'verify_ssl' => env('MPESA_VERIFY_SSL', true),

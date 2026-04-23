@@ -363,6 +363,95 @@ class CaptivePortalPaymentStatusTest extends TestCase
         $this->assertSame('QK999XYZ', $payment->mpesa_receipt_number);
     }
 
+    public function test_check_status_returns_radius_auto_login_payload_for_paid_pure_radius_payment(): void
+    {
+        config()->set('radius.enabled', true);
+        config()->set('radius.pure_radius', true);
+
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant);
+        $router = $this->createRouter($tenant, [
+            'status' => 'online',
+            'last_seen_at' => now(),
+        ]);
+
+        $payment = $this->createPayment($tenant, $package, [
+            'status' => 'confirmed',
+            'confirmed_at' => now(),
+            'mpesa_checkout_request_id' => 'ws_CO_pure_radius_payload_001',
+        ]);
+
+        $sessionManager = Mockery::mock(SessionManager::class);
+        $sessionManager->shouldNotReceive('activateSession');
+        $this->app->instance(SessionManager::class, $sessionManager);
+
+        $radiusProvisioning = Mockery::mock(FreeRadiusProvisioningService::class);
+        $radiusProvisioning->shouldReceive('provisionUser')->once();
+        $this->app->instance(FreeRadiusProvisioningService::class, $radiusProvisioning);
+
+        $response = $this->getJson(route('wifi.status.check', [
+            'phone' => '0712345678',
+            'tenant_id' => $tenant->id,
+            'payment' => $payment->id,
+            'link-login-only' => 'http://' . $router->ip_address . '/login',
+            'dst' => 'https://example.com/after-login',
+            'popup' => 'true',
+        ]));
+
+        $response->assertOk();
+        $response->assertJson([
+            'status' => 'paid',
+            'payment_id' => $payment->id,
+            'session_active' => false,
+            'radius_pending_reauth' => false,
+        ]);
+        $response->assertJsonPath('radius_auto_login.action', 'http://' . $router->ip_address . '/login');
+        $response->assertJsonPath('radius_auto_login.username', 'cb0712345678');
+        $response->assertJsonPath('radius_auto_login.password', 'cb0712345678');
+        $response->assertJsonPath('radius_auto_login.dst', 'https://example.com/after-login');
+        $response->assertJsonPath('radius_auto_login.popup', 'true');
+    }
+
+    public function test_mpesa_callback_route_acknowledges_immediately_and_processes_after_response(): void
+    {
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant);
+
+        $payment = $this->createPayment($tenant, $package, [
+            'status' => 'pending',
+            'mpesa_checkout_request_id' => 'ws_CO_callback_route_001',
+        ]);
+
+        $response = $this->postJson(route('api.mpesa.callback', ['tenant' => $tenant->id]), [
+            'Body' => [
+                'stkCallback' => [
+                    'MerchantRequestID' => '29115-12345-9',
+                    'CheckoutRequestID' => 'ws_CO_callback_route_001',
+                    'ResultCode' => 0,
+                    'ResultDesc' => 'The service request is processed successfully.',
+                    'CallbackMetadata' => [
+                        'Item' => [
+                            ['Name' => 'MpesaReceiptNumber', 'Value' => 'QKROUTE001'],
+                            ['Name' => 'PhoneNumber', 'Value' => '254712345678'],
+                            ['Name' => 'Amount', 'Value' => 50],
+                        ],
+                    ],
+                ],
+            ],
+        ]);
+
+        $response->assertOk();
+        $response->assertJson([
+            'ResultCode' => 0,
+            'ResultDesc' => 'Accepted',
+        ]);
+
+        $payment->refresh();
+
+        $this->assertSame('confirmed', $payment->status);
+        $this->assertSame('QKROUTE001', $payment->mpesa_receipt_number);
+    }
+
     public function test_pay_reuses_recent_pending_payment_attempt_instead_of_creating_duplicate(): void
     {
         $tenant = $this->createTenant();

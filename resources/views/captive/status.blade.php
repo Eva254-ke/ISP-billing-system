@@ -307,20 +307,22 @@
             @endif
         </article>
 
-        @if($radiusAutoLogin)
-            <form id="cpRadiusAutoLoginForm" method="POST" action="{{ $radiusAutoLogin['action'] }}" target="cpRadiusAutoLoginFrame" hidden>
-                <input type="hidden" name="username" value="{{ $radiusAutoLogin['username'] }}">
-                <input type="hidden" name="password" value="{{ $radiusAutoLogin['password'] }}">
-                @if(!empty($radiusAutoLogin['dst']))
-                    <input type="hidden" name="dst" value="{{ $radiusAutoLogin['dst'] }}">
-                @endif
-                @if(!empty($radiusAutoLogin['popup']))
-                    <input type="hidden" name="popup" value="{{ $radiusAutoLogin['popup'] }}">
-                @endif
-                @if(!empty($radiusAutoLogin['chap_id']) && !empty($radiusAutoLogin['chap_challenge']))
-                    <input type="hidden" name="response" value="">
-                    <input type="hidden" name="chap-id" value="{{ $radiusAutoLogin['chap_id'] }}">
-                    <input type="hidden" name="chap-challenge" value="{{ $radiusAutoLogin['chap_challenge'] }}">
+        @if($shouldAutoPoll || $radiusAutoLogin)
+            <form id="cpRadiusAutoLoginForm" method="POST" @if($radiusAutoLogin) action="{{ $radiusAutoLogin['action'] }}" @endif target="cpRadiusAutoLoginFrame" hidden>
+                @if($radiusAutoLogin)
+                    <input type="hidden" name="username" value="{{ $radiusAutoLogin['username'] }}">
+                    <input type="hidden" name="password" value="{{ $radiusAutoLogin['password'] }}">
+                    @if(!empty($radiusAutoLogin['dst']))
+                        <input type="hidden" name="dst" value="{{ $radiusAutoLogin['dst'] }}">
+                    @endif
+                    @if(!empty($radiusAutoLogin['popup']))
+                        <input type="hidden" name="popup" value="{{ $radiusAutoLogin['popup'] }}">
+                    @endif
+                    @if(!empty($radiusAutoLogin['chap_id']) && !empty($radiusAutoLogin['chap_challenge']))
+                        <input type="hidden" name="response" value="">
+                        <input type="hidden" name="chap-id" value="{{ $radiusAutoLogin['chap_id'] }}">
+                        <input type="hidden" name="chap-challenge" value="{{ $radiusAutoLogin['chap_challenge'] }}">
+                    @endif
                 @endif
             </form>
             <iframe id="cpRadiusAutoLoginFrame" name="cpRadiusAutoLoginFrame" hidden></iframe>
@@ -333,62 +335,8 @@
     </main>
 
     <script>
-        @if($shouldAutoPoll)
-        const currentStatus = @json($statusView);
-        let statusPollInFlight = false;
-
-        const pollStatus = async () => {
-            if (statusPollInFlight) {
-                return;
-            }
-
-            statusPollInFlight = true;
-            try {
-                const response = await fetch('{{ $statusCheckRoute }}', {
-                    headers: { 'Accept': 'application/json' },
-                    cache: 'no-store'
-                });
-
-                if (!response.ok) {
-                    return;
-                }
-
-                let payload = null;
-                try {
-                    payload = await response.json();
-                } catch (jsonError) {
-                    return;
-                }
-
-                if (!payload || typeof payload !== 'object') {
-                    return;
-                }
-
-                if (payload.session_active === true) {
-                    if (currentStatus !== 'activated') {
-                        window.location.reload();
-                    }
-                    return;
-                }
-
-                const nextStatus = (payload.status || '').toLowerCase();
-                if (nextStatus !== '' && nextStatus !== currentStatus) {
-                    window.location.reload();
-                }
-            } catch (error) {
-                // Keep silent, meta refresh acts as fallback.
-            } finally {
-                statusPollInFlight = false;
-            }
-        };
-
-        setInterval(() => {
-            void pollStatus();
-        }, 5000);
-        @endif
-
-        @if($radiusAutoLogin)
-        const radiusAutoLogin = @json($radiusAutoLogin);
+        @if($shouldAutoPoll || $radiusAutoLogin)
+        let radiusAutoLogin = @json($radiusAutoLogin);
         const radiusAutoLoginKey = `cp-radius-autologin:${@json((int) $payment->id)}`;
 
         function leftRotate(value, amount) {
@@ -493,11 +441,64 @@
             return `00${md5Hex(chapByte + password + hexToBinary(chapChallenge))}`;
         }
 
-        function submitRadiusAutoLogin() {
-            const form = document.getElementById('cpRadiusAutoLoginForm');
-            if (!form || !radiusAutoLogin || !radiusAutoLogin.action) {
+        function hasRecentRadiusAutoLoginAttempt(windowMs = 8000) {
+            try {
+                const lastAttemptAt = Number(sessionStorage.getItem(radiusAutoLoginKey) || 0);
+                return lastAttemptAt > 0 && (Date.now() - lastAttemptAt) < windowMs;
+            } catch (storageError) {
+                return false;
+            }
+        }
+
+        function setHiddenField(form, name, value) {
+            const existing = Array.from(form.querySelectorAll('input')).find((input) => input.name === name);
+
+            if (value === null || value === undefined || value === '') {
+                existing?.remove();
                 return;
             }
+
+            const field = existing || document.createElement('input');
+            field.type = 'hidden';
+            field.name = name;
+            field.value = String(value);
+
+            if (!existing) {
+                form.appendChild(field);
+            }
+        }
+
+        function hydrateRadiusAutoLoginForm(form, loginPayload) {
+            form.method = 'POST';
+            form.action = loginPayload.action || '';
+
+            setHiddenField(form, 'username', loginPayload.username || '');
+            setHiddenField(form, 'password', loginPayload.password || '');
+            setHiddenField(form, 'dst', loginPayload.dst || '');
+            setHiddenField(form, 'popup', loginPayload.popup || '');
+
+            if (loginPayload.chap_id && loginPayload.chap_challenge) {
+                setHiddenField(form, 'response', '');
+                setHiddenField(form, 'chap-id', loginPayload.chap_id);
+                setHiddenField(form, 'chap-challenge', loginPayload.chap_challenge);
+            } else {
+                setHiddenField(form, 'response', null);
+                setHiddenField(form, 'chap-id', null);
+                setHiddenField(form, 'chap-challenge', null);
+            }
+        }
+
+        function submitRadiusAutoLogin(loginPayload = null) {
+            if (loginPayload && typeof loginPayload === 'object') {
+                radiusAutoLogin = loginPayload;
+            }
+
+            const form = document.getElementById('cpRadiusAutoLoginForm');
+            if (!form || !radiusAutoLogin || !radiusAutoLogin.action) {
+                return false;
+            }
+
+            hydrateRadiusAutoLoginForm(form, radiusAutoLogin);
 
             const passwordInput = form.querySelector('input[name="password"]');
             const responseInput = form.querySelector('input[name="response"]');
@@ -522,18 +523,97 @@
             }
 
             form.submit();
+
+            return true;
         }
 
-        document.getElementById('cpRadiusConnectButton')?.addEventListener('click', submitRadiusAutoLogin);
+        document.getElementById('cpRadiusConnectButton')?.addEventListener('click', () => {
+            submitRadiusAutoLogin();
+        });
 
-        try {
-            const lastAttemptAt = Number(sessionStorage.getItem(radiusAutoLoginKey) || 0);
-            if (!lastAttemptAt || (Date.now() - lastAttemptAt) > 15000) {
-                setTimeout(submitRadiusAutoLogin, 1200);
+        if (radiusAutoLogin && !hasRecentRadiusAutoLoginAttempt()) {
+            setTimeout(() => {
+                submitRadiusAutoLogin();
+            }, 150);
+        }
+        @endif
+
+        @if($shouldAutoPoll)
+        let currentStatus = @json($statusView);
+        let statusPollInFlight = false;
+
+        const pollStatus = async () => {
+            if (statusPollInFlight) {
+                return;
             }
-        } catch (storageError) {
-            setTimeout(submitRadiusAutoLogin, 1200);
-        }
+
+            statusPollInFlight = true;
+            try {
+                const response = await fetch('{{ $statusCheckRoute }}', {
+                    headers: { 'Accept': 'application/json' },
+                    cache: 'no-store'
+                });
+
+                if (!response.ok) {
+                    return;
+                }
+
+                let payload = null;
+                try {
+                    payload = await response.json();
+                } catch (jsonError) {
+                    return;
+                }
+
+                if (!payload || typeof payload !== 'object') {
+                    return;
+                }
+
+                if (payload.session_active === true) {
+                    if (currentStatus !== 'activated') {
+                        window.location.reload();
+                    }
+                    return;
+                }
+
+                const nextStatus = (payload.status || '').toLowerCase();
+                const nextRadiusAutoLogin = payload.radius_auto_login && typeof payload.radius_auto_login === 'object'
+                    ? payload.radius_auto_login
+                    : null;
+                const nextRadiusPendingReauth = payload.radius_pending_reauth === true;
+
+                if (nextStatus === 'paid' && nextRadiusAutoLogin) {
+                    currentStatus = 'paid';
+
+                    if (!hasRecentRadiusAutoLoginAttempt()) {
+                        submitRadiusAutoLogin(nextRadiusAutoLogin);
+                    }
+
+                    return;
+                }
+
+                if (nextStatus === 'paid' && nextRadiusPendingReauth && currentStatus !== 'paid') {
+                    window.location.reload();
+                    return;
+                }
+
+                if (nextStatus !== '' && nextStatus !== currentStatus) {
+                    window.location.reload();
+                }
+            } catch (error) {
+                // Keep silent, meta refresh acts as fallback.
+            } finally {
+                statusPollInFlight = false;
+            }
+        };
+
+        setTimeout(() => {
+            void pollStatus();
+        }, 800);
+
+        setInterval(() => {
+            void pollStatus();
+        }, 2000);
         @endif
 
         @if($statusView === 'activated' && !empty($activeSession?->expires_at))

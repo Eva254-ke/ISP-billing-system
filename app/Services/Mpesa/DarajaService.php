@@ -18,6 +18,7 @@ class DarajaService
     protected string $partyB;
     protected string $transactionType;
     protected int $timeout;
+    protected float $connectTimeout;
     protected bool $verifySsl;
     protected ?string $caBundlePath;
 
@@ -37,6 +38,10 @@ class DarajaService
             ? $transactionType
             : 'CustomerBuyGoodsOnline';
         $this->timeout = (int) ($overrides['timeout'] ?? config('services.mpesa.timeout', 30));
+        $this->connectTimeout = $this->normalizeTimeout(
+            $overrides['connect_timeout'] ?? config('services.mpesa.connect_timeout', 5),
+            5.0
+        );
         $this->verifySsl = $this->normalizeBoolean(
             $overrides['verify_ssl'] ?? config('services.mpesa.verify_ssl', true),
             true
@@ -158,11 +163,10 @@ class DarajaService
         ];
 
         try {
-            $response = $this->request()
+            $response = $this->requestForStage('stk_push')
                 ->withToken((string) $token['access_token'])
                 ->acceptJson()
                 ->asJson()
-                ->timeout($this->timeout)
                 ->post($this->baseUrl . '/mpesa/stkpush/v1/processrequest', $payload);
 
             $result = $response->json() ?? [];
@@ -293,11 +297,10 @@ class DarajaService
         ];
 
         try {
-            $response = $this->request()
+            $response = $this->requestForStage('stk_query')
                 ->withToken((string) $token['access_token'])
                 ->acceptJson()
                 ->asJson()
-                ->timeout($this->timeout)
                 ->post($this->baseUrl . '/mpesa/stkpushquery/v1/query', $payload);
 
             $result = $response->json() ?? [];
@@ -394,10 +397,9 @@ class DarajaService
     private function requestAccessToken(): array
     {
         try {
-            $response = $this->request()
+            $response = $this->requestForStage('oauth')
                 ->withBasicAuth($this->consumerKey, $this->consumerSecret)
                 ->acceptJson()
-                ->timeout($this->timeout)
                 ->get($this->baseUrl . '/oauth/v1/generate', [
                     'grant_type' => 'client_credentials',
                 ]);
@@ -482,6 +484,58 @@ class DarajaService
         return Http::withOptions([
             'verify' => $this->caBundlePath ?? $this->verifySsl,
         ]);
+    }
+
+    private function requestForStage(string $stage): PendingRequest
+    {
+        return $this->request()
+            ->connectTimeout($this->connectTimeout)
+            ->timeout($this->timeoutForStage($stage));
+    }
+
+    private function timeoutForStage(string $stage): int
+    {
+        $configured = $this->configuredStageTimeout($stage);
+        if ($configured !== null) {
+            return $configured;
+        }
+
+        return match ($stage) {
+            'oauth' => max(5, min($this->timeout, 15)),
+            'stk_push' => max(10, min($this->timeout, 20)),
+            'stk_query' => max(5, min($this->timeout, 15)),
+            default => max(5, $this->timeout),
+        };
+    }
+
+    private function configuredStageTimeout(string $stage): ?int
+    {
+        $configKey = match ($stage) {
+            'oauth' => 'oauth_timeout',
+            'stk_push' => 'stk_push_timeout',
+            'stk_query' => 'stk_query_timeout',
+            default => null,
+        };
+
+        if ($configKey === null) {
+            return null;
+        }
+
+        $value = config("services.mpesa.{$configKey}");
+        if (!is_numeric($value) || (float) $value <= 0) {
+            return null;
+        }
+
+        return max(1, (int) ceil((float) $value));
+    }
+
+    private function normalizeTimeout(mixed $value, float $default): float
+    {
+        if (is_numeric($value) && (float) $value > 0) {
+            return max(1.0, (float) $value);
+        }
+
+        return max(1.0, $default);
     }
 
     private function normalizeBoolean(mixed $value, bool $default): bool
