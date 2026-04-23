@@ -75,6 +75,8 @@ class SessionManager
         
         if (!is_array($result) || !($result['success'] ?? false)) {
             // Refresh router connectivity state for more accurate retry decisions.
+            $diagnostics = [];
+
             try {
                 $this->mikrotikService->pingRouter($router);
                 $router = $router->fresh();
@@ -95,7 +97,14 @@ class SessionManager
             $queued = (string) ($router?->status ?? '') === Router::STATUS_OFFLINE;
 
             if ((string) ($router?->status ?? '') === Router::STATUS_WARNING) {
-                $error = 'Router reachable but MikroTik API login/command failed. Verify API username/password and permissions.';
+                $diagnostics = $router
+                    ? $this->mikrotikService->getConnectivityDiagnostics($router)
+                    : [];
+
+                $error = trim((string) ($diagnostics['message'] ?? ''));
+                if ($error === '') {
+                    $error = 'Router reachable but MikroTik API login/command failed. Verify API username/password and permissions.';
+                }
             }
 
             Log::channel('mikrotik')->warning('Session activation failed', [
@@ -111,6 +120,7 @@ class SessionManager
                 'queued' => $queued,
                 'error' => $error,
                 'missing_client_context' => (bool) (is_array($result) && ($result['missing_client_context'] ?? false)),
+                'connectivity_diagnostics' => $diagnostics,
             ]);
 
             return [
@@ -118,6 +128,7 @@ class SessionManager
                 'error' => $error,
                 'queued' => $queued,
                 'missing_client_context' => (bool) (is_array($result) && ($result['missing_client_context'] ?? false)),
+                'diagnostics' => $diagnostics,
             ];
         }
         

@@ -54,6 +54,8 @@ class RadiusHealthCheck extends Command
             $warnings[] = 'RADIUS auth and accounting ports are identical; verify this is intentional.';
         }
 
+        $this->checkLocalRadiusUdpPorts($serverIp, $authPort, $acctPort, $warnings, $errors);
+
         $connection = (string) config('radius.db_connection', 'radius');
         $dbConfig = (array) config("database.connections.{$connection}", []);
 
@@ -139,5 +141,134 @@ class RadiusHealthCheck extends Command
 
         $this->info('Radius health check passed.');
         return self::SUCCESS;
+    }
+
+    private function checkLocalRadiusUdpPorts(string $serverIp, int $authPort, int $acctPort, array &$warnings, array &$errors): void
+    {
+        foreach ([
+            'auth' => $authPort,
+            'accounting' => $acctPort,
+        ] as $label => $port) {
+            $probe = $this->probeLocalUdpPort($serverIp, $port);
+
+            if ($probe['status'] === 'free') {
+                $errors[] = "No local process appears to be bound to the RADIUS {$label} UDP port {$port} on {$probe['host']}. FreeRADIUS may be down or listening on the wrong interface.";
+                continue;
+            }
+
+            if ($probe['status'] === 'warning') {
+                $warnings[] = $probe['message'];
+            }
+        }
+    }
+
+    /**
+     * Attempt to determine whether a local UDP port is already in use.
+     *
+     * @return array{status:string,host:string,message:string}
+     */
+    private function probeLocalUdpPort(string $host, int $port): array
+    {
+        $resolvedHost = $this->resolveProbeHost($host);
+        if ($resolvedHost === null || $port < 1 || $port > 65535) {
+            return [
+                'status' => 'skip',
+                'host' => $host,
+                'message' => '',
+            ];
+        }
+
+        if (!function_exists('socket_create') || !function_exists('socket_bind')) {
+            return [
+                'status' => 'warning',
+                'host' => $resolvedHost,
+                'message' => "PHP sockets extension is unavailable, so the local UDP probe for {$resolvedHost}:{$port} was skipped.",
+            ];
+        }
+
+        $family = str_contains($resolvedHost, ':') ? AF_INET6 : AF_INET;
+        $socket = @socket_create($family, SOCK_DGRAM, SOL_UDP);
+
+        if ($socket === false) {
+            return [
+                'status' => 'warning',
+                'host' => $resolvedHost,
+                'message' => "Unable to create a UDP socket to probe {$resolvedHost}:{$port}.",
+            ];
+        }
+
+        $bound = @socket_bind($socket, $resolvedHost, $port);
+
+        if ($bound) {
+            socket_close($socket);
+
+            return [
+                'status' => 'free',
+                'host' => $resolvedHost,
+                'message' => '',
+            ];
+        }
+
+        $errno = socket_last_error($socket);
+        $error = strtolower(socket_strerror($errno));
+        socket_close($socket);
+
+        if ($this->isAddressInUseError($errno, $error)) {
+            return [
+                'status' => 'in_use',
+                'host' => $resolvedHost,
+                'message' => '',
+            ];
+        }
+
+        if ($this->isNonLocalAddressError($errno, $error)) {
+            return [
+                'status' => 'skip',
+                'host' => $resolvedHost,
+                'message' => '',
+            ];
+        }
+
+        return [
+            'status' => 'warning',
+            'host' => $resolvedHost,
+            'message' => "Unable to probe the local UDP port {$resolvedHost}:{$port}: {$error}.",
+        ];
+    }
+
+    private function resolveProbeHost(string $host): ?string
+    {
+        $candidate = trim($host);
+        if ($candidate === '') {
+            return null;
+        }
+
+        if (strtolower($candidate) === 'localhost') {
+            return '127.0.0.1';
+        }
+
+        if (filter_var($candidate, FILTER_VALIDATE_IP)) {
+            return $candidate;
+        }
+
+        $resolved = gethostbyname($candidate);
+        if ($resolved === $candidate || !filter_var($resolved, FILTER_VALIDATE_IP)) {
+            return null;
+        }
+
+        return $resolved;
+    }
+
+    private function isAddressInUseError(int $errno, string $error): bool
+    {
+        return in_array($errno, [48, 98, 10048], true) || str_contains($error, 'in use');
+    }
+
+    private function isNonLocalAddressError(int $errno, string $error): bool
+    {
+        return in_array($errno, [49, 99, 10049], true)
+            || str_contains($error, 'requested address')
+            || str_contains($error, 'cannot assign')
+            || str_contains($error, 'not available');
     }
 }
