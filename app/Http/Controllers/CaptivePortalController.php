@@ -24,6 +24,7 @@ class CaptivePortalController extends Controller
     private const STATUS_PRIORITIES = ['initiated', 'pending', 'confirmed', 'completed', 'activated'];
     private const KENYA_PHONE_REGEX = '/^(?:0[17]\d{8}|(?:\+?254)[17]\d{8})$/';
     private const VERIFICATION_WINDOW_MINUTES = 20;
+    private const VERIFICATION_QUERY_COOLDOWN_SECONDS = 5;
     private const DUPLICATE_PAYMENT_WINDOW_MINUTES = 20;
     private const PAYMENT_LOCK_SECONDS = 20;
     private const HOTSPOT_CONTEXT_SESSION_KEY = 'captive_hotspot_context';
@@ -472,6 +473,112 @@ class CaptivePortalController extends Controller
 
         return $statusView;
     }
+
+    private function findReconnectablePayment(string $mpesaCode, string $phone, int $tenantId): ?Payment
+    {
+        $payment = Payment::query()
+            ->where(function ($query) use ($mpesaCode) {
+                $query->where('mpesa_transaction_id', $mpesaCode)
+                    ->orWhere('mpesa_receipt_number', $mpesaCode)
+                    ->orWhere('mpesa_code', $mpesaCode);
+            })
+            ->when($tenantId > 0, fn ($query) => $query->where('tenant_id', $tenantId))
+            ->where('phone', $phone)
+            ->whereIn('payment_channel', self::STATUS_CHANNELS)
+            ->first();
+
+        if ($payment) {
+            return $payment;
+        }
+
+        $candidates = Payment::query()
+            ->when($tenantId > 0, fn ($query) => $query->where('tenant_id', $tenantId))
+            ->where('phone', $phone)
+            ->whereIn('payment_channel', self::STATUS_CHANNELS)
+            ->whereIn('status', ['pending', 'failed', 'confirmed', 'completed'])
+            ->where('created_at', '>=', now()->subHours(6))
+            ->orderByDesc('created_at')
+            ->limit(6)
+            ->get();
+
+        foreach ($candidates as $candidate) {
+            try {
+                $this->reconcileDarajaPaymentIfNeeded($candidate, true);
+            } catch (\Throwable $e) {
+                Log::warning('Reconnect recovery Daraja reconciliation failed', [
+                    'payment_id' => $candidate->id,
+                    'phone' => $phone,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+
+            $candidate = $candidate->fresh() ?? $candidate;
+
+            if ($this->paymentMatchesMpesaCode($candidate, $mpesaCode)) {
+                return $candidate;
+            }
+
+            if ($this->canRecoverReceiptNumberFromSuccessfulPayment($candidate, $mpesaCode)) {
+                $candidate->update([
+                    'mpesa_receipt_number' => $mpesaCode,
+                    'mpesa_code' => $candidate->mpesa_code ?: $mpesaCode,
+                ]);
+
+                return $candidate->fresh() ?? $candidate;
+            }
+        }
+
+        return null;
+    }
+
+    private function paymentMatchesMpesaCode(Payment $payment, string $mpesaCode): bool
+    {
+        $candidateCode = strtoupper(trim($mpesaCode));
+        if ($candidateCode === '') {
+            return false;
+        }
+
+        $candidates = [
+            $payment->mpesa_transaction_id,
+            $payment->mpesa_receipt_number,
+            $payment->mpesa_code,
+            data_get($payment->callback_data, 'MpesaReceiptNumber'),
+            data_get($payment->callback_data, 'ReceiptNumber'),
+            data_get($payment->callback_data, 'receipt_number'),
+            data_get($payment->callback_payload, 'MpesaReceiptNumber'),
+            data_get($payment->callback_payload, 'ReceiptNumber'),
+            data_get($payment->callback_payload, 'receipt_number'),
+        ];
+
+        foreach ($candidates as $candidate) {
+            if (strtoupper(trim((string) $candidate)) === $candidateCode) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function canRecoverReceiptNumberFromSuccessfulPayment(Payment $payment, string $mpesaCode): bool
+    {
+        if (!in_array((string) $payment->status, ['confirmed', 'completed'], true)) {
+            return false;
+        }
+
+        if (trim((string) $payment->mpesa_receipt_number) !== '') {
+            return false;
+        }
+
+        $normalizedCode = strtoupper(trim($mpesaCode));
+        if ($normalizedCode === '' || preg_match('/^[A-Z0-9]{6,32}$/', $normalizedCode) !== 1) {
+            return false;
+        }
+
+        return !Payment::withTrashed()
+            ->where('mpesa_receipt_number', $normalizedCode)
+            ->where('id', '!=', $payment->id)
+            ->exists();
+    }
     
     /**
      * Check payment status
@@ -705,14 +812,7 @@ class CaptivePortalController extends Controller
                 ->withInput();
         }
         
-        $payment = Payment::where(function($query) use ($mpesaCode) {
-                $query->where('mpesa_transaction_id', $mpesaCode)
-                    ->orWhere('mpesa_receipt_number', $mpesaCode);
-            })
-            ->when($tenantId > 0, fn ($query) => $query->where('tenant_id', $tenantId))
-            ->where('phone', $phone)
-            ->whereIn('payment_channel', self::STATUS_CHANNELS)
-            ->first();
+        $payment = $this->findReconnectablePayment($mpesaCode, $phone, $tenantId);
 
         if (!$payment) {
             return redirect()->back()
@@ -1221,7 +1321,7 @@ class CaptivePortalController extends Controller
             $lastQueryAt = isset($metadata['daraja_last_query_at']) ? trim((string) $metadata['daraja_last_query_at']) : '';
             if ($lastQueryAt !== '') {
                 try {
-                    if (\Illuminate\Support\Carbon::parse($lastQueryAt)->gt(now()->subSeconds(15))) {
+                    if (\Illuminate\Support\Carbon::parse($lastQueryAt)->gt(now()->subSeconds(self::VERIFICATION_QUERY_COOLDOWN_SECONDS))) {
                         return;
                     }
                 } catch (\Throwable) {

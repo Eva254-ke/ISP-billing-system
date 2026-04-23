@@ -39,6 +39,16 @@
         ], static fn ($value) => $value !== null && $value !== '');
         $paymentMeta = is_array($payment->metadata) ? $payment->metadata : [];
         $gatewayStatus = trim((string) ($paymentMeta['daraja_last_status'] ?? ''));
+        $pendingStatusLabel = match ($gatewayStatus) {
+            'pending_customer_confirmation' => 'Prompt sent',
+            'pending_verification', 'query_pending' => 'Verifying with M-Pesa',
+            default => 'Waiting for payment',
+        };
+        $pendingTitle = match ($gatewayStatus) {
+            'pending_customer_confirmation' => 'Complete the M-Pesa prompt',
+            'pending_verification', 'query_pending' => 'We are confirming your payment request',
+            default => 'Confirm the M-Pesa prompt',
+        };
         $failureReason = trim((string) (
             $payment->reconciliation_notes
             ?? ($paymentMeta['daraja_failure_reason'] ?? null)
@@ -100,11 +110,13 @@
             @if($statusView === 'pending')
                 <div class="cp-status-head">
                     <div>
-                        <span class="cp-status-pill warning">{{ $gatewayStatus === 'pending_verification' ? 'Verifying with M-Pesa' : 'Waiting for payment' }}</span>
-                        <h2 class="cp-section-title">{{ $gatewayStatus === 'pending_verification' ? 'We are confirming your payment request' : 'Confirm the M-Pesa prompt' }}</h2>
+                        <span class="cp-status-pill warning">{{ $pendingStatusLabel }}</span>
+                        <h2 class="cp-section-title">{{ $pendingTitle }}</h2>
                         <p class="cp-card-subtitle">
-                            @if($gatewayStatus === 'pending_verification')
+                            @if(in_array($gatewayStatus, ['pending_verification', 'query_pending'], true))
                                 If the prompt appears or money is deducted, do not pay again. Keep this page open while we check.
+                            @elseif($gatewayStatus === 'pending_customer_confirmation')
+                                If you already entered your PIN or money is deducted, do not pay again. Keep this page open while we verify and connect you.
                             @else
                                 Use phone <strong>{{ $phone }}</strong> and enter your PIN to continue.
                             @endif
@@ -122,8 +134,10 @@
                 <div class="cp-panel">
                     <h3>What happens next</h3>
                     <p>
-                        @if($gatewayStatus === 'pending_verification')
+                        @if(in_array($gatewayStatus, ['pending_verification', 'query_pending'], true))
                             We will keep checking automatically. If you already received the M-Pesa SMS, you can also use the reconnect option below.
+                        @elseif($gatewayStatus === 'pending_customer_confirmation')
+                            We have already sent the STK push. Once you approve it on your phone, we will keep checking automatically and connect you.
                         @else
                             After payment confirmation, your internet access will activate automatically.
                         @endif

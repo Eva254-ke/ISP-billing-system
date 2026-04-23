@@ -336,9 +336,17 @@ class DarajaService
                 'result_desc' => $resultDesc,
                 'merchant_request_id' => $result['MerchantRequestID'] ?? null,
                 'checkout_request_id' => $result['CheckoutRequestID'] ?? $checkoutRequestId,
-                'receipt_number' => !empty($result['MpesaReceiptNumber']) ? (string) $result['MpesaReceiptNumber'] : null,
-                'phone_number' => isset($result['PhoneNumber']) ? (string) $result['PhoneNumber'] : null,
-                'amount' => isset($result['Amount']) ? (float) $result['Amount'] : null,
+                'receipt_number' => $this->firstNonEmptyString([
+                    isset($result['MpesaReceiptNumber']) ? (string) $result['MpesaReceiptNumber'] : null,
+                    isset($result['ReceiptNumber']) ? (string) $result['ReceiptNumber'] : null,
+                    isset($result['receipt_number']) ? (string) $result['receipt_number'] : null,
+                ]),
+                'phone_number' => $this->firstNonEmptyString([
+                    isset($result['PhoneNumber']) ? (string) $result['PhoneNumber'] : null,
+                    isset($result['msisdn']) ? (string) $result['msisdn'] : null,
+                    isset($result['phone']) ? (string) $result['phone'] : null,
+                ]),
+                'amount' => isset($result['Amount']) ? (float) $result['Amount'] : (isset($result['amount']) ? (float) $result['amount'] : null),
                 'raw' => $result,
                 'error' => $accepted
                     ? null
@@ -555,5 +563,20 @@ class DarajaService
         }
 
         return (bool) $value;
+    }
+
+    /**
+     * @param  array<int, string|null>  $values
+     */
+    private function firstNonEmptyString(array $values): ?string
+    {
+        foreach ($values as $value) {
+            $candidate = trim((string) $value);
+            if ($candidate !== '') {
+                return $candidate;
+            }
+        }
+
+        return null;
     }
 }

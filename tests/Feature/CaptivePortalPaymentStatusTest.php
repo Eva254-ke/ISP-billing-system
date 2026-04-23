@@ -270,6 +270,109 @@ class CaptivePortalPaymentStatusTest extends TestCase
         $this->assertSame(Payment::TYPE_CAPTIVE_PORTAL, (string) $payment->type);
     }
 
+    public function test_reconnect_can_recover_recent_payment_after_daraja_query_confirms_success(): void
+    {
+        config()->set('radius.enabled', true);
+        config()->set('radius.pure_radius', true);
+
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant);
+        $router = $this->createRouter($tenant, [
+            'status' => 'online',
+            'last_seen_at' => now(),
+        ]);
+
+        $payment = $this->createPayment($tenant, $package, [
+            'status' => 'pending',
+            'mpesa_checkout_request_id' => 'ws_CO_reconnect_recovery_001',
+            'metadata' => [
+                'gateway' => 'daraja',
+                'hotspot_context' => [
+                    'link_login_only' => 'http://' . $router->ip_address . '/login',
+                ],
+            ],
+        ]);
+
+        $daraja = Mockery::mock(DarajaService::class);
+        $daraja->shouldReceive('queryStkStatus')->once()->with('ws_CO_reconnect_recovery_001')->andReturn([
+            'success' => true,
+            'final' => true,
+            'is_pending' => false,
+            'is_success' => true,
+            'is_failed' => false,
+            'response_code' => '0',
+            'result_code' => 0,
+            'result_desc' => 'The service request is processed successfully.',
+            'merchant_request_id' => '29115-99991-1',
+            'checkout_request_id' => 'ws_CO_reconnect_recovery_001',
+            'receipt_number' => null,
+            'phone_number' => '254712345678',
+            'amount' => 50.0,
+            'raw' => [
+                'ResultCode' => 0,
+                'ResultDesc' => 'The service request is processed successfully.',
+                'CheckoutRequestID' => 'ws_CO_reconnect_recovery_001',
+                'PhoneNumber' => '254712345678',
+                'Amount' => 50,
+            ],
+            'error' => null,
+        ]);
+        $daraja->shouldReceive('isConfigured')->andReturn(true);
+        $this->app->instance(DarajaService::class, $daraja);
+
+        $sessionManager = Mockery::mock(SessionManager::class);
+        $sessionManager->shouldNotReceive('activateSession');
+        $this->app->instance(SessionManager::class, $sessionManager);
+
+        $radiusProvisioning = Mockery::mock(FreeRadiusProvisioningService::class);
+        $radiusProvisioning->shouldReceive('provisionUser')->once();
+        $this->app->instance(FreeRadiusProvisioningService::class, $radiusProvisioning);
+
+        $response = $this->post(route('wifi.reconnect', ['tenant_id' => $tenant->id]), [
+            'tenant_id' => $tenant->id,
+            'phone' => '0712345678',
+            'mpesa_code' => 'QKRECOVER001',
+            'link-login-only' => 'http://' . $router->ip_address . '/login',
+        ]);
+
+        $payment->refresh();
+
+        $response->assertRedirect(route('wifi.status', [
+            'phone' => '0712345678',
+            'tenant_id' => $tenant->id,
+            'payment' => $payment->id,
+        ]));
+        $response->assertSessionHas('success');
+
+        $this->assertSame('confirmed', $payment->status);
+        $this->assertSame('QKRECOVER001', $payment->mpesa_receipt_number);
+        $this->assertSame(1, (int) $payment->reconnect_count);
+    }
+
+    public function test_status_shows_prompt_sent_after_successful_stk_acceptance(): void
+    {
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant);
+        $payment = $this->createPayment($tenant, $package, [
+            'status' => 'pending',
+            'mpesa_checkout_request_id' => 'ws_CO_prompt_sent_001',
+            'metadata' => [
+                'daraja_last_status' => 'pending_customer_confirmation',
+            ],
+        ]);
+
+        $response = $this->get(route('wifi.status', [
+            'phone' => '0712345678',
+            'tenant_id' => $tenant->id,
+            'payment' => $payment->id,
+        ]));
+
+        $response->assertOk();
+        $response->assertSeeText('Prompt sent');
+        $response->assertSeeText('Complete the M-Pesa prompt');
+        $response->assertSeeText('If you already entered your PIN or money is deducted, do not pay again.');
+    }
+
     public function test_check_status_recheck_can_reconcile_recent_failed_payment(): void
     {
         $tenant = $this->createTenant();
