@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Models\UserSession;
 use App\Services\MikroTik\MikroTikService;
+use App\Services\Radius\RadiusAccountingService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -32,7 +33,7 @@ class SyncSessionUsage implements ShouldQueue
         $this->onQueue('medium');
     }
 
-    public function handle(MikroTikService $mikrotikService): void
+    public function handle(MikroTikService $mikrotikService, RadiusAccountingService $radiusAccountingService): void
     {
         $session = UserSession::find($this->sessionId);
 
@@ -41,7 +42,22 @@ class SyncSessionUsage implements ShouldQueue
         }
 
         try {
-            $success = $mikrotikService->syncSessionUsage($session);
+            $success = false;
+
+            if ((bool) config('radius.enabled', false) && (bool) config('radius.pure_radius', false)) {
+                $success = $radiusAccountingService->syncActiveSession($session) !== null;
+
+                if (!$success && $session->expires_at?->isPast()) {
+                    $session->markTerminated('expired');
+                    Log::channel('radius')->info('Expired pure-RADIUS session marked terminated after accounting sync miss', [
+                        'session_id' => $session->id,
+                        'username' => $session->username,
+                    ]);
+                    return;
+                }
+            } else {
+                $success = $mikrotikService->syncSessionUsage($session);
+            }
 
             if ($success) {
                 Log::channel('mikrotik')->debug('Session usage synced', [
@@ -50,7 +66,7 @@ class SyncSessionUsage implements ShouldQueue
                 ]);
 
                 if ($session->data_limit_mb && $session->data_used_mb >= $session->data_limit_mb) {
-                    DisconnectSession::dispatch($session);
+                    DisconnectSession::dispatch($session, 'data_limit_reached');
                 }
             } else {
                 $session->increment('sync_retry_count');

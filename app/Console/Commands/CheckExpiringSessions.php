@@ -39,8 +39,13 @@ class CheckExpiringSessions extends Command
         // ──────────────────────────────────────────────────────────────────
         // 1. GET SESSIONS EXPIRING IN NEXT 30 MINUTES
         // ──────────────────────────────────────────────────────────────────
-        $expiring = UserSession::active()
-            ->expiringSoon(30)
+        $expiring = UserSession::query()
+            ->whereIn('status', ['active', 'idle'])
+            ->where('expires_at', '<=', now()->addMinutes(30))
+            ->where(function ($query) {
+                $query->where('expires_at', '>', now()->subMinutes(10))
+                    ->orWhere('grace_period_active', true);
+            })
             ->with(['router', 'package'])
             ->get();
 
@@ -51,7 +56,7 @@ class CheckExpiringSessions extends Command
         $disconnected = 0;
 
         foreach ($expiring as $session) {
-            $minutesRemaining = $session->expires_at->diffInMinutes(now());
+            $minutesRemaining = now()->diffInMinutes($session->expires_at, false);
 
             // ──────────────────────────────────────────────────────────────
             // EDGE CASE: Send warning SMS at T-10 minutes
@@ -91,7 +96,9 @@ class CheckExpiringSessions extends Command
         // ──────────────────────────────────────────────────────────────────
         // 2. SYNC USAGE DATA FOR ACTIVE SESSIONS (Not synced in 5 min)
         // ──────────────────────────────────────────────────────────────────
-        $needsSync = UserSession::active()
+        $needsSync = UserSession::query()
+            ->whereIn('status', ['active', 'idle'])
+            ->where('expires_at', '>', now()->subMinutes(5))
             ->needsSync(5)
             ->limit(100)
             ->get();
@@ -105,7 +112,8 @@ class CheckExpiringSessions extends Command
         // ──────────────────────────────────────────────────────────────────
         // 3. CLEANUP: Mark orphaned sessions as terminated
         // ──────────────────────────────────────────────────────────────────
-        $orphaned = UserSession::active()
+        $orphaned = UserSession::query()
+            ->where('status', 'active')
             ->where('expires_at', '<', now()->subHours(2))
             ->where('grace_period_active', false)
             ->limit(50)

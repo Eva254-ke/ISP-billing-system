@@ -6,6 +6,7 @@ use App\Models\Payment;
 use App\Models\UserSession;
 use App\Services\MikroTik\SessionManager;
 use App\Services\Radius\FreeRadiusProvisioningService;
+use App\Services\Radius\RadiusIdentityResolver;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -298,12 +299,17 @@ class ProcessMpesaCallback implements ShouldQueue
                 }
 
                 $sessionPhone = $this->normalizePhoneForStorage($mpesaPhone) ?? (string) $payment->phone;
-                $sessionUsername = $this->resolveRadiusUsernameFromPhone((string) $payment->phone, (int) $payment->id);
                 $durationMinutes = max(1, (int) ($package->duration_in_minutes ?? 60));
                 $paymentMetadata = is_array($payment->metadata) ? $payment->metadata : [];
                 $paymentClientContext = is_array($paymentMetadata['client_context'] ?? null) ? $paymentMetadata['client_context'] : [];
                 $clientMac = $this->normalizeMacAddress((string) ($paymentClientContext['mac'] ?? ''));
                 $clientIp = $this->normalizeClientIpAddress((string) ($paymentClientContext['ip'] ?? ''));
+                $identity = app(RadiusIdentityResolver::class)->resolve(
+                    phone: (string) $payment->phone,
+                    paymentId: (int) $payment->id,
+                    macAddress: $clientMac
+                );
+                $sessionUsername = (string) $identity['username'];
                 $session = UserSession::query()->where('payment_id', $payment->id)->first();
 
                 if (!$session) {
@@ -579,16 +585,6 @@ class ProcessMpesaCallback implements ShouldQueue
         return $digits;
     }
 
-    private function resolveRadiusUsernameFromPhone(string $phone, int $paymentId): string
-    {
-        $digits = preg_replace('/\D+/', '', $phone);
-        if ($digits !== '') {
-            return 'cb' . $digits;
-        }
-
-        return 'cbu' . $paymentId;
-    }
-
     private function normalizeMacAddress(string $mac): ?string
     {
         $normalized = strtoupper(preg_replace('/[^0-9A-Fa-f]/', '', $mac) ?? '');
@@ -650,7 +646,11 @@ class ProcessMpesaCallback implements ShouldQueue
             $payment->refresh();
             $session->refresh();
 
-            Log::channel('payment')->info('Session activated successfully after payment confirmation', array_merge($activationContext, [
+            $logMessage = ((string) $payment->status === 'completed' && (string) $session->status === 'active')
+                ? 'Session activated successfully after payment confirmation'
+                : 'RADIUS authorization prepared after payment confirmation';
+
+            Log::channel('payment')->info($logMessage, array_merge($activationContext, [
                 'payment_status' => $payment->status,
                 'session_status' => $session->status,
             ]));

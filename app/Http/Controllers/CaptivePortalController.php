@@ -5,12 +5,15 @@ namespace App\Http\Controllers;
 use Illuminate\Http\Request;
 use App\Models\Package;
 use App\Models\Payment;
+use App\Models\Router;
 use App\Models\Tenant;
 use App\Models\UserSession;
 use App\Models\Voucher;
 use App\Services\MikroTik\SessionManager;
 use App\Services\Mpesa\DarajaService;
+use App\Services\Radius\RadiusAccountingService;
 use App\Services\Radius\FreeRadiusProvisioningService;
+use App\Services\Radius\RadiusIdentityResolver;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Cache;
@@ -23,6 +26,17 @@ class CaptivePortalController extends Controller
     private const VERIFICATION_WINDOW_MINUTES = 20;
     private const DUPLICATE_PAYMENT_WINDOW_MINUTES = 20;
     private const PAYMENT_LOCK_SECONDS = 20;
+    private const HOTSPOT_CONTEXT_SESSION_KEY = 'captive_hotspot_context';
+    private const HOTSPOT_CONTEXT_KEYS = [
+        'link_login_only',
+        'link_login',
+        'dst',
+        'popup',
+        'chap_id',
+        'chap_challenge',
+        'link_orig',
+        'link_orig_esc',
+    ];
 
     /**
      * Show package selection page (public, no auth required)
@@ -35,6 +49,7 @@ class CaptivePortalController extends Controller
             ? ($this->normalizePhoneForStorage((string) $phoneInput) ?? trim((string) $phoneInput))
             : null;
         $clientContext = $this->resolveClientContext($request);
+        $hotspotContext = $this->captureHotspotContext($request);
         $clientMac = $clientContext['mac'];
         $clientIp = $clientContext['ip'];
         $mode = strtolower(trim((string) $request->query('mode', '')));
@@ -48,6 +63,7 @@ class CaptivePortalController extends Controller
                 'tenant' => null,
                 'clientMac' => $clientMac,
                 'clientIp' => $clientIp,
+                'hotspotContext' => $hotspotContext,
                 'tenantResolutionError' => 'Tenant portal not resolved. Use your tenant domain (e.g. https://your-subdomain.cloudbridge.network/wifi) or include tenant_id in the URL.',
             ], 400);
         }
@@ -55,7 +71,7 @@ class CaptivePortalController extends Controller
         session(['captive_tenant_id' => $tenant->id]);
 
         if ($showReconnectScreen) {
-            return view('captive.reconnect', compact('phone', 'tenant', 'clientMac', 'clientIp'));
+            return view('captive.reconnect', compact('phone', 'tenant', 'clientMac', 'clientIp', 'hotspotContext'));
         }
         
         $activeSession = null;
@@ -76,7 +92,7 @@ class CaptivePortalController extends Controller
             ->orderBy('price')
             ->get();
 
-        return view('captive.packages', compact('packages', 'activeSession', 'phone', 'tenant', 'clientMac', 'clientIp'));
+        return view('captive.packages', compact('packages', 'activeSession', 'phone', 'tenant', 'clientMac', 'clientIp', 'hotspotContext'));
     }
     
     /**
@@ -105,6 +121,8 @@ class CaptivePortalController extends Controller
         }
         $clientContext = $this->resolveClientContext($request);
         $clientContextMeta = $this->buildClientContextMeta($clientContext, $request);
+        $hotspotContext = $this->captureHotspotContext($request, $tenantId);
+        $hotspotContextMeta = $this->buildHotspotContextMeta($hotspotContext);
 
         $package = Package::query()
             ->when($tenantId > 0, fn ($query) => $query->where('tenant_id', $tenantId))
@@ -149,10 +167,16 @@ class CaptivePortalController extends Controller
         try {
             $existing = $this->findReusableCaptivePaymentAttempt($tenantId, $phone, (int) $package->id);
             if ($existing && $this->shouldReuseCaptivePaymentAttempt($existing)) {
-                if ($clientContextMeta !== []) {
+                if ($clientContextMeta !== [] || $hotspotContextMeta !== []) {
                     $existingMetadata = is_array($existing->metadata) ? $existing->metadata : [];
-                    $existingClientMeta = is_array($existingMetadata['client_context'] ?? null) ? $existingMetadata['client_context'] : [];
-                    $existingMetadata['client_context'] = array_merge($existingClientMeta, $clientContextMeta);
+                    if ($clientContextMeta !== []) {
+                        $existingClientMeta = is_array($existingMetadata['client_context'] ?? null) ? $existingMetadata['client_context'] : [];
+                        $existingMetadata['client_context'] = array_merge($existingClientMeta, $clientContextMeta);
+                    }
+                    if ($hotspotContextMeta !== []) {
+                        $existingHotspotMeta = is_array($existingMetadata['hotspot_context'] ?? null) ? $existingMetadata['hotspot_context'] : [];
+                        $existingMetadata['hotspot_context'] = array_merge($existingHotspotMeta, $hotspotContextMeta);
+                    }
                     $existing->update(['metadata' => $existingMetadata]);
                     $existing = $existing->fresh();
                 }
@@ -208,6 +232,7 @@ class CaptivePortalController extends Controller
                         'gateway' => $gateway,
                         'created_via' => 'captive_portal',
                         'client_context' => $clientContextMeta,
+                        'hotspot_context' => $hotspotContextMeta,
                     ],
                 ]);
             });
@@ -512,21 +537,31 @@ class CaptivePortalController extends Controller
             }
         }
 
-        $activeSession = UserSession::where('payment_id', $payment->id)
-            ->active()
-            ->first();
+        $activeSession = $this->resolveConnectedSession($payment);
 
         $statusView = $this->deriveStatusView($payment, $activeSession);
+        $identityResolver = app(RadiusIdentityResolver::class);
+        $radiusIdentity = $this->resolveRadiusIdentityForPayment($payment);
+        $radiusPureFlow = $statusView === 'paid'
+            && !$activeSession
+            && $identityResolver->shouldUsePureRadiusFlow($radiusIdentity);
+        $radiusPendingReauth = $statusView === 'paid'
+            && !$activeSession
+            && !$radiusPureFlow
+            && $identityResolver->shouldBypassRouterActivation($radiusIdentity);
+        $radiusAutoLogin = $radiusPureFlow
+            ? $this->buildHotspotAutoLoginPayload($payment, $radiusIdentity)
+            : null;
 
         $radiusFallback = null;
-        if ($statusView === 'paid' && !$activeSession && (bool) config('radius.enabled', false)) {
+        if ($statusView === 'paid' && !$activeSession && (bool) config('radius.enabled', false) && !$radiusPendingReauth) {
             $radiusFallback = [
-                'username' => $this->resolveRadiusUsernameFromPhone($payment->phone, $payment->id),
+                'username' => $radiusIdentity['username'],
                 'password_hint' => 'Use the same value as username',
             ];
         }
         
-        return view('captive.status', compact('payment', 'phone', 'activeSession', 'statusView', 'radiusFallback'));
+        return view('captive.status', compact('payment', 'phone', 'activeSession', 'statusView', 'radiusFallback', 'radiusPendingReauth', 'radiusAutoLogin'));
     }
     
     /**
@@ -537,6 +572,8 @@ class CaptivePortalController extends Controller
         $tenantId = $this->resolveTenantId($request);
         $clientContext = $this->resolveClientContext($request);
         $clientContextMeta = $this->buildClientContextMeta($clientContext, $request);
+        $hotspotContext = $this->captureHotspotContext($request, $tenantId);
+        $hotspotContextMeta = $this->buildHotspotContextMeta($hotspotContext);
 
         if ($tenantId <= 0) {
             return back()->withErrors(['Tenant portal not resolved. Reopen your WiFi portal and try again.']);
@@ -601,7 +638,7 @@ class CaptivePortalController extends Controller
             }
 
             try {
-                $payment = DB::transaction(function () use ($voucher, $phone, $routerId, $clientContextMeta) {
+                $payment = DB::transaction(function () use ($voucher, $phone, $routerId, $clientContextMeta, $hotspotContextMeta) {
                     $payment = Payment::create([
                         'tenant_id' => $voucher->tenant_id,
                         'phone' => $phone,
@@ -621,6 +658,7 @@ class CaptivePortalController extends Controller
                             'voucher_code' => $voucher->code_display,
                             'redeemed_via' => 'captive_portal',
                             'client_context' => $clientContextMeta,
+                            'hotspot_context' => $hotspotContextMeta,
                         ],
                     ]);
 
@@ -730,10 +768,16 @@ class CaptivePortalController extends Controller
                 return redirect()->back()->withErrors(['No active router is configured for this tenant.']);
             }
 
-            if ($clientContextMeta !== []) {
+            if ($clientContextMeta !== [] || $hotspotContextMeta !== []) {
                 $paymentMetadata = is_array($payment->metadata) ? $payment->metadata : [];
-                $existingClientMeta = is_array($paymentMetadata['client_context'] ?? null) ? $paymentMetadata['client_context'] : [];
-                $paymentMetadata['client_context'] = array_merge($existingClientMeta, $clientContextMeta);
+                if ($clientContextMeta !== []) {
+                    $existingClientMeta = is_array($paymentMetadata['client_context'] ?? null) ? $paymentMetadata['client_context'] : [];
+                    $paymentMetadata['client_context'] = array_merge($existingClientMeta, $clientContextMeta);
+                }
+                if ($hotspotContextMeta !== []) {
+                    $existingHotspotMeta = is_array($paymentMetadata['hotspot_context'] ?? null) ? $paymentMetadata['hotspot_context'] : [];
+                    $paymentMetadata['hotspot_context'] = array_merge($existingHotspotMeta, $hotspotContextMeta);
+                }
                 $payment->update(['metadata' => $paymentMetadata]);
                 $payment = $payment->fresh();
             }
@@ -929,9 +973,7 @@ class CaptivePortalController extends Controller
             }
         }
         
-        $session = UserSession::where('payment_id', $payment->id)
-            ->active()
-            ->first();
+        $session = $this->resolveConnectedSession($payment);
 
         $status = $this->deriveStatusView($payment, $session);
 
@@ -1390,13 +1432,24 @@ class CaptivePortalController extends Controller
         }
 
         $durationMinutes = max(1, (int) ($payment->package?->duration_in_minutes ?? 60));
-        $username = $this->resolveRadiusUsernameFromPhone($payment->phone, $payment->id);
-        $expiresAt = now()->copy()->addMinutes($durationMinutes);
         $paymentMetadata = is_array($payment->metadata) ? $payment->metadata : [];
         $paymentClientContext = is_array($paymentMetadata['client_context'] ?? null) ? $paymentMetadata['client_context'] : [];
-        $clientMac = $this->normalizeMacAddress((string) ($paymentClientContext['mac'] ?? ''));
-        $clientIp = $this->normalizeClientIpAddress((string) ($paymentClientContext['ip'] ?? ''));
+        $existingSession = UserSession::query()->where('payment_id', $payment->id)->latest('id')->first();
+        $clientMac = $this->normalizeMacAddress((string) ($paymentClientContext['mac'] ?? ''))
+            ?? $this->normalizeMacAddress((string) ($existingSession?->mac_address ?? ''));
+        $clientIp = $this->normalizeClientIpAddress((string) ($paymentClientContext['ip'] ?? ''))
+            ?? $this->normalizeClientIpAddress((string) ($existingSession?->ip_address ?? ''));
         $radiusEnabled = (bool) config('radius.enabled', false);
+        $identityResolver = app(RadiusIdentityResolver::class);
+        $identity = $identityResolver->resolve(
+            phone: (string) $payment->phone,
+            paymentId: (int) $payment->id,
+            macAddress: $clientMac
+        );
+        $radiusPureFlow = $identityResolver->shouldUsePureRadiusFlow($identity);
+        $username = (string) $identity['username'];
+        $password = (string) $identity['password'];
+        $defaultExpiresAt = now()->copy()->addMinutes($durationMinutes);
 
         if ($radiusEnabled && $clientMac === null && $clientIp === null) {
             Log::warning('Paid access activation missing captive client MAC/IP context in RADIUS mode', [
@@ -1420,9 +1473,13 @@ class CaptivePortalController extends Controller
                 'ip_address' => $clientIp,
                 'status' => 'idle',
                 'started_at' => now(),
-                'expires_at' => $expiresAt,
+                'expires_at' => $defaultExpiresAt,
             ]
         );
+
+        $expiresAt = $session->expires_at && $session->expires_at->isFuture()
+            ? $session->expires_at->copy()
+            : $defaultExpiresAt;
 
         $sessionUpdates = [];
         if ((int) $session->router_id !== (int) $routerId) {
@@ -1445,7 +1502,7 @@ class CaptivePortalController extends Controller
             if (!empty($payment->phone) && (string) ($session->phone ?? '') !== (string) $payment->phone) {
                 $sessionUpdates['phone'] = $payment->phone;
             }
-            $sessionUpdates['status'] = 'pending';
+            $sessionUpdates['status'] = 'idle';
             $sessionUpdates['expires_at'] = $expiresAt;
         }
         if ($sessionUpdates !== []) {
@@ -1461,23 +1518,32 @@ class CaptivePortalController extends Controller
             return $session->fresh();
         }
 
-        if ($radiusEnabled && $payment->package) {
+        $sessionMetadata = is_array($session->metadata) ? $session->metadata : [];
+        $existingRadiusMetadata = is_array($sessionMetadata['radius'] ?? null) ? $sessionMetadata['radius'] : [];
+        $radiusProvisioned = (bool) ($existingRadiusMetadata['provisioned'] ?? false)
+            && (string) ($existingRadiusMetadata['username'] ?? '') === $username
+            && $expiresAt->isFuture();
+
+        if ($radiusEnabled && $payment->package && !$radiusProvisioned) {
             try {
                 $radiusProvisioning = app(FreeRadiusProvisioningService::class);
                 $radiusProvisioning->provisionUser(
                     username: $username,
-                    password: $username,
+                    password: $password,
                     package: $payment->package,
                     expiresAt: $expiresAt
                 );
 
                 $radiusMetadata = [
-                    'provisioned' => true,
-                    'username' => $username,
-                    'provisioned_at' => now()->toIso8601String(),
-                    'expires_at' => $expiresAt->toIso8601String(),
-                    'auth_hint' => 'password_equals_username',
-                ];
+                        'provisioned' => true,
+                        'username' => $username,
+                        'provisioned_at' => now()->toIso8601String(),
+                        'expires_at' => $expiresAt->toIso8601String(),
+                        'auth_hint' => 'password_equals_username',
+                        'identity_type' => $identity['identity_type'],
+                        'access_mode' => $identity['access_mode'],
+                        'fallback_used' => (bool) ($identity['fallback_used'] ?? false),
+                    ];
 
                 $session->update([
                     'started_at' => $session->started_at ?? now(),
@@ -1497,7 +1563,11 @@ class CaptivePortalController extends Controller
                     'payment_id' => $payment->id,
                     'session_id' => $session->id,
                     'username' => $username,
+                    'identity_type' => $identity['identity_type'],
+                    'access_mode' => $identity['access_mode'],
                 ]);
+
+                $radiusProvisioned = true;
             } catch (\Throwable $e) {
                 Log::error('FreeRADIUS provisioning failed after payment', [
                     'payment_id' => $payment->id,
@@ -1506,6 +1576,83 @@ class CaptivePortalController extends Controller
                     'error' => $e->getMessage(),
                 ]);
             }
+        }
+
+        if ($radiusProvisioned && $radiusPureFlow) {
+            $activationMetadata = [
+                'last_attempt_at' => now()->toIso8601String(),
+                'method' => ($identity['identity_type'] ?? null) === 'mac' ? 'radius_mac_auth' : 'radius_hotspot_login',
+                'router_api_skipped' => true,
+                'waiting_for_hotspot_login' => true,
+                'waiting_for_reauth' => ($identity['identity_type'] ?? null) === 'mac',
+            ];
+
+            $session->update([
+                'status' => 'idle',
+                'expires_at' => $expiresAt,
+                'metadata' => array_merge($session->metadata ?? [], [
+                    'activation' => array_merge(
+                        (array) (($session->metadata ?? [])['activation'] ?? []),
+                        $activationMetadata
+                    ),
+                ]),
+            ]);
+
+            $payment->update([
+                'metadata' => array_merge($payment->metadata ?? [], [
+                    'activation' => array_merge(
+                        (array) (($payment->metadata ?? [])['activation'] ?? []),
+                        $activationMetadata
+                    ),
+                ]),
+            ]);
+
+            Log::info('Paid access prepared for pure RADIUS hotspot login', [
+                'payment_id' => $payment->id,
+                'session_id' => $session->id,
+                'username' => $username,
+                'identity_type' => $identity['identity_type'],
+            ]);
+
+            return $session->fresh();
+        }
+
+        if ($radiusProvisioned && $identityResolver->shouldBypassRouterActivation($identity)) {
+            $activationMetadata = [
+                'last_attempt_at' => now()->toIso8601String(),
+                'method' => 'radius_mac_auth',
+                'router_api_skipped' => true,
+                'waiting_for_reauth' => true,
+            ];
+
+            $session->update([
+                'status' => 'idle',
+                'expires_at' => $expiresAt,
+                'metadata' => array_merge($session->metadata ?? [], [
+                    'activation' => array_merge(
+                        (array) (($session->metadata ?? [])['activation'] ?? []),
+                        $activationMetadata
+                    ),
+                ]),
+            ]);
+
+            $payment->update([
+                'metadata' => array_merge($payment->metadata ?? [], [
+                    'activation' => array_merge(
+                        (array) (($payment->metadata ?? [])['activation'] ?? []),
+                        $activationMetadata
+                    ),
+                ]),
+            ]);
+
+            Log::info('Paid access authorized via FreeRADIUS MAC mode; awaiting hotspot re-authentication', [
+                'payment_id' => $payment->id,
+                'session_id' => $session->id,
+                'username' => $username,
+                'mac_address' => $clientMac,
+            ]);
+
+            return $session->fresh();
         }
 
         $sessionManager = app(SessionManager::class);
@@ -1703,34 +1850,361 @@ class CaptivePortalController extends Controller
         return $meta;
     }
 
+    /**
+     * @return array<string, string>
+     */
+    private function captureHotspotContext(Request $request, ?int $tenantId = null): array
+    {
+        $stored = session(self::HOTSPOT_CONTEXT_SESSION_KEY, []);
+        $stored = is_array($stored) ? $stored : [];
+        $router = $this->resolvePreferredHotspotRouter($tenantId);
+
+        $context = array_filter([
+            'link_login_only' => $this->resolveHotspotLoginUrl(
+                candidates: [
+                    (string) $request->input('link-login-only', ''),
+                    (string) $request->input('link_login_only', ''),
+                    (string) $request->query('link-login-only', ''),
+                    (string) $request->query('link_login_only', ''),
+                    (string) ($stored['link_login_only'] ?? ''),
+                    (string) ($stored['link_login'] ?? ''),
+                ],
+                router: $router
+            ) ?? $this->resolveRouterLoginFallbackUrl($router),
+            'link_login' => $this->resolveHotspotLoginUrl(
+                candidates: [
+                    (string) $request->input('link-login', ''),
+                    (string) $request->input('link_login', ''),
+                    (string) $request->query('link-login', ''),
+                    (string) $request->query('link_login', ''),
+                    (string) ($stored['link_login'] ?? ''),
+                ],
+                router: $router
+            ),
+            'dst' => $this->sanitizeHotspotText(
+                $this->firstNonEmptyString([
+                    (string) $request->input('dst', ''),
+                    (string) $request->query('dst', ''),
+                    (string) ($stored['dst'] ?? ''),
+                ]),
+                2048
+            ),
+            'popup' => $this->sanitizeHotspotText(
+                $this->firstNonEmptyString([
+                    (string) $request->input('popup', ''),
+                    (string) $request->query('popup', ''),
+                    (string) ($stored['popup'] ?? ''),
+                ]),
+                32
+            ),
+            'chap_id' => $this->sanitizeHotspotText(
+                $this->firstNonEmptyString([
+                    (string) $request->input('chap-id', ''),
+                    (string) $request->input('chap_id', ''),
+                    (string) $request->query('chap-id', ''),
+                    (string) $request->query('chap_id', ''),
+                    (string) ($stored['chap_id'] ?? ''),
+                ]),
+                64
+            ),
+            'chap_challenge' => $this->sanitizeHotspotText(
+                $this->firstNonEmptyString([
+                    (string) $request->input('chap-challenge', ''),
+                    (string) $request->input('chap_challenge', ''),
+                    (string) $request->query('chap-challenge', ''),
+                    (string) $request->query('chap_challenge', ''),
+                    (string) ($stored['chap_challenge'] ?? ''),
+                ]),
+                512
+            ),
+            'link_orig' => $this->sanitizeHotspotText(
+                $this->firstNonEmptyString([
+                    (string) $request->input('link-orig', ''),
+                    (string) $request->input('link_orig', ''),
+                    (string) $request->query('link-orig', ''),
+                    (string) $request->query('link_orig', ''),
+                    (string) ($stored['link_orig'] ?? ''),
+                ]),
+                2048
+            ),
+            'link_orig_esc' => $this->sanitizeHotspotText(
+                $this->firstNonEmptyString([
+                    (string) $request->input('link-orig-esc', ''),
+                    (string) $request->input('link_orig_esc', ''),
+                    (string) $request->query('link-orig-esc', ''),
+                    (string) $request->query('link_orig_esc', ''),
+                    (string) ($stored['link_orig_esc'] ?? ''),
+                ]),
+                2048
+            ),
+        ], static fn ($value) => is_string($value) && $value !== '');
+
+        if (!isset($context['link_login']) && isset($context['link_login_only'])) {
+            $context['link_login'] = $context['link_login_only'];
+        }
+
+        if ($context !== []) {
+            $context = array_merge($stored, $context);
+            session([self::HOTSPOT_CONTEXT_SESSION_KEY => $context]);
+        }
+
+        return array_intersect_key($context !== [] ? $context : $stored, array_flip(self::HOTSPOT_CONTEXT_KEYS));
+    }
+
+    /**
+     * @param  array<string, mixed>  $hotspotContext
+     * @return array<string, string>
+     */
+    private function buildHotspotContextMeta(array $hotspotContext): array
+    {
+        return array_filter([
+            'link_login_only' => $this->sanitizeHotspotText((string) ($hotspotContext['link_login_only'] ?? ''), 2048),
+            'link_login' => $this->sanitizeHotspotText((string) ($hotspotContext['link_login'] ?? ''), 2048),
+            'dst' => $this->sanitizeHotspotText((string) ($hotspotContext['dst'] ?? ''), 2048),
+            'popup' => $this->sanitizeHotspotText((string) ($hotspotContext['popup'] ?? ''), 32),
+            'chap_id' => $this->sanitizeHotspotText((string) ($hotspotContext['chap_id'] ?? ''), 64),
+            'chap_challenge' => $this->sanitizeHotspotText((string) ($hotspotContext['chap_challenge'] ?? ''), 512),
+            'link_orig' => $this->sanitizeHotspotText((string) ($hotspotContext['link_orig'] ?? ''), 2048),
+            'link_orig_esc' => $this->sanitizeHotspotText((string) ($hotspotContext['link_orig_esc'] ?? ''), 2048),
+        ], static fn ($value) => $value !== null && $value !== '');
+    }
+
+    /**
+     * @param  array<string, mixed>  $identity
+     * @return array<string, string>|null
+     */
+    private function buildHotspotAutoLoginPayload(Payment $payment, array $identity): ?array
+    {
+        if (!(bool) config('radius.portal_auto_login', true)) {
+            return null;
+        }
+
+        $username = trim((string) ($identity['username'] ?? ''));
+        $password = trim((string) ($identity['password'] ?? ''));
+        if ($username === '' || $password === '') {
+            return null;
+        }
+
+        $hotspotContext = $this->resolveHotspotContextForPayment($payment);
+        $action = trim((string) ($hotspotContext['link_login_only'] ?? $hotspotContext['link_login'] ?? ''));
+        if ($action === '') {
+            return null;
+        }
+
+        return array_filter([
+            'action' => $action,
+            'username' => $username,
+            'password' => $password,
+            'dst' => trim((string) ($hotspotContext['dst'] ?? $hotspotContext['link_orig_esc'] ?? $hotspotContext['link_orig'] ?? '')),
+            'popup' => trim((string) ($hotspotContext['popup'] ?? 'true')),
+            'chap_id' => trim((string) ($hotspotContext['chap_id'] ?? '')),
+            'chap_challenge' => trim((string) ($hotspotContext['chap_challenge'] ?? '')),
+        ], static fn ($value) => is_string($value) && $value !== '');
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private function resolveHotspotContextForPayment(Payment $payment): array
+    {
+        $stored = session(self::HOTSPOT_CONTEXT_SESSION_KEY, []);
+        $stored = is_array($stored) ? $stored : [];
+        $paymentMetadata = is_array($payment->metadata) ? $payment->metadata : [];
+        $paymentHotspot = is_array($paymentMetadata['hotspot_context'] ?? null) ? $paymentMetadata['hotspot_context'] : [];
+        $router = $this->resolvePreferredHotspotRouter((int) $payment->tenant_id);
+
+        $context = array_merge($stored, $paymentHotspot);
+        $context['link_login_only'] = $this->resolveHotspotLoginUrl([
+            (string) ($paymentHotspot['link_login_only'] ?? ''),
+            (string) ($stored['link_login_only'] ?? ''),
+            (string) ($paymentHotspot['link_login'] ?? ''),
+            (string) ($stored['link_login'] ?? ''),
+        ], $router) ?? $this->resolveRouterLoginFallbackUrl($router);
+
+        $context['link_login'] = $this->resolveHotspotLoginUrl([
+            (string) ($paymentHotspot['link_login'] ?? ''),
+            (string) ($stored['link_login'] ?? ''),
+        ], $router) ?? ($context['link_login_only'] ?? null);
+
+        $context = $this->buildHotspotContextMeta($context);
+
+        if ($context !== []) {
+            session([self::HOTSPOT_CONTEXT_SESSION_KEY => array_merge($stored, $context)]);
+        }
+
+        return $context;
+    }
+
+    /**
+     * @param  list<string>  $candidates
+     */
+    private function resolveHotspotLoginUrl(array $candidates, ?Router $router = null): ?string
+    {
+        foreach ($candidates as $candidate) {
+            $normalized = $this->normalizeHotspotLoginUrl($candidate, $router);
+            if ($normalized !== null) {
+                return $normalized;
+            }
+        }
+
+        return null;
+    }
+
+    private function normalizeHotspotLoginUrl(?string $value, ?Router $router = null): ?string
+    {
+        $candidate = trim((string) $value);
+        if ($candidate === '') {
+            return null;
+        }
+
+        if (str_starts_with($candidate, '/')) {
+            $fallbackBase = $router?->ip_address
+                ? 'http://' . trim((string) $router->ip_address)
+                : null;
+
+            if ($fallbackBase === null) {
+                return null;
+            }
+
+            $candidate = rtrim($fallbackBase, '/') . '/' . ltrim($candidate, '/');
+        }
+
+        if (!filter_var($candidate, FILTER_VALIDATE_URL)) {
+            return null;
+        }
+
+        $scheme = strtolower((string) parse_url($candidate, PHP_URL_SCHEME));
+        $host = strtolower((string) parse_url($candidate, PHP_URL_HOST));
+
+        if (!in_array($scheme, ['http', 'https'], true) || $host === '') {
+            return null;
+        }
+
+        if (!$this->isTrustedHotspotHost($host, $router)) {
+            return null;
+        }
+
+        return $candidate;
+    }
+
+    private function isTrustedHotspotHost(string $host, ?Router $router = null): bool
+    {
+        $routerIp = strtolower(trim((string) ($router?->ip_address ?? '')));
+        if ($routerIp !== '' && $host === $routerIp) {
+            return true;
+        }
+
+        if (filter_var($host, FILTER_VALIDATE_IP) !== false) {
+            return filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) === false;
+        }
+
+        return false;
+    }
+
+    private function resolveRouterLoginFallbackUrl(?Router $router): ?string
+    {
+        $ipAddress = trim((string) ($router?->ip_address ?? ''));
+        if ($ipAddress === '' || filter_var($ipAddress, FILTER_VALIDATE_IP) === false) {
+            return null;
+        }
+
+        return 'http://' . $ipAddress . '/login';
+    }
+
+    private function resolvePreferredHotspotRouter(?int $tenantId = null): ?Router
+    {
+        if (($tenantId ?? 0) <= 0) {
+            return null;
+        }
+
+        $router = Router::query()
+            ->where('tenant_id', $tenantId)
+            ->whereIn('status', [Router::STATUS_ONLINE, Router::STATUS_WARNING])
+            ->orderByRaw(
+                "CASE WHEN status = ? THEN 0 WHEN status = ? THEN 1 ELSE 2 END",
+                [Router::STATUS_ONLINE, Router::STATUS_WARNING]
+            )
+            ->orderByDesc('last_seen_at')
+            ->orderBy('id')
+            ->first();
+
+        if ($router) {
+            return $router;
+        }
+
+        return Router::query()
+            ->where('tenant_id', $tenantId)
+            ->orderByDesc('last_seen_at')
+            ->orderBy('id')
+            ->first();
+    }
+
+    /**
+     * @param  list<string>  $candidates
+     */
+    private function firstNonEmptyString(array $candidates): ?string
+    {
+        foreach ($candidates as $candidate) {
+            $trimmed = trim($candidate);
+            if ($trimmed !== '') {
+                return $trimmed;
+            }
+        }
+
+        return null;
+    }
+
+    private function sanitizeHotspotText(?string $value, int $maxLength): ?string
+    {
+        $candidate = trim((string) $value);
+        if ($candidate === '') {
+            return null;
+        }
+
+        return substr($candidate, 0, $maxLength);
+    }
+
     private function captureClientContextForPayment(Request $request, Payment $payment): Payment
     {
         $clientContext = $this->resolveClientContext($request);
         $clientContextMeta = $this->buildClientContextMeta($clientContext, $request);
-
-        if ($clientContextMeta === []) {
-            return $payment;
-        }
+        $hotspotContext = $this->captureHotspotContext($request, (int) $payment->tenant_id);
+        $hotspotContextMeta = $this->buildHotspotContextMeta($hotspotContext);
 
         $paymentMetadata = is_array($payment->metadata) ? $payment->metadata : [];
-        $existingClientMeta = is_array($paymentMetadata['client_context'] ?? null) ? $paymentMetadata['client_context'] : [];
+        $metadataChanged = false;
 
-        foreach (['user_agent', 'request_ip'] as $stickyKey) {
-            if (!empty($existingClientMeta[$stickyKey]) && !empty($clientContextMeta[$stickyKey])) {
-                $clientContextMeta[$stickyKey] = $existingClientMeta[$stickyKey];
+        if ($clientContextMeta !== []) {
+            $existingClientMeta = is_array($paymentMetadata['client_context'] ?? null) ? $paymentMetadata['client_context'] : [];
+
+            foreach (['user_agent', 'request_ip'] as $stickyKey) {
+                if (!empty($existingClientMeta[$stickyKey]) && !empty($clientContextMeta[$stickyKey])) {
+                    $clientContextMeta[$stickyKey] = $existingClientMeta[$stickyKey];
+                }
+            }
+
+            $mergedClientMeta = array_merge($existingClientMeta, $clientContextMeta);
+            if ($mergedClientMeta !== $existingClientMeta) {
+                $paymentMetadata['client_context'] = $mergedClientMeta;
+                $metadataChanged = true;
             }
         }
 
-        $mergedClientMeta = array_merge($existingClientMeta, $clientContextMeta);
+        if ($hotspotContextMeta !== []) {
+            $existingHotspotMeta = is_array($paymentMetadata['hotspot_context'] ?? null) ? $paymentMetadata['hotspot_context'] : [];
+            $mergedHotspotMeta = array_merge($existingHotspotMeta, $hotspotContextMeta);
+            if ($mergedHotspotMeta !== $existingHotspotMeta) {
+                $paymentMetadata['hotspot_context'] = $mergedHotspotMeta;
+                $metadataChanged = true;
+            }
+        }
 
-        if ($mergedClientMeta !== $existingClientMeta) {
-            $paymentMetadata['client_context'] = $mergedClientMeta;
-
+        if ($metadataChanged) {
             try {
                 $payment->update(['metadata' => $paymentMetadata]);
                 $payment->refresh();
             } catch (\Throwable $e) {
-                Log::warning('Captive client context update skipped after transient payment lock', [
+                Log::warning('Captive payment context update skipped after transient payment lock', [
                     'payment_id' => $payment->id,
                     'error' => $e->getMessage(),
                 ]);
@@ -1787,14 +2261,89 @@ class CaptivePortalController extends Controller
         return filter_var($candidate, FILTER_VALIDATE_IP) ? $candidate : null;
     }
 
-    private function resolveRadiusUsernameFromPhone(string $phone, ?int $paymentId = null): string
+    /**
+     * @return array<string, mixed>
+     */
+    private function resolveRadiusIdentityForPayment(Payment $payment): array
     {
-        $digits = preg_replace('/\D+/', '', $phone);
-        if ($digits !== '') {
-            return 'cb' . $digits;
+        $metadata = is_array($payment->metadata) ? $payment->metadata : [];
+        $clientContext = is_array($metadata['client_context'] ?? null) ? $metadata['client_context'] : [];
+        $session = UserSession::query()->where('payment_id', $payment->id)->latest('id')->first();
+
+        return app(RadiusIdentityResolver::class)->resolve(
+            phone: (string) $payment->phone,
+            paymentId: (int) $payment->id,
+            macAddress: $this->normalizeMacAddress((string) ($clientContext['mac'] ?? ''))
+                ?? $this->normalizeMacAddress((string) ($session?->mac_address ?? ''))
+        );
+    }
+
+    private function resolveConnectedSession(Payment $payment): ?UserSession
+    {
+        $activeSession = UserSession::query()
+            ->where('payment_id', $payment->id)
+            ->active()
+            ->first();
+
+        if ($activeSession) {
+            return $activeSession;
         }
 
-        return 'cbu' . (int) $paymentId;
+        if (!(bool) config('radius.enabled', false)) {
+            return null;
+        }
+
+        $session = UserSession::query()
+            ->where('payment_id', $payment->id)
+            ->latest('id')
+            ->first();
+
+        if (!$session) {
+            return null;
+        }
+
+        try {
+            $record = app(RadiusAccountingService::class)->syncActiveSession($session);
+        } catch (\Throwable $e) {
+            Log::warning('RADIUS accounting sync failed during captive status resolution', [
+                'payment_id' => $payment->id,
+                'session_id' => $session->id,
+                'username' => $session->username,
+                'error' => $e->getMessage(),
+            ]);
+
+            return null;
+        }
+
+        if ($record === null) {
+            return null;
+        }
+
+        $session = $session->fresh() ?? $session;
+        $this->markPaymentActivatedFromRadius($payment, $session);
+
+        return $session;
+    }
+
+    private function markPaymentActivatedFromRadius(Payment $payment, UserSession $session): void
+    {
+        $paymentMetadata = is_array($payment->metadata) ? $payment->metadata : [];
+        $activationMetadata = is_array($paymentMetadata['activation'] ?? null) ? $paymentMetadata['activation'] : [];
+        $activationMetadata = array_merge($activationMetadata, [
+            'activated_via' => 'radius_accounting',
+            'activated_at' => now()->toIso8601String(),
+        ]);
+
+        $payment->update([
+            'status' => 'completed',
+            'completed_at' => $payment->completed_at ?? now(),
+            'activated_at' => $payment->activated_at ?? now(),
+            'session_id' => $session->id,
+            'reconciliation_notes' => null,
+            'metadata' => array_merge($paymentMetadata, [
+                'activation' => $activationMetadata,
+            ]),
+        ]);
     }
 
     private function resolveDarajaCallbackUrl(?int $tenantId = null): string

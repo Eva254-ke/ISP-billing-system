@@ -2,6 +2,9 @@
 
 return [
     'enabled' => env('RADIUS_ENABLED', false),
+    'access_mode' => strtolower((string) env('RADIUS_ACCESS_MODE', 'phone')),
+    'pure_radius' => (bool) env('RADIUS_PURE_RADIUS', false),
+    'portal_auto_login' => (bool) env('RADIUS_PORTAL_AUTO_LOGIN', true),
 
     // Router RADIUS client target
     'server_ip' => env('RADIUS_SERVER_IP', '127.0.0.1'),

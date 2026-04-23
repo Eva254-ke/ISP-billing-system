@@ -27,6 +27,17 @@
         ], static fn ($value) => $value !== null && $value !== '');
         $clientMacValue = trim((string) old('mac', $clientMac ?? request()->query('mac', session('captive_client_mac', ''))));
         $clientIpValue = trim((string) old('ip', $clientIp ?? request()->query('ip', session('captive_client_ip', ''))));
+        $hotspotContext = is_array($hotspotContext ?? null) ? $hotspotContext : [];
+        $hotspotFieldValues = [
+            'link-login-only' => trim((string) old('link-login-only', $hotspotContext['link_login_only'] ?? '')),
+            'link-login' => trim((string) old('link-login', $hotspotContext['link_login'] ?? '')),
+            'dst' => trim((string) old('dst', $hotspotContext['dst'] ?? '')),
+            'popup' => trim((string) old('popup', $hotspotContext['popup'] ?? '')),
+            'chap-id' => trim((string) old('chap-id', $hotspotContext['chap_id'] ?? '')),
+            'chap-challenge' => trim((string) old('chap-challenge', $hotspotContext['chap_challenge'] ?? '')),
+            'link-orig' => trim((string) old('link-orig', $hotspotContext['link_orig'] ?? '')),
+            'link-orig-esc' => trim((string) old('link-orig-esc', $hotspotContext['link_orig_esc'] ?? '')),
+        ];
     @endphp
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -74,6 +85,9 @@
                         <input type="hidden" name="tenant_id" value="{{ $tenantIdValue }}">
                         <input type="hidden" name="mac" value="{{ $clientMacValue }}">
                         <input type="hidden" name="ip" value="{{ $clientIpValue }}">
+                        @foreach($hotspotFieldValues as $fieldName => $fieldValue)
+                            <input type="hidden" name="{{ $fieldName }}" value="{{ $fieldValue }}">
+                        @endforeach
                         <div class="cp-field">
                             <label for="reconnectPhone">Phone Number</label>
                             <input id="reconnectPhone" type="tel" name="phone" placeholder="0712345678 or 0112345678" value="{{ old('phone', $phone ?? '') }}" required pattern="(?:0[17]\d{8}|(?:\+?254)[17]\d{8})" autocomplete="tel" inputmode="tel">
@@ -93,6 +107,9 @@
                         <input type="hidden" name="tenant_id" value="{{ $tenantIdValue }}">
                         <input type="hidden" name="mac" value="{{ $clientMacValue }}">
                         <input type="hidden" name="ip" value="{{ $clientIpValue }}">
+                        @foreach($hotspotFieldValues as $fieldName => $fieldValue)
+                            <input type="hidden" name="{{ $fieldName }}" value="{{ $fieldValue }}">
+                        @endforeach
                         <div class="cp-field">
                             <label for="voucherPhone">Phone Number</label>
                             <input id="voucherPhone" type="tel" name="phone" placeholder="0712345678 or 0112345678" value="{{ old('phone', $phone ?? '') }}" required pattern="(?:0[17]\d{8}|(?:\+?254)[17]\d{8})" autocomplete="tel" inputmode="tel">

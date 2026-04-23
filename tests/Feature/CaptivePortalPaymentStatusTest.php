@@ -12,8 +12,11 @@ use App\Jobs\ProcessMpesaCallback;
 use App\Services\MikroTik\SessionManager;
 use App\Services\Mpesa\DarajaService;
 use App\Services\Radius\FreeRadiusProvisioningService;
+use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
+use Illuminate\Support\Facades\Schema;
 use Mockery;
 use Tests\TestCase;
 
@@ -849,6 +852,242 @@ class CaptivePortalPaymentStatusTest extends TestCase
         $this->assertTrue((bool) data_get($payment->metadata, 'radius.provisioned'));
     }
 
+    public function test_activate_session_job_prepares_mac_radius_authorization_without_router_api_login(): void
+    {
+        config()->set('radius.enabled', true);
+        config()->set('radius.access_mode', 'mac');
+
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant);
+        $router = $this->createRouter($tenant, [
+            'status' => 'online',
+            'last_seen_at' => now(),
+        ]);
+
+        $payment = $this->createPayment($tenant, $package, [
+            'status' => 'confirmed',
+            'mpesa_checkout_request_id' => 'ws_CO_mac_radius_001',
+            'metadata' => [
+                'gateway' => 'daraja',
+                'client_context' => [
+                    'mac' => 'AA:BB:CC:DD:EE:FF',
+                    'ip' => '10.0.0.25',
+                ],
+            ],
+        ]);
+
+        $session = UserSession::query()->create([
+            'tenant_id' => $tenant->id,
+            'router_id' => $router->id,
+            'package_id' => $package->id,
+            'username' => 'AA:BB:CC:DD:EE:FF',
+            'phone' => '0712345678',
+            'mac_address' => 'AA:BB:CC:DD:EE:FF',
+            'ip_address' => '10.0.0.25',
+            'status' => 'idle',
+            'started_at' => now(),
+            'expires_at' => now()->addMinutes((int) $package->duration_in_minutes),
+            'payment_id' => $payment->id,
+        ]);
+
+        $sessionManager = Mockery::mock(SessionManager::class);
+        $sessionManager->shouldNotReceive('activateSession');
+
+        $radiusProvisioning = Mockery::mock(FreeRadiusProvisioningService::class);
+        $radiusProvisioning->shouldReceive('provisionUser')->once()->withArgs(function (string $username, string $password, Package $resolvedPackage) use ($package) {
+            return $username === 'AA:BB:CC:DD:EE:FF'
+                && $password === 'AA:BB:CC:DD:EE:FF'
+                && (int) $resolvedPackage->id === (int) $package->id;
+        });
+
+        $job = new ActivateSession($session);
+        $job->handle($sessionManager, $radiusProvisioning);
+
+        $payment->refresh();
+        $session->refresh();
+
+        $this->assertSame('idle', $session->status);
+        $this->assertSame('confirmed', $payment->status);
+        $this->assertSame($session->id, (int) $payment->session_id);
+        $this->assertStringContainsString('Waiting for hotspot re-authentication', (string) $payment->reconciliation_notes);
+        $this->assertTrue((bool) data_get($payment->metadata, 'radius.authorization_prepared'));
+    }
+
+    public function test_status_renders_pure_radius_hotspot_autologin_form_without_router_api_activation(): void
+    {
+        config()->set('radius.enabled', true);
+        config()->set('radius.pure_radius', true);
+
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant);
+        $router = $this->createRouter($tenant, [
+            'status' => 'online',
+            'last_seen_at' => now(),
+        ]);
+
+        $payment = $this->createPayment($tenant, $package, [
+            'status' => 'confirmed',
+            'confirmed_at' => now(),
+            'mpesa_checkout_request_id' => 'ws_CO_pure_radius_view_001',
+        ]);
+
+        $sessionManager = Mockery::mock(SessionManager::class);
+        $sessionManager->shouldNotReceive('activateSession');
+        $this->app->instance(SessionManager::class, $sessionManager);
+
+        $radiusProvisioning = Mockery::mock(FreeRadiusProvisioningService::class);
+        $radiusProvisioning->shouldReceive('provisionUser')->once()->withArgs(function (string $username, string $password, Package $resolvedPackage) use ($package) {
+            return $username === 'cb0712345678'
+                && $password === 'cb0712345678'
+                && (int) $resolvedPackage->id === (int) $package->id;
+        });
+        $this->app->instance(FreeRadiusProvisioningService::class, $radiusProvisioning);
+
+        $response = $this->get(route('wifi.status', [
+            'phone' => '0712345678',
+            'tenant_id' => $tenant->id,
+            'payment' => $payment->id,
+            'link-login-only' => 'http://' . $router->ip_address . '/login',
+            'dst' => 'https://example.com/after-login',
+            'popup' => 'true',
+        ]));
+
+        $response->assertOk();
+        $response->assertSee('id="cpRadiusAutoLoginForm"', false);
+        $response->assertSee('action="http://' . $router->ip_address . '/login"', false);
+        $response->assertSee('name="username"', false);
+        $response->assertSee('value="cb0712345678"', false);
+        $response->assertSee('name="dst"', false);
+        $response->assertSee('value="https://example.com/after-login"', false);
+        $response->assertSee('Connecting you to WiFi', false);
+    }
+
+    public function test_session_manager_skips_router_api_disconnect_for_expired_pure_radius_sessions(): void
+    {
+        config()->set('radius.enabled', true);
+        config()->set('radius.pure_radius', true);
+
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant);
+        $router = $this->createRouter($tenant, [
+            'status' => 'online',
+            'last_seen_at' => now(),
+        ]);
+
+        $payment = $this->createPayment($tenant, $package, [
+            'status' => 'completed',
+            'completed_at' => now()->subHour(),
+        ]);
+
+        $session = UserSession::query()->create([
+            'tenant_id' => $tenant->id,
+            'router_id' => $router->id,
+            'package_id' => $package->id,
+            'username' => 'cb0712345678',
+            'phone' => '0712345678',
+            'status' => 'active',
+            'started_at' => now()->subHour(),
+            'expires_at' => now()->subMinute(),
+            'payment_id' => $payment->id,
+            'metadata' => [
+                'radius' => [
+                    'provisioned' => true,
+                    'username' => 'cb0712345678',
+                ],
+            ],
+        ]);
+
+        $mikrotikService = Mockery::mock(\App\Services\MikroTik\MikroTikService::class);
+        $mikrotikService->shouldNotReceive('disconnectSession');
+
+        $manager = new SessionManager($mikrotikService);
+
+        $this->assertTrue($manager->terminateSession($session, 'expired'));
+
+        $session->refresh();
+        $this->assertSame('terminated', $session->status);
+        $this->assertSame('expired', $session->termination_reason);
+        $this->assertNotNull($session->terminated_at);
+    }
+
+    public function test_check_status_marks_mac_authorized_session_active_from_radius_accounting(): void
+    {
+        config()->set('radius.enabled', true);
+        config()->set('radius.access_mode', 'mac');
+        $this->configureRadiusAccountingConnection();
+
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant);
+        $this->createRouter($tenant, [
+            'status' => 'online',
+            'last_seen_at' => now(),
+        ]);
+
+        $payment = $this->createPayment($tenant, $package, [
+            'phone' => '0712345678',
+            'status' => 'confirmed',
+            'mpesa_checkout_request_id' => 'ws_CO_radacct_activation_001',
+            'metadata' => [
+                'gateway' => 'daraja',
+                'client_context' => [
+                    'mac' => 'AA:BB:CC:DD:EE:FF',
+                    'ip' => '10.0.0.25',
+                ],
+            ],
+        ]);
+
+        $session = UserSession::query()->create([
+            'tenant_id' => $tenant->id,
+            'router_id' => Router::query()->value('id'),
+            'package_id' => $package->id,
+            'username' => 'AA:BB:CC:DD:EE:FF',
+            'phone' => '0712345678',
+            'mac_address' => 'AA:BB:CC:DD:EE:FF',
+            'ip_address' => '10.0.0.25',
+            'status' => 'idle',
+            'started_at' => now(),
+            'expires_at' => now()->addMinutes((int) $package->duration_in_minutes),
+            'payment_id' => $payment->id,
+        ]);
+
+        $this->seedRadiusAccountingRecord([
+            'username' => 'AA:BB:CC:DD:EE:FF',
+            'callingstationid' => 'AA:BB:CC:DD:EE:FF',
+            'framedipaddress' => '10.0.0.25',
+            'acctstarttime' => now()->subMinute(),
+            'acctupdatetime' => now(),
+        ]);
+
+        $sessionManager = Mockery::mock(SessionManager::class);
+        $sessionManager->shouldNotReceive('activateSession');
+        $this->app->instance(SessionManager::class, $sessionManager);
+
+        $radiusProvisioning = Mockery::mock(FreeRadiusProvisioningService::class);
+        $radiusProvisioning->shouldReceive('provisionUser')->once();
+        $this->app->instance(FreeRadiusProvisioningService::class, $radiusProvisioning);
+
+        $response = $this->getJson(route('wifi.status.check', [
+            'phone' => '0712345678',
+            'tenant_id' => $tenant->id,
+            'payment' => $payment->id,
+        ]));
+
+        $response->assertOk();
+        $response->assertJson([
+            'status' => 'activated',
+            'payment_id' => $payment->id,
+            'session_active' => true,
+        ]);
+
+        $payment->refresh();
+        $session->refresh();
+
+        $this->assertSame('active', $session->status);
+        $this->assertSame('completed', $payment->status);
+        $this->assertSame($session->id, (int) $payment->session_id);
+        $this->assertNotNull($payment->activated_at);
+    }
+
     public function test_router_walled_garden_rules_include_portal_and_daraja_hosts_without_intasend(): void
     {
         config()->set('app.url', 'https://app.cloudbridge.network');
@@ -936,6 +1175,60 @@ class CaptivePortalPaymentStatusTest extends TestCase
             'metadata' => [
                 'gateway' => 'daraja',
             ],
+        ], $overrides));
+    }
+
+    private function configureRadiusAccountingConnection(): void
+    {
+        config()->set('radius.db_connection', 'radius');
+        config()->set('radius.tables.radacct', 'radacct');
+        config()->set('database.connections.radius', [
+            'driver' => 'sqlite',
+            'database' => ':memory:',
+            'prefix' => '',
+            'foreign_key_constraints' => true,
+        ]);
+
+        DB::purge('radius');
+
+        $schema = Schema::connection('radius');
+        if ($schema->hasTable('radacct')) {
+            $schema->drop('radacct');
+        }
+
+        $schema->create('radacct', function (Blueprint $table): void {
+            $table->id();
+            $table->string('acctsessionid')->nullable();
+            $table->string('acctuniqueid')->nullable();
+            $table->string('username')->nullable();
+            $table->string('nasipaddress')->nullable();
+            $table->dateTime('acctstarttime')->nullable();
+            $table->dateTime('acctupdatetime')->nullable();
+            $table->dateTime('acctstoptime')->nullable();
+            $table->unsignedBigInteger('acctinputoctets')->nullable();
+            $table->unsignedBigInteger('acctoutputoctets')->nullable();
+            $table->string('callingstationid')->nullable();
+            $table->string('framedipaddress')->nullable();
+        });
+    }
+
+    /**
+     * @param  array<string, mixed>  $overrides
+     */
+    private function seedRadiusAccountingRecord(array $overrides = []): void
+    {
+        DB::connection('radius')->table('radacct')->insert(array_merge([
+            'acctsessionid' => 'sess-001',
+            'acctuniqueid' => 'unique-001',
+            'username' => 'AA:BB:CC:DD:EE:FF',
+            'nasipaddress' => '159.65.18.32',
+            'acctstarttime' => now()->subMinute()->toDateTimeString(),
+            'acctupdatetime' => now()->toDateTimeString(),
+            'acctstoptime' => null,
+            'acctinputoctets' => 1024,
+            'acctoutputoctets' => 2048,
+            'callingstationid' => 'AA:BB:CC:DD:EE:FF',
+            'framedipaddress' => '10.0.0.25',
         ], $overrides));
     }
 }

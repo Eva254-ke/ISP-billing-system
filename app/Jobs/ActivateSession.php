@@ -5,6 +5,7 @@ namespace App\Jobs;
 use App\Models\UserSession;
 use App\Services\MikroTik\SessionManager;
 use App\Services\Radius\FreeRadiusProvisioningService;
+use App\Services\Radius\RadiusIdentityResolver;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -46,10 +47,88 @@ class ActivateSession implements ShouldQueue
                 throw new \RuntimeException('Session package is missing.');
             }
 
-            $this->ensureRadiusProvisioned($this->session->fresh(), $radiusProvisioning);
+            $freshSession = $this->session->fresh();
+            $this->ensureRadiusProvisioned($freshSession, $radiusProvisioning);
+
+            $identityResolver = app(RadiusIdentityResolver::class);
+            $identity = $identityResolver->resolve(
+                phone: (string) $freshSession->phone,
+                paymentId: (int) $freshSession->payment_id,
+                macAddress: $freshSession->mac_address
+            );
+
+            if ($identityResolver->shouldUsePureRadiusFlow($identity)) {
+                $this->storeRadiusMetadata($freshSession, [
+                    'authorization_prepared' => true,
+                    'authorization_mode' => (string) ($identity['identity_type'] ?? 'phone'),
+                    'waiting_for_hotspot_login' => true,
+                    'waiting_for_reauth' => ($identity['identity_type'] ?? null) === 'mac',
+                    'last_error' => null,
+                    'last_failed_at' => null,
+                ]);
+
+                $freshSession->update([
+                    'status' => 'idle',
+                    'last_synced_at' => now(),
+                ]);
+
+                $payment = $freshSession->payment()->first();
+                if ($payment) {
+                    $payment->update([
+                        'status' => 'confirmed',
+                        'session_id' => $freshSession->id,
+                        'reconciliation_notes' => 'Payment confirmed. Completing hotspot login through RADIUS.',
+                    ]);
+                }
+
+                Log::channel('radius')->info('Pure RADIUS hotspot authorization prepared; RouterOS API login skipped', [
+                    'session_id' => $freshSession->id,
+                    'payment_id' => $freshSession->payment_id,
+                    'username' => $freshSession->username,
+                    'identity_type' => $identity['identity_type'],
+                ]);
+
+                return;
+            }
+
+            if (
+                $identityResolver->shouldBypassRouterActivation($identity)
+                && $identityResolver->matchesMacIdentity((string) $freshSession->username, $freshSession->mac_address)
+            ) {
+                $this->storeRadiusMetadata($freshSession, [
+                    'authorization_prepared' => true,
+                    'authorization_mode' => 'mac',
+                    'waiting_for_reauth' => true,
+                    'last_error' => null,
+                    'last_failed_at' => null,
+                ]);
+
+                $freshSession->update([
+                    'status' => 'idle',
+                    'last_synced_at' => now(),
+                ]);
+
+                $payment = $freshSession->payment()->first();
+                if ($payment) {
+                    $payment->update([
+                        'status' => 'confirmed',
+                        'session_id' => $freshSession->id,
+                        'reconciliation_notes' => 'Payment confirmed. Waiting for hotspot re-authentication via RADIUS.',
+                    ]);
+                }
+
+                Log::channel('radius')->info('RADIUS MAC authorization prepared; waiting for hotspot re-authentication', [
+                    'session_id' => $freshSession->id,
+                    'payment_id' => $freshSession->payment_id,
+                    'username' => $freshSession->username,
+                    'mac_address' => $freshSession->mac_address,
+                ]);
+
+                return;
+            }
 
             $result = $sessionManager->activateSession(
-                $this->session->fresh(),
+                $freshSession,
                 $package
             );
 

@@ -192,6 +192,11 @@ class SessionManager
             ]);
         }
         
+        // Pure RADIUS mode uses accounting updates instead of RouterOS API polling.
+        if ($this->shouldUseRadiusManagedDisconnect($session, 'expiry_check')) {
+            return;
+        }
+
         // Sync usage data
         $this->mikrotikService->syncSessionUsage($session);
     }
@@ -201,6 +206,19 @@ class SessionManager
      */
     public function terminateSession(UserSession $session, string $reason): bool
     {
+        if ($this->shouldUseRadiusManagedDisconnect($session, $reason)) {
+            $session->markTerminated($reason);
+
+            Log::channel('radius')->info('Session termination recorded without RouterOS API', [
+                'session_id' => $session->id,
+                'username' => $session->username,
+                'reason' => $reason,
+                'router_id' => $session->router_id,
+            ]);
+
+            return true;
+        }
+
         $router = $session->router;
         if (!$router) {
             Log::channel('mikrotik')->warning('Session termination skipped router disconnect because router is missing', [
@@ -333,5 +351,22 @@ class SessionManager
         ]);
 
         return $fallback;
+    }
+
+    private function shouldUseRadiusManagedDisconnect(UserSession $session, string $reason): bool
+    {
+        if (!(bool) config('radius.enabled', false) || !(bool) config('radius.pure_radius', false)) {
+            return false;
+        }
+
+        $radiusMetadata = is_array(($session->metadata ?? [])['radius'] ?? null)
+            ? (array) $session->metadata['radius']
+            : [];
+
+        if (!((bool) ($radiusMetadata['provisioned'] ?? false) || trim((string) $session->username) !== '')) {
+            return false;
+        }
+
+        return in_array($reason, ['expired', 'data_limit_reached', 'expiry_check'], true);
     }
 }
