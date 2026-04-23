@@ -173,6 +173,9 @@ class DarajaService
 
             Log::channel('payment')->info('Daraja STK push attempt', [
                 'environment' => $this->environment,
+                'transaction_type' => $this->transactionType,
+                'business_shortcode' => $this->businessShortcode,
+                'party_b' => $this->partyB,
                 'account_reference' => $reference,
                 'response_code' => $responseCode,
                 'http_status' => $response->status(),
@@ -310,6 +313,7 @@ class DarajaService
 
             Log::channel('payment')->info('Daraja STK query attempt', [
                 'environment' => $this->environment,
+                'business_shortcode' => $this->businessShortcode,
                 'checkout_request_id' => $checkoutRequestId,
                 'response_code' => $responseCode,
                 'result_code' => $resultCode,
