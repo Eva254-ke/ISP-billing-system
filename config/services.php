@@ -85,6 +85,10 @@ return [
         'callback_url' => env('MPESA_CALLBACK_URL'),
         'transaction_type' => env('MPESA_TRANSACTION_TYPE', 'CustomerBuyGoodsOnline'),
         'timeout' => (int) env('MPESA_TIMEOUT', 30),
+        // Keep SSL verification enabled in production. Set MPESA_CA_BUNDLE to a PEM bundle
+        // if the host OS trust store is missing the Safaricom certificate chain.
+        'verify_ssl' => env('MPESA_VERIFY_SSL', true),
+        'ca_bundle' => env('MPESA_CA_BUNDLE'),
         // Optional override. Defaults to business shortcode when omitted.
         'partyb' => env('MPESA_PARTYB'),
         

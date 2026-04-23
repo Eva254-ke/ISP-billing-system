@@ -75,8 +75,18 @@ class SessionManager
         
         if (!is_array($result) || !($result['success'] ?? false)) {
             // Refresh router connectivity state for more accurate retry decisions.
-            $this->mikrotikService->pingRouter($router);
-            $router = $router->fresh();
+            try {
+                $this->mikrotikService->pingRouter($router);
+                $router = $router->fresh();
+            } catch (\Throwable $refreshError) {
+                Log::channel('mikrotik')->warning('Router connectivity refresh failed after activation error', [
+                    'session_id' => $session->id,
+                    'tenant_id' => $session->tenant_id,
+                    'router_id' => $router?->id,
+                    'router' => $router?->name,
+                    'error' => $refreshError->getMessage(),
+                ]);
+            }
 
             $error = is_array($result)
                 ? (string) ($result['error'] ?? 'Router activation failed.')

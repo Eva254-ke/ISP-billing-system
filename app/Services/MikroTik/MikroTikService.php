@@ -150,8 +150,17 @@ class MikroTikService
         }
 
         // Fallback response when retries exhausted
-        $this->pingRouter($router);
-        $router = $router->fresh();
+        try {
+            $this->pingRouter($router);
+            $router = $router->fresh();
+        } catch (\Throwable $refreshError) {
+            Log::channel('mikrotik')->warning('Router connectivity refresh failed after hotspot session retries were exhausted', [
+                'router' => $router->name,
+                'router_id' => $router->id,
+                'username' => $username,
+                'error' => $refreshError->getMessage(),
+            ]);
+        }
 
         return [
             'success' => false,

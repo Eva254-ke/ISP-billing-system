@@ -86,6 +86,7 @@ class CaptivePortalController extends Controller
     {
         $tenantId = $this->resolveTenantId($request);
         $gateway = $this->resolvePaymentGateway();
+        $payment = null;
 
         if ($tenantId <= 0) {
             return back()->withErrors(['Tenant portal not resolved. Reopen your WiFi portal and try again.']);
@@ -251,12 +252,28 @@ class CaptivePortalController extends Controller
 
             return back()->withErrors([(string) ($response['error'] ?? 'Payment initiation failed. Try again.')]);
             
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             Log::error('Captive portal STK initiation exception', [
                 'error' => $e->getMessage(),
                 'phone' => $phone,
                 'gateway' => $gateway,
+                'payment_id' => $payment?->id,
             ]);
+
+            if ($payment instanceof Payment) {
+                session([
+                    'captive_phone' => $phone,
+                    'captive_tenant_id' => $payment->tenant_id,
+                    'captive_payment_id' => $payment->id,
+                ]);
+
+                return redirect()->route('wifi.status', $this->buildStatusRouteParameters(
+                    phone: $phone,
+                    payment: $payment,
+                    tenantId: (int) $payment->tenant_id
+                ))->with('message', 'We are verifying your payment request. If the M-Pesa prompt appears or money is deducted, do not pay again.');
+            }
+
             return back()->withErrors(['Payment service unavailable. Please try again.']);
         } finally {
             try {

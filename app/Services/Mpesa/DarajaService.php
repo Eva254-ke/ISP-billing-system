@@ -2,6 +2,7 @@
 
 namespace App\Services\Mpesa;
 
+use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
@@ -17,6 +18,8 @@ class DarajaService
     protected string $partyB;
     protected string $transactionType;
     protected int $timeout;
+    protected bool $verifySsl;
+    protected ?string $caBundlePath;
 
     public function __construct(?array $overrides = null)
     {
@@ -34,6 +37,12 @@ class DarajaService
             ? $transactionType
             : 'CustomerBuyGoodsOnline';
         $this->timeout = (int) ($overrides['timeout'] ?? config('services.mpesa.timeout', 30));
+        $this->verifySsl = $this->normalizeBoolean(
+            $overrides['verify_ssl'] ?? config('services.mpesa.verify_ssl', true),
+            true
+        );
+        $caBundlePath = trim((string) ($overrides['ca_bundle'] ?? config('services.mpesa.ca_bundle', '')));
+        $this->caBundlePath = $caBundlePath !== '' ? $caBundlePath : null;
 
         if (trim($this->partyB) === '') {
             $this->partyB = $this->businessShortcode;
@@ -149,7 +158,8 @@ class DarajaService
         ];
 
         try {
-            $response = Http::withToken((string) $token['access_token'])
+            $response = $this->request()
+                ->withToken((string) $token['access_token'])
                 ->acceptJson()
                 ->asJson()
                 ->timeout($this->timeout)
@@ -280,7 +290,8 @@ class DarajaService
         ];
 
         try {
-            $response = Http::withToken((string) $token['access_token'])
+            $response = $this->request()
+                ->withToken((string) $token['access_token'])
                 ->acceptJson()
                 ->asJson()
                 ->timeout($this->timeout)
@@ -379,7 +390,8 @@ class DarajaService
     private function requestAccessToken(): array
     {
         try {
-            $response = Http::withBasicAuth($this->consumerKey, $this->consumerSecret)
+            $response = $this->request()
+                ->withBasicAuth($this->consumerKey, $this->consumerSecret)
                 ->acceptJson()
                 ->timeout($this->timeout)
                 ->get($this->baseUrl . '/oauth/v1/generate', [
@@ -459,5 +471,31 @@ class DarajaService
         }
 
         return substr($text, 0, 182);
+    }
+
+    private function request(): PendingRequest
+    {
+        return Http::withOptions([
+            'verify' => $this->caBundlePath ?? $this->verifySsl,
+        ]);
+    }
+
+    private function normalizeBoolean(mixed $value, bool $default): bool
+    {
+        $normalized = filter_var($value, FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE);
+
+        if ($normalized !== null) {
+            return $normalized;
+        }
+
+        if (is_bool($value)) {
+            return $value;
+        }
+
+        if ($value === null) {
+            return $default;
+        }
+
+        return (bool) $value;
     }
 }

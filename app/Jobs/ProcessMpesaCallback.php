@@ -359,23 +359,58 @@ class ProcessMpesaCallback implements ShouldQueue
                 ];
 
                 if ((bool) config('radius.enabled', false)) {
-                    $radiusProvisioning->provisionUser(
-                        username: $sessionUsername,
-                        password: $sessionUsername,
-                        package: $package,
-                        expiresAt: $expiresAt
-                    );
+                    try {
+                        $radiusProvisioning->provisionUser(
+                            username: $sessionUsername,
+                            password: $sessionUsername,
+                            package: $package,
+                            expiresAt: $expiresAt
+                        );
 
-                    Log::channel('payment')->info('RADIUS provisioned for confirmed callback payment', [
-                        'payment_id' => $payment->id,
-                        'checkout_request_id' => $checkoutRequestId,
-                        'session_id' => $session->id,
-                        'username' => $sessionUsername,
-                        'router_id' => $routerId,
-                        'client_mac' => $session->mac_address,
-                        'client_ip' => $session->ip_address,
-                        'expires_at' => $expiresAt->toIso8601String(),
-                    ]);
+                        $radiusMetadata = [
+                            'provisioned' => true,
+                            'username' => $sessionUsername,
+                            'provisioned_at' => now()->toIso8601String(),
+                            'expires_at' => $expiresAt->toIso8601String(),
+                            'auth_hint' => 'password_equals_username',
+                            'last_error' => null,
+                            'last_failed_at' => null,
+                        ];
+
+                        $this->attachRadiusMetadataToSession($session, $radiusMetadata);
+                        $this->attachRadiusMetadataToPayment($payment, $radiusMetadata);
+
+                        Log::channel('payment')->info('RADIUS provisioned for confirmed callback payment', [
+                            'payment_id' => $payment->id,
+                            'checkout_request_id' => $checkoutRequestId,
+                            'session_id' => $session->id,
+                            'username' => $sessionUsername,
+                            'router_id' => $routerId,
+                            'client_mac' => $session->mac_address,
+                            'client_ip' => $session->ip_address,
+                            'expires_at' => $expiresAt->toIso8601String(),
+                        ]);
+                    } catch (\Throwable $radiusError) {
+                        $radiusMetadata = [
+                            'provisioned' => false,
+                            'username' => $sessionUsername,
+                            'last_error' => $radiusError->getMessage(),
+                            'last_failed_at' => now()->toIso8601String(),
+                            'expires_at' => $expiresAt->toIso8601String(),
+                        ];
+
+                        $this->attachRadiusMetadataToSession($session, $radiusMetadata);
+                        $this->attachRadiusMetadataToPayment($payment, $radiusMetadata);
+
+                        Log::channel('radius')->error('RADIUS provisioning failed for confirmed callback payment', [
+                            'payment_id' => $payment->id,
+                            'checkout_request_id' => $checkoutRequestId,
+                            'session_id' => $session->id,
+                            'username' => $sessionUsername,
+                            'router_id' => $routerId,
+                            'error' => $radiusError->getMessage(),
+                        ]);
+                    }
                 }
 
                 if ((string) $session->status === 'active') {
@@ -678,6 +713,24 @@ class ProcessMpesaCallback implements ShouldQueue
         }
 
         return filter_var($candidate, FILTER_VALIDATE_IP) ? $candidate : null;
+    }
+
+    private function attachRadiusMetadataToSession(UserSession $session, array $radiusMetadata): void
+    {
+        $sessionMetadata = is_array($session->metadata) ? $session->metadata : [];
+        $existingRadiusMetadata = is_array($sessionMetadata['radius'] ?? null) ? $sessionMetadata['radius'] : [];
+        $sessionMetadata['radius'] = array_merge($existingRadiusMetadata, $radiusMetadata);
+        $session->update(['metadata' => $sessionMetadata]);
+        $session->refresh();
+    }
+
+    private function attachRadiusMetadataToPayment(Payment $payment, array $radiusMetadata): void
+    {
+        $paymentMetadata = is_array($payment->metadata) ? $payment->metadata : [];
+        $existingRadiusMetadata = is_array($paymentMetadata['radius'] ?? null) ? $paymentMetadata['radius'] : [];
+        $paymentMetadata['radius'] = array_merge($existingRadiusMetadata, $radiusMetadata);
+        $payment->update(['metadata' => $paymentMetadata]);
+        $payment->refresh();
     }
 
     private function getRouterForTenant(int $tenantId): ?int

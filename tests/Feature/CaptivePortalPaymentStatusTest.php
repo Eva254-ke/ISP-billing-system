@@ -149,6 +149,34 @@ class CaptivePortalPaymentStatusTest extends TestCase
         $this->assertTrue((bool) data_get($payment->metadata, 'daraja_verification_required'));
     }
 
+    public function test_pay_redirects_to_status_when_unexpected_exception_happens_after_payment_creation(): void
+    {
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant);
+
+        $daraja = Mockery::mock(DarajaService::class);
+        $daraja->shouldReceive('isConfigured')->once()->andReturn(true);
+        $daraja->shouldReceive('stkPush')->once()->andThrow(new \RuntimeException('Daraja timeout'));
+        $this->app->instance(DarajaService::class, $daraja);
+
+        $response = $this->post(route('wifi.pay', ['tenant_id' => $tenant->id]), [
+            'phone' => '0712345678',
+            'package_id' => $package->id,
+        ]);
+
+        $payment = Payment::query()->latest('id')->firstOrFail();
+
+        $response->assertRedirect(route('wifi.status', [
+            'phone' => '0712345678',
+            'tenant_id' => $tenant->id,
+            'payment' => $payment->id,
+        ]));
+        $response->assertSessionHas('message');
+
+        $this->assertSame('pending', $payment->status);
+        $this->assertSame(1, Payment::query()->count());
+    }
+
     public function test_pay_persists_checkout_id_and_keeps_verifying_when_non_success_contains_checkout_id(): void
     {
         $tenant = $this->createTenant();
@@ -616,6 +644,119 @@ class CaptivePortalPaymentStatusTest extends TestCase
         Queue::assertPushed(ActivateSession::class, function (ActivateSession $job) use ($session) {
             return (int) $job->session->id === (int) $session->id;
         });
+    }
+
+    public function test_mpesa_callback_keeps_payment_confirmed_when_radius_provisioning_fails_and_queues_retry(): void
+    {
+        Queue::fake();
+        config()->set('radius.enabled', true);
+
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant);
+        $router = $this->createRouter($tenant, [
+            'status' => 'online',
+            'last_seen_at' => now(),
+        ]);
+
+        $payment = $this->createPayment($tenant, $package, [
+            'status' => 'pending',
+            'mpesa_checkout_request_id' => 'ws_CO_radius_failure_001',
+        ]);
+
+        $session = UserSession::query()->create([
+            'tenant_id' => $tenant->id,
+            'router_id' => $router->id,
+            'package_id' => $package->id,
+            'username' => 'cb0712345678',
+            'phone' => '0712345678',
+            'status' => 'idle',
+            'started_at' => now(),
+            'expires_at' => now()->addMinutes((int) $package->duration_in_minutes),
+            'payment_id' => $payment->id,
+        ]);
+
+        $sessionManager = Mockery::mock(SessionManager::class);
+        $sessionManager->shouldReceive('activateSession')->once()->andReturn([
+            'success' => false,
+            'error' => 'Hotspot login command sent, but no active session was created. Missing client MAC/IP context.',
+            'queued' => false,
+            'missing_client_context' => true,
+        ]);
+
+        $radiusProvisioning = Mockery::mock(FreeRadiusProvisioningService::class);
+        $radiusProvisioning->shouldReceive('provisionUser')->once()->andThrow(new \RuntimeException('Radius DB offline'));
+
+        $job = new ProcessMpesaCallback([
+            'CheckoutRequestID' => 'ws_CO_radius_failure_001',
+            'ResultCode' => 0,
+            'ResultDesc' => 'The service request is processed successfully.',
+            'MpesaReceiptNumber' => 'QKRADIUS001',
+            'PhoneNumber' => '254712345678',
+            'Amount' => 50,
+        ]);
+
+        $job->handle($sessionManager, $radiusProvisioning);
+
+        $payment->refresh();
+        $session->refresh();
+
+        $this->assertSame('confirmed', $payment->status);
+        $this->assertSame($session->id, (int) $payment->session_id);
+        $this->assertFalse((bool) data_get($payment->metadata, 'radius.provisioned'));
+        $this->assertStringContainsString('Radius DB offline', (string) data_get($payment->metadata, 'radius.last_error'));
+
+        Queue::assertPushed(ActivateSession::class, function (ActivateSession $job) use ($session) {
+            return (int) $job->session->id === (int) $session->id;
+        });
+    }
+
+    public function test_activate_session_job_reprovisions_radius_and_marks_payment_completed_on_success(): void
+    {
+        config()->set('radius.enabled', true);
+
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant);
+        $router = $this->createRouter($tenant, [
+            'status' => 'online',
+            'last_seen_at' => now(),
+        ]);
+
+        $payment = $this->createPayment($tenant, $package, [
+            'status' => 'confirmed',
+            'mpesa_checkout_request_id' => 'ws_CO_activation_retry_001',
+        ]);
+
+        $session = UserSession::query()->create([
+            'tenant_id' => $tenant->id,
+            'router_id' => $router->id,
+            'package_id' => $package->id,
+            'username' => 'cb0712345678',
+            'phone' => '0712345678',
+            'status' => 'idle',
+            'started_at' => now(),
+            'expires_at' => now()->addMinutes((int) $package->duration_in_minutes),
+            'payment_id' => $payment->id,
+        ]);
+
+        $sessionManager = Mockery::mock(SessionManager::class);
+        $sessionManager->shouldReceive('activateSession')->once()->andReturn([
+            'success' => true,
+            'expires_at' => now()->addMinutes((int) $package->duration_in_minutes),
+        ]);
+
+        $radiusProvisioning = Mockery::mock(FreeRadiusProvisioningService::class);
+        $radiusProvisioning->shouldReceive('provisionUser')->once();
+
+        $job = new ActivateSession($session);
+        $job->handle($sessionManager, $radiusProvisioning);
+
+        $payment->refresh();
+        $session->refresh();
+
+        $this->assertSame('active', $session->status);
+        $this->assertSame('completed', $payment->status);
+        $this->assertSame($session->id, (int) $payment->session_id);
+        $this->assertTrue((bool) data_get($payment->metadata, 'radius.provisioned'));
     }
 
     public function test_router_walled_garden_rules_include_portal_and_daraja_hosts_without_intasend(): void
