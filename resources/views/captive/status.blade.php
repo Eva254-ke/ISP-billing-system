@@ -450,6 +450,23 @@
             }
         }
 
+        function shouldUseTopLevelRadiusAutoLogin(loginPayload) {
+            if (!loginPayload || !loginPayload.action) {
+                return false;
+            }
+
+            try {
+                const actionUrl = new URL(loginPayload.action, window.location.href);
+
+                // Hidden iframe submission to an insecure router login from a secure
+                // captive page is frequently blocked as mixed content. In that case
+                // we need a top-level form post so the hotspot can finish login.
+                return window.location.protocol === 'https:' && actionUrl.protocol === 'http:';
+            } catch (urlError) {
+                return false;
+            }
+        }
+
         function setHiddenField(form, name, value) {
             const existing = Array.from(form.querySelectorAll('input')).find((input) => input.name === name);
 
@@ -471,6 +488,7 @@
         function hydrateRadiusAutoLoginForm(form, loginPayload) {
             form.method = 'POST';
             form.action = loginPayload.action || '';
+            form.target = shouldUseTopLevelRadiusAutoLogin(loginPayload) ? '_top' : 'cpRadiusAutoLoginFrame';
 
             setHiddenField(form, 'username', loginPayload.username || '');
             setHiddenField(form, 'password', loginPayload.password || '');

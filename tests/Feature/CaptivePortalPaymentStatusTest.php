@@ -1049,6 +1049,8 @@ class CaptivePortalPaymentStatusTest extends TestCase
         $response->assertSee('name="dst"', false);
         $response->assertSee('value="https://example.com/after-login"', false);
         $response->assertSee('Connecting you to WiFi', false);
+        $response->assertSee('shouldUseTopLevelRadiusAutoLogin', false);
+        $response->assertSee("form.target = shouldUseTopLevelRadiusAutoLogin(loginPayload) ? '_top' : 'cpRadiusAutoLoginFrame';", false);
     }
 
     public function test_session_manager_skips_router_api_disconnect_for_expired_pure_radius_sessions(): void
