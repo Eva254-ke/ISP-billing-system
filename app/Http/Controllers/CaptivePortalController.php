@@ -215,7 +215,7 @@ class CaptivePortalController extends Controller
                 }
             }
 
-            $payment = DB::transaction(function () use ($phone, $package, $gateway, $clientContextMeta) {
+            $payment = DB::transaction(function () use ($phone, $package, $gateway, $clientContextMeta, $hotspotContextMeta) {
                 return Payment::create([
                     'tenant_id' => $package->tenant_id,
                     'phone' => $phone,
