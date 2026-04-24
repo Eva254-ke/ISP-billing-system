@@ -1098,19 +1098,50 @@ class CaptivePortalController extends Controller
         $radiusPureFlow = $identityResolver->shouldUsePureRadiusFlow($radiusIdentity);
         $radiusPendingReauth = !$radiusPureFlow
             && $identityResolver->shouldBypassRouterActivation($radiusIdentity);
+        $latestSession = UserSession::query()
+            ->where('payment_id', $payment->id)
+            ->latest('id')
+            ->first();
+        $radiusAutoLogin = !$radiusPendingReauth
+            && $this->hasProvisionedRadiusAccess($payment, $latestSession, $radiusIdentity)
+                ? $this->buildHotspotAutoLoginPayload($payment, $radiusIdentity)
+                : null;
 
         return [
-            'auto_login' => $radiusPureFlow
-                ? $this->buildHotspotAutoLoginPayload($payment, $radiusIdentity)
-                : null,
+            'auto_login' => $radiusAutoLogin,
             'pending_reauth' => $radiusPendingReauth,
-            'fallback' => !$radiusPendingReauth
+            'fallback' => !$radiusPendingReauth && $radiusAutoLogin === null
                 ? [
                     'username' => $radiusIdentity['username'],
                     'password_hint' => 'Use the same value as username',
                 ]
                 : null,
         ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $identity
+     */
+    private function hasProvisionedRadiusAccess(Payment $payment, ?UserSession $session = null, array $identity = []): bool
+    {
+        $username = trim((string) ($identity['username'] ?? ''));
+        $paymentMetadata = is_array($payment->metadata) ? $payment->metadata : [];
+        $paymentRadius = is_array($paymentMetadata['radius'] ?? null) ? $paymentMetadata['radius'] : [];
+        $sessionMetadata = is_array($session?->metadata) ? $session->metadata : [];
+        $sessionRadius = is_array($sessionMetadata['radius'] ?? null) ? $sessionMetadata['radius'] : [];
+
+        foreach ([$sessionRadius, $paymentRadius] as $radiusMetadata) {
+            if (!(bool) ($radiusMetadata['provisioned'] ?? false)) {
+                continue;
+            }
+
+            $provisionedUsername = trim((string) ($radiusMetadata['username'] ?? ''));
+            if ($username === '' || $provisionedUsername === '' || $provisionedUsername === $username) {
+                return true;
+            }
+        }
+
+        return false;
     }
     
     private function initiateStkPush(Payment $payment, Package $package, string $phone, string $flow): array

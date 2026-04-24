@@ -515,6 +515,70 @@ class CaptivePortalPaymentStatusTest extends TestCase
         $response->assertJsonPath('radius_auto_login.popup', 'true');
     }
 
+    public function test_check_status_returns_radius_auto_login_payload_for_confirmed_radius_payment_when_router_activation_is_pending(): void
+    {
+        config()->set('radius.enabled', true);
+        config()->set('radius.pure_radius', false);
+
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant);
+        $router = $this->createRouter($tenant, [
+            'status' => 'online',
+            'last_seen_at' => now(),
+        ]);
+
+        $payment = $this->createPayment($tenant, $package, [
+            'status' => 'confirmed',
+            'confirmed_at' => now(),
+            'mpesa_checkout_request_id' => 'ws_CO_radius_fallback_autologin_001',
+        ]);
+
+        $sessionManager = Mockery::mock(SessionManager::class);
+        $sessionManager->shouldReceive('activateSession')->once()->andReturn([
+            'success' => false,
+            'error' => 'Hotspot login command sent, but no active session was detected on the router.',
+            'queued' => false,
+            'missing_client_context' => false,
+        ]);
+        $this->app->instance(SessionManager::class, $sessionManager);
+
+        $radiusProvisioning = Mockery::mock(FreeRadiusProvisioningService::class);
+        $radiusProvisioning->shouldReceive('provisionUser')->once()->withArgs(function (string $username, string $password, Package $resolvedPackage) use ($package) {
+            return $username === 'cb0712345678'
+                && $password === 'cb0712345678'
+                && (int) $resolvedPackage->id === (int) $package->id;
+        });
+        $this->app->instance(FreeRadiusProvisioningService::class, $radiusProvisioning);
+
+        $response = $this->getJson(route('wifi.status.check', [
+            'phone' => '0712345678',
+            'tenant_id' => $tenant->id,
+            'payment' => $payment->id,
+            'link-login-only' => 'http://' . $router->ip_address . '/login',
+            'dst' => 'https://example.com/after-login',
+            'popup' => 'true',
+        ]));
+
+        $response->assertOk();
+        $response->assertJson([
+            'status' => 'paid',
+            'payment_id' => $payment->id,
+            'session_active' => false,
+            'radius_pending_reauth' => false,
+        ]);
+        $response->assertJsonPath('radius_auto_login.action', 'http://' . $router->ip_address . '/login');
+        $response->assertJsonPath('radius_auto_login.username', 'cb0712345678');
+        $response->assertJsonPath('radius_auto_login.password', 'cb0712345678');
+        $response->assertJsonPath('radius_auto_login.dst', 'https://example.com/after-login');
+        $response->assertJsonPath('radius_auto_login.popup', 'true');
+
+        $payment->refresh();
+
+        $this->assertSame('confirmed', $payment->status);
+        $this->assertTrue((bool) data_get($payment->metadata, 'radius.provisioned'));
+        $this->assertNotNull(UserSession::query()->where('payment_id', $payment->id)->first());
+    }
+
     public function test_mpesa_callback_route_acknowledges_immediately_and_processes_after_response(): void
     {
         $tenant = $this->createTenant();
@@ -871,6 +935,7 @@ class CaptivePortalPaymentStatusTest extends TestCase
     {
         Queue::fake();
         config()->set('radius.enabled', true);
+        config()->set('radius.pure_radius', false);
 
         $tenant = $this->createTenant();
         $package = $this->createPackage($tenant);
@@ -935,6 +1000,7 @@ class CaptivePortalPaymentStatusTest extends TestCase
     {
         Queue::fake();
         config()->set('radius.enabled', true);
+        config()->set('radius.pure_radius', false);
 
         $tenant = $this->createTenant();
         $package = $this->createPackage($tenant);
@@ -998,6 +1064,7 @@ class CaptivePortalPaymentStatusTest extends TestCase
     public function test_activate_session_job_reprovisions_radius_and_marks_payment_completed_on_success(): void
     {
         config()->set('radius.enabled', true);
+        config()->set('radius.pure_radius', false);
 
         $tenant = $this->createTenant();
         $package = $this->createPackage($tenant);
@@ -1047,6 +1114,7 @@ class CaptivePortalPaymentStatusTest extends TestCase
     public function test_activate_session_job_prepares_mac_radius_authorization_without_router_api_login(): void
     {
         config()->set('radius.enabled', true);
+        config()->set('radius.pure_radius', false);
         config()->set('radius.access_mode', 'mac');
 
         $tenant = $this->createTenant();
@@ -1207,6 +1275,7 @@ class CaptivePortalPaymentStatusTest extends TestCase
     public function test_check_status_marks_mac_authorized_session_active_from_radius_accounting(): void
     {
         config()->set('radius.enabled', true);
+        config()->set('radius.pure_radius', false);
         config()->set('radius.access_mode', 'mac');
         $this->configureRadiusAccountingConnection();
 
