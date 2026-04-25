@@ -75,12 +75,42 @@ class CaptivePortalController extends Controller
             return view('captive.reconnect', compact('phone', 'tenant', 'clientMac', 'clientIp', 'hotspotContext'));
         }
         
-        $activeSession = null;
-        if ($phone) {
-            $activeSession = UserSession::where('tenant_id', $tenant->id)
-                ->where('phone', $phone)
-                ->active()
-                ->first();
+        $activeSession = $this->resolvePackagesActiveSession(
+            tenantId: (int) $tenant->id,
+            phone: $phone,
+            clientMac: $clientMac,
+            clientIp: $clientIp
+        );
+
+        if ($activeSession && !$phone && !empty($activeSession->phone)) {
+            $phone = (string) $activeSession->phone;
+            session(['captive_phone' => $phone]);
+        }
+
+        if (!$activeSession) {
+            $resumablePayment = $this->resolvePackagesResumablePayment(
+                tenantId: (int) $tenant->id,
+                phone: $phone,
+                clientMac: $clientMac,
+                clientIp: $clientIp
+            );
+
+            if ($resumablePayment) {
+                $resumePhone = $this->normalizePhoneForStorage((string) $resumablePayment->phone)
+                    ?? trim((string) $resumablePayment->phone);
+
+                if ($resumePhone !== '') {
+                    session(['captive_phone' => $resumePhone]);
+                }
+
+                session(['captive_payment_id' => $resumablePayment->id]);
+
+                return redirect()->route('wifi.status', $this->buildStatusRouteParameters(
+                    phone: $resumePhone !== '' ? $resumePhone : (string) $resumablePayment->phone,
+                    payment: $resumablePayment,
+                    tenantId: (int) $tenant->id
+                ))->with('message', 'We found your recent payment. Continuing connection.');
+            }
         }
 
         $packagesQuery = Package::query()
@@ -472,6 +502,129 @@ class CaptivePortalController extends Controller
         }
 
         return $statusView;
+    }
+
+    private function resolvePackagesActiveSession(int $tenantId, ?string $phone = null, ?string $clientMac = null, ?string $clientIp = null): ?UserSession
+    {
+        if ($phone) {
+            $activeSession = UserSession::query()
+                ->where('tenant_id', $tenantId)
+                ->where('phone', $phone)
+                ->active()
+                ->first();
+
+            if ($activeSession) {
+                return $activeSession;
+            }
+        }
+
+        if ($clientMac === null && $clientIp === null) {
+            return null;
+        }
+
+        return UserSession::query()
+            ->where('tenant_id', $tenantId)
+            ->active()
+            ->where(function ($query) use ($clientMac, $clientIp) {
+                if ($clientMac !== null) {
+                    $query->orWhere('mac_address', $clientMac);
+                }
+
+                if ($clientIp !== null) {
+                    $query->orWhere('ip_address', $clientIp);
+                }
+            })
+            ->orderByDesc('last_activity_at')
+            ->orderByDesc('id')
+            ->first();
+    }
+
+    private function resolvePackagesResumablePayment(int $tenantId, ?string $phone = null, ?string $clientMac = null, ?string $clientIp = null): ?Payment
+    {
+        $sessionPaymentId = (int) session('captive_payment_id', 0);
+        if ($sessionPaymentId > 0) {
+            $payment = Payment::query()
+                ->whereKey($sessionPaymentId)
+                ->where('tenant_id', $tenantId)
+                ->whereIn('payment_channel', self::STATUS_CHANNELS)
+                ->first();
+
+            if ($payment && $this->shouldResumePackagesPayment($payment)) {
+                return $payment;
+            }
+        }
+
+        if ($phone) {
+            $candidates = $this->buildStatusPaymentQuery($phone, $tenantId)
+                ->where('created_at', '>=', now()->subMinutes(self::DUPLICATE_PAYMENT_WINDOW_MINUTES))
+                ->orderByDesc('created_at')
+                ->orderByDesc('id')
+                ->limit(6)
+                ->get();
+
+            foreach ($candidates as $candidate) {
+                if ($this->shouldResumePackagesPayment($candidate)) {
+                    return $candidate;
+                }
+            }
+        }
+
+        if ($clientMac === null && $clientIp === null) {
+            return null;
+        }
+
+        $session = UserSession::query()
+            ->where('tenant_id', $tenantId)
+            ->whereIn('status', ['active', 'idle'])
+            ->whereNotNull('payment_id')
+            ->where(function ($query) use ($clientMac, $clientIp) {
+                if ($clientMac !== null) {
+                    $query->orWhere('mac_address', $clientMac);
+                }
+
+                if ($clientIp !== null) {
+                    $query->orWhere('ip_address', $clientIp);
+                }
+            })
+            ->orderByRaw(
+                "CASE WHEN status = ? THEN 0 WHEN status = ? THEN 1 ELSE 2 END",
+                ['active', 'idle']
+            )
+            ->orderByDesc('last_activity_at')
+            ->orderByDesc('id')
+            ->first();
+
+        if (!$session || (int) ($session->payment_id ?? 0) <= 0) {
+            return null;
+        }
+
+        $payment = Payment::query()
+            ->whereKey((int) $session->payment_id)
+            ->where('tenant_id', $tenantId)
+            ->whereIn('payment_channel', self::STATUS_CHANNELS)
+            ->first();
+
+        return $payment && $this->shouldResumePackagesPayment($payment)
+            ? $payment
+            : null;
+    }
+
+    private function shouldResumePackagesPayment(Payment $payment): bool
+    {
+        if ($this->shouldReuseCaptivePaymentAttempt($payment)
+            && ($payment->created_at?->gte(now()->subMinutes(self::DUPLICATE_PAYMENT_WINDOW_MINUTES)) ?? false)
+        ) {
+            return true;
+        }
+
+        if (!in_array((string) $payment->status, ['confirmed', 'completed'], true)) {
+            return false;
+        }
+
+        return UserSession::query()
+            ->where('payment_id', $payment->id)
+            ->whereIn('status', ['active', 'idle'])
+            ->exists();
     }
 
     private function findReconnectablePayment(string $mpesaCode, string $phone, int $tenantId): ?Payment

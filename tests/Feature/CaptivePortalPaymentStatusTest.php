@@ -50,6 +50,67 @@ class CaptivePortalPaymentStatusTest extends TestCase
         $response->assertSee('value="' . $tenant->id . '"', false);
     }
 
+    public function test_packages_redirects_to_status_for_recent_captive_payment_in_session(): void
+    {
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant);
+        $payment = $this->createPayment($tenant, $package, [
+            'status' => 'confirmed',
+            'confirmed_at' => now(),
+        ]);
+
+        $response = $this->withSession([
+            'captive_tenant_id' => $tenant->id,
+            'captive_phone' => '0712345678',
+            'captive_payment_id' => $payment->id,
+        ])->get(route('wifi.packages', ['tenant_id' => $tenant->id]));
+
+        $response->assertRedirect(route('wifi.status', [
+            'phone' => '0712345678',
+            'tenant_id' => $tenant->id,
+            'payment' => $payment->id,
+        ]));
+    }
+
+    public function test_packages_redirects_to_status_for_idle_session_resolved_from_client_mac(): void
+    {
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant);
+        $router = $this->createRouter($tenant, [
+            'status' => 'online',
+            'last_seen_at' => now(),
+        ]);
+        $payment = $this->createPayment($tenant, $package, [
+            'status' => 'confirmed',
+            'confirmed_at' => now(),
+        ]);
+
+        UserSession::query()->create([
+            'tenant_id' => $tenant->id,
+            'router_id' => $router->id,
+            'payment_id' => $payment->id,
+            'package_id' => $package->id,
+            'username' => 'cb0712345678',
+            'phone' => '0712345678',
+            'mac_address' => 'AA:BB:CC:DD:EE:FF',
+            'ip_address' => '10.0.0.50',
+            'status' => 'idle',
+            'started_at' => now(),
+            'expires_at' => now()->addHour(),
+        ]);
+
+        $response = $this->get(route('wifi.packages', [
+            'tenant_id' => $tenant->id,
+            'mac' => 'AA-BB-CC-DD-EE-FF',
+        ]));
+
+        $response->assertRedirect(route('wifi.status', [
+            'phone' => '0712345678',
+            'tenant_id' => $tenant->id,
+            'payment' => $payment->id,
+        ]));
+    }
+
     public function test_status_route_uses_explicit_payment_query_parameter(): void
     {
         $tenant = $this->createTenant();
