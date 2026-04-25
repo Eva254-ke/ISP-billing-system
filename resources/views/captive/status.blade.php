@@ -12,6 +12,24 @@
         $captiveCssPath = public_path('css/captive-portal.css');
         $captiveCssVersion = file_exists($captiveCssPath) ? filemtime($captiveCssPath) : time();
         $tenantId = (int) ($payment->tenant_id ?? request()->query('tenant_id', 0));
+        $paymentMeta = is_array($payment->metadata) ? $payment->metadata : [];
+        $paymentClientContext = is_array($paymentMeta['client_context'] ?? null) ? $paymentMeta['client_context'] : [];
+        $paymentHotspotContext = is_array($paymentMeta['hotspot_context'] ?? null) ? $paymentMeta['hotspot_context'] : [];
+        $storedHotspotContext = session('captive_hotspot_context', []);
+        $storedHotspotContext = is_array($storedHotspotContext) ? $storedHotspotContext : [];
+        $routeHotspotContext = array_merge($paymentHotspotContext, $storedHotspotContext);
+        $routeContext = array_filter([
+            'mac' => trim((string) request()->query('mac', $paymentClientContext['mac'] ?? session('captive_client_mac', ''))),
+            'ip' => trim((string) request()->query('ip', $paymentClientContext['ip'] ?? session('captive_client_ip', ''))),
+            'link-login-only' => trim((string) request()->query('link-login-only', $routeHotspotContext['link_login_only'] ?? '')),
+            'link-login' => trim((string) request()->query('link-login', $routeHotspotContext['link_login'] ?? '')),
+            'dst' => trim((string) request()->query('dst', $routeHotspotContext['dst'] ?? '')),
+            'popup' => trim((string) request()->query('popup', $routeHotspotContext['popup'] ?? '')),
+            'chap-id' => trim((string) request()->query('chap-id', $routeHotspotContext['chap_id'] ?? '')),
+            'chap-challenge' => trim((string) request()->query('chap-challenge', $routeHotspotContext['chap_challenge'] ?? '')),
+            'link-orig' => trim((string) request()->query('link-orig', $routeHotspotContext['link_orig'] ?? '')),
+            'link-orig-esc' => trim((string) request()->query('link-orig-esc', $routeHotspotContext['link_orig_esc'] ?? '')),
+        ], static fn ($value) => $value !== null && $value !== '');
         $supportPhoneRaw = trim((string) ($payment->tenant?->captive_portal_support_phone ?? ''));
         $supportDigits = preg_replace('/\D+/', '', $supportPhoneRaw);
         if (is_string($supportDigits) && str_starts_with($supportDigits, '0')) {
@@ -20,24 +38,23 @@
         $supportTelHref = (is_string($supportDigits) && $supportDigits !== '')
             ? 'tel:+' . ltrim($supportDigits, '+')
             : 'tel:+254742939094';
-        $statusRoute = route('wifi.status', array_filter([
+        $statusRoute = route('wifi.status', array_filter(array_merge([
             'phone' => $phone,
             'tenant_id' => $tenantId > 0 ? $tenantId : null,
             'payment' => $payment->id,
-        ], static fn ($value) => $value !== null && $value !== ''));
-        $statusCheckRoute = route('wifi.status.check', array_filter([
+        ], $routeContext), static fn ($value) => $value !== null && $value !== ''));
+        $statusCheckRoute = route('wifi.status.check', array_filter(array_merge([
             'phone' => $phone,
             'tenant_id' => $tenantId > 0 ? $tenantId : null,
             'payment' => $payment->id,
-        ], static fn ($value) => $value !== null && $value !== ''));
+        ], $routeContext), static fn ($value) => $value !== null && $value !== ''));
         $radiusAutoLogin = is_array($radiusAutoLogin ?? null) ? $radiusAutoLogin : null;
         $radiusPendingReauth = (bool) ($radiusPendingReauth ?? false);
         $shouldAutoPoll = in_array($statusView, ['pending', 'paid', 'verifying'], true);
-        $packagesParams = array_filter([
+        $packagesParams = array_filter(array_merge([
             'phone' => $phone,
             'tenant_id' => $tenantId > 0 ? $tenantId : null,
-        ], static fn ($value) => $value !== null && $value !== '');
-        $paymentMeta = is_array($payment->metadata) ? $payment->metadata : [];
+        ], $routeContext), static fn ($value) => $value !== null && $value !== '');
         $gatewayStatus = trim((string) ($paymentMeta['daraja_last_status'] ?? ''));
         $pendingStatusLabel = match ($gatewayStatus) {
             'pending_customer_confirmation' => 'Prompt sent',

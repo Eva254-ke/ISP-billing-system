@@ -99,10 +99,20 @@ class RadiusIdentityResolver
     private function resolvePhoneIdentity(?string $phone, ?int $paymentId = null): string
     {
         $digits = preg_replace('/\D+/', '', (string) $phone);
+        $paymentId = max(0, (int) $paymentId);
+
+        if ($digits !== '' && $paymentId > 0) {
+            return 'cb' . $digits . 'p' . $paymentId;
+        }
+
         if ($digits !== '') {
             return 'cb' . $digits;
         }
 
-        return 'cbu' . (int) $paymentId;
+        if ($paymentId > 0) {
+            return 'cbu' . $paymentId;
+        }
+
+        return 'cbu0';
     }
 }

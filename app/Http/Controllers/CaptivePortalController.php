@@ -197,7 +197,7 @@ class CaptivePortalController extends Controller
 
         try {
             $existing = $this->findReusableCaptivePaymentAttempt($tenantId, $phone, (int) $package->id);
-            if ($existing && $this->shouldReuseCaptivePaymentAttempt($existing)) {
+            if ($existing && $this->shouldReuseCaptivePaymentAttemptForInitiation($existing)) {
                 if ($clientContextMeta !== [] || $hotspotContextMeta !== []) {
                     $existingMetadata = is_array($existing->metadata) ? $existing->metadata : [];
                     if ($clientContextMeta !== []) {
@@ -215,7 +215,7 @@ class CaptivePortalController extends Controller
                 $this->reconcileDarajaPaymentIfNeeded($existing, false);
                 $existing = $existing->fresh();
 
-                if ($existing && $this->shouldReuseCaptivePaymentAttempt($existing)) {
+                if ($existing && $this->shouldReuseCaptivePaymentAttemptForInitiation($existing)) {
                     if (in_array((string) $existing->status, ['completed', 'confirmed'], true)) {
                         try {
                             $this->activatePaidAccess($existing);
@@ -405,7 +405,33 @@ class CaptivePortalController extends Controller
             'phone' => $phone,
             'tenant_id' => ($tenantId ?? (int) $payment->tenant_id) > 0 ? ($tenantId ?? (int) $payment->tenant_id) : null,
             'payment' => $payment->id,
-        ], $extra), static fn ($value) => $value !== null && $value !== '');
+        ], $this->buildCaptiveRouteContext($payment), $extra), static fn ($value) => $value !== null && $value !== '');
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private function buildCaptiveRouteContext(?Payment $payment = null): array
+    {
+        $metadata = is_array($payment?->metadata) ? $payment->metadata : [];
+        $paymentClientContext = is_array($metadata['client_context'] ?? null) ? $metadata['client_context'] : [];
+        $paymentHotspotContext = is_array($metadata['hotspot_context'] ?? null) ? $metadata['hotspot_context'] : [];
+        $storedHotspotContext = session(self::HOTSPOT_CONTEXT_SESSION_KEY, []);
+        $storedHotspotContext = is_array($storedHotspotContext) ? $storedHotspotContext : [];
+        $hotspotContext = array_merge($paymentHotspotContext, $storedHotspotContext);
+
+        return array_filter([
+            'mac' => $this->normalizeMacAddress((string) (session('captive_client_mac', $paymentClientContext['mac'] ?? ''))),
+            'ip' => $this->normalizeClientIpAddress((string) (session('captive_client_ip', $paymentClientContext['ip'] ?? ''))),
+            'link-login-only' => $this->sanitizeHotspotText((string) ($hotspotContext['link_login_only'] ?? ''), 2048),
+            'link-login' => $this->sanitizeHotspotText((string) ($hotspotContext['link_login'] ?? ''), 2048),
+            'dst' => $this->sanitizeHotspotText((string) ($hotspotContext['dst'] ?? ''), 2048),
+            'popup' => $this->sanitizeHotspotText((string) ($hotspotContext['popup'] ?? ''), 32),
+            'chap-id' => $this->sanitizeHotspotText((string) ($hotspotContext['chap_id'] ?? ''), 64),
+            'chap-challenge' => $this->sanitizeHotspotText((string) ($hotspotContext['chap_challenge'] ?? ''), 512),
+            'link-orig' => $this->sanitizeHotspotText((string) ($hotspotContext['link_orig'] ?? ''), 2048),
+            'link-orig-esc' => $this->sanitizeHotspotText((string) ($hotspotContext['link_orig_esc'] ?? ''), 2048),
+        ], static fn ($value) => is_string($value) && $value !== '');
     }
 
     private function resolveRequestedStatusPayment(Request $request, string $phone, int $tenantId): ?Payment
@@ -1887,6 +1913,17 @@ class CaptivePortalController extends Controller
         }
 
         if ($radiusProvisioned && $radiusPureFlow) {
+            $existingActivationMetadata = is_array(($session->metadata ?? [])['activation'] ?? null)
+                ? (array) $session->metadata['activation']
+                : [];
+
+            if (
+                (bool) ($existingActivationMetadata['waiting_for_hotspot_login'] ?? false)
+                && (string) ($existingActivationMetadata['method'] ?? '') === 'radius_hotspot_login'
+            ) {
+                return $session->fresh();
+            }
+
             $activationMetadata = [
                 'last_attempt_at' => now()->toIso8601String(),
                 'method' => ($identity['identity_type'] ?? null) === 'mac' ? 'radius_mac_auth' : 'radius_hotspot_login',
@@ -1926,6 +1963,14 @@ class CaptivePortalController extends Controller
         }
 
         if ($radiusProvisioned && $identityResolver->shouldBypassRouterActivation($identity)) {
+            $existingActivationMetadata = is_array(($session->metadata ?? [])['activation'] ?? null)
+                ? (array) $session->metadata['activation']
+                : [];
+
+            if ((bool) ($existingActivationMetadata['waiting_for_reauth'] ?? false)) {
+                return $session->fresh();
+            }
+
             $activationMetadata = [
                 'last_attempt_at' => now()->toIso8601String(),
                 'method' => 'radius_mac_auth',
@@ -2688,12 +2733,27 @@ class CaptivePortalController extends Controller
             ->get();
 
         foreach ($candidates as $candidate) {
-            if ($this->shouldReuseCaptivePaymentAttempt($candidate)) {
+            if ($this->shouldReuseCaptivePaymentAttemptForInitiation($candidate)) {
                 return $candidate;
             }
         }
 
         return null;
+    }
+
+    private function shouldReuseCaptivePaymentAttemptForInitiation(Payment $payment): bool
+    {
+        $status = (string) $payment->status;
+
+        if (in_array($status, ['initiated', 'pending'], true)) {
+            return true;
+        }
+
+        if ($status === 'failed' && $this->paymentNeedsVerification($payment)) {
+            return true;
+        }
+
+        return false;
     }
 
     private function shouldReuseCaptivePaymentAttempt(Payment $payment): bool

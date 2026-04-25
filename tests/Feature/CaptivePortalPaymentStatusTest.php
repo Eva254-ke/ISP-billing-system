@@ -12,6 +12,7 @@ use App\Jobs\ProcessMpesaCallback;
 use App\Services\MikroTik\SessionManager;
 use App\Services\Mpesa\DarajaService;
 use App\Services\Radius\FreeRadiusProvisioningService;
+use App\Services\Radius\RadiusIdentityResolver;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -35,6 +36,20 @@ class CaptivePortalPaymentStatusTest extends TestCase
         ]);
 
         $this->assertTrue($service->isConfigured());
+    }
+
+    public function test_phone_radius_identity_is_scoped_to_payment(): void
+    {
+        $resolver = app(RadiusIdentityResolver::class);
+
+        $first = $resolver->resolve('0712345678', 71);
+        $second = $resolver->resolve('0712345678', 72);
+
+        $this->assertSame('cb0712345678p71', $first['username']);
+        $this->assertSame('cb0712345678p72', $second['username']);
+        $this->assertNotSame($first['username'], $second['username']);
+        $this->assertSame($first['username'], $first['password']);
+        $this->assertSame($second['username'], $second['password']);
     }
 
     public function test_packages_view_posts_payments_with_explicit_tenant_context(): void
@@ -90,7 +105,7 @@ class CaptivePortalPaymentStatusTest extends TestCase
             'router_id' => $router->id,
             'payment_id' => $payment->id,
             'package_id' => $package->id,
-            'username' => 'cb0712345678',
+            'username' => $this->expectedPhoneRadiusUsername($payment),
             'phone' => '0712345678',
             'mac_address' => 'AA:BB:CC:DD:EE:FF',
             'ip_address' => '10.0.0.50',
@@ -108,6 +123,7 @@ class CaptivePortalPaymentStatusTest extends TestCase
             'phone' => '0712345678',
             'tenant_id' => $tenant->id,
             'payment' => $payment->id,
+            'mac' => 'AA:BB:CC:DD:EE:FF',
         ]));
     }
 
@@ -402,6 +418,8 @@ class CaptivePortalPaymentStatusTest extends TestCase
             'phone' => '0712345678',
             'tenant_id' => $tenant->id,
             'payment' => $payment->id,
+            'link-login-only' => 'http://' . $router->ip_address . '/login',
+            'link-login' => 'http://' . $router->ip_address . '/login',
         ]));
         $response->assertSessionHas('success');
 
@@ -569,9 +587,10 @@ class CaptivePortalPaymentStatusTest extends TestCase
             'session_active' => false,
             'radius_pending_reauth' => false,
         ]);
+        $expectedUsername = $this->expectedPhoneRadiusUsername($payment);
         $response->assertJsonPath('radius_auto_login.action', 'http://' . $router->ip_address . '/login');
-        $response->assertJsonPath('radius_auto_login.username', 'cb0712345678');
-        $response->assertJsonPath('radius_auto_login.password', 'cb0712345678');
+        $response->assertJsonPath('radius_auto_login.username', $expectedUsername);
+        $response->assertJsonPath('radius_auto_login.password', $expectedUsername);
         $response->assertJsonPath('radius_auto_login.dst', 'https://example.com/after-login');
         $response->assertJsonPath('radius_auto_login.popup', 'true');
     }
@@ -654,10 +673,11 @@ class CaptivePortalPaymentStatusTest extends TestCase
         ]);
         $this->app->instance(SessionManager::class, $sessionManager);
 
+        $expectedUsername = $this->expectedPhoneRadiusUsername($payment);
         $radiusProvisioning = Mockery::mock(FreeRadiusProvisioningService::class);
-        $radiusProvisioning->shouldReceive('provisionUser')->once()->withArgs(function (string $username, string $password, Package $resolvedPackage) use ($package) {
-            return $username === 'cb0712345678'
-                && $password === 'cb0712345678'
+        $radiusProvisioning->shouldReceive('provisionUser')->once()->withArgs(function (string $username, string $password, Package $resolvedPackage) use ($package, $expectedUsername) {
+            return $username === $expectedUsername
+                && $password === $expectedUsername
                 && (int) $resolvedPackage->id === (int) $package->id;
         });
         $this->app->instance(FreeRadiusProvisioningService::class, $radiusProvisioning);
@@ -679,8 +699,8 @@ class CaptivePortalPaymentStatusTest extends TestCase
             'radius_pending_reauth' => false,
         ]);
         $response->assertJsonPath('radius_auto_login.action', 'http://' . $router->ip_address . '/login');
-        $response->assertJsonPath('radius_auto_login.username', 'cb0712345678');
-        $response->assertJsonPath('radius_auto_login.password', 'cb0712345678');
+        $response->assertJsonPath('radius_auto_login.username', $expectedUsername);
+        $response->assertJsonPath('radius_auto_login.password', $expectedUsername);
         $response->assertJsonPath('radius_auto_login.dst', 'https://example.com/after-login');
         $response->assertJsonPath('radius_auto_login.popup', 'true');
 
@@ -803,6 +823,54 @@ class CaptivePortalPaymentStatusTest extends TestCase
 
         $latest = Payment::query()->latest('id')->firstOrFail();
         $this->assertNotSame($failed->id, $latest->id);
+        $this->assertSame(2, Payment::query()->count());
+
+        $response->assertRedirect(route('wifi.status', [
+            'phone' => '0712345678',
+            'tenant_id' => $tenant->id,
+            'payment' => $latest->id,
+        ]));
+    }
+
+    public function test_pay_creates_new_attempt_when_recent_payment_is_already_confirmed(): void
+    {
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant);
+
+        $confirmed = $this->createPayment($tenant, $package, [
+            'status' => 'confirmed',
+            'confirmed_at' => now()->subMinute(),
+            'mpesa_checkout_request_id' => 'ws_CO_existing_confirmed_001',
+        ]);
+
+        $daraja = Mockery::mock(DarajaService::class);
+        $daraja->shouldReceive('isConfigured')->once()->andReturn(true);
+        $daraja->shouldReceive('stkPush')->once()->andReturn([
+            'success' => true,
+            'stage' => 'stk_push',
+            'http_status' => 200,
+            'response_code' => '0',
+            'response_description' => 'Success. Request accepted for processing',
+            'customer_message' => 'Success. Request accepted for processing',
+            'checkout_request_id' => 'ws_CO_fresh_after_confirmed_001',
+            'merchant_request_id' => '29115-22222-2',
+            'raw' => [
+                'ResponseCode' => '0',
+                'CheckoutRequestID' => 'ws_CO_fresh_after_confirmed_001',
+                'MerchantRequestID' => '29115-22222-2',
+            ],
+            'error' => null,
+        ]);
+        $this->app->instance(DarajaService::class, $daraja);
+
+        $response = $this->post(route('wifi.pay', ['tenant_id' => $tenant->id]), [
+            'phone' => '0712345678',
+            'package_id' => $package->id,
+        ]);
+
+        $latest = Payment::query()->latest('id')->firstOrFail();
+
+        $this->assertNotSame($confirmed->id, $latest->id);
         $this->assertSame(2, Payment::query()->count());
 
         $response->assertRedirect(route('wifi.status', [
@@ -1065,7 +1133,7 @@ class CaptivePortalPaymentStatusTest extends TestCase
             'tenant_id' => $tenant->id,
             'router_id' => $router->id,
             'package_id' => $package->id,
-            'username' => 'cb0712345678',
+            'username' => $this->expectedPhoneRadiusUsername($payment),
             'phone' => '0712345678',
             'status' => 'idle',
             'started_at' => now(),
@@ -1130,7 +1198,7 @@ class CaptivePortalPaymentStatusTest extends TestCase
             'tenant_id' => $tenant->id,
             'router_id' => $router->id,
             'package_id' => $package->id,
-            'username' => 'cb0712345678',
+            'username' => $this->expectedPhoneRadiusUsername($payment),
             'phone' => '0712345678',
             'status' => 'idle',
             'started_at' => now(),
@@ -1139,12 +1207,7 @@ class CaptivePortalPaymentStatusTest extends TestCase
         ]);
 
         $sessionManager = Mockery::mock(SessionManager::class);
-        $sessionManager->shouldReceive('activateSession')->once()->andReturn([
-            'success' => false,
-            'error' => 'Hotspot login command sent, but no active session was created. Missing client MAC/IP context.',
-            'queued' => false,
-            'missing_client_context' => true,
-        ]);
+        $sessionManager->shouldNotReceive('activateSession');
 
         $radiusProvisioning = Mockery::mock(FreeRadiusProvisioningService::class);
         $radiusProvisioning->shouldReceive('provisionUser')->once()->andThrow(new \RuntimeException('Radius DB offline'));
@@ -1194,7 +1257,7 @@ class CaptivePortalPaymentStatusTest extends TestCase
             'tenant_id' => $tenant->id,
             'router_id' => $router->id,
             'package_id' => $package->id,
-            'username' => 'cb0712345678',
+            'username' => $this->expectedPhoneRadiusUsername($payment),
             'phone' => '0712345678',
             'status' => 'idle',
             'started_at' => now(),
@@ -1307,10 +1370,11 @@ class CaptivePortalPaymentStatusTest extends TestCase
         $sessionManager->shouldNotReceive('activateSession');
         $this->app->instance(SessionManager::class, $sessionManager);
 
+        $expectedUsername = $this->expectedPhoneRadiusUsername($payment);
         $radiusProvisioning = Mockery::mock(FreeRadiusProvisioningService::class);
-        $radiusProvisioning->shouldReceive('provisionUser')->once()->withArgs(function (string $username, string $password, Package $resolvedPackage) use ($package) {
-            return $username === 'cb0712345678'
-                && $password === 'cb0712345678'
+        $radiusProvisioning->shouldReceive('provisionUser')->once()->withArgs(function (string $username, string $password, Package $resolvedPackage) use ($package, $expectedUsername) {
+            return $username === $expectedUsername
+                && $password === $expectedUsername
                 && (int) $resolvedPackage->id === (int) $package->id;
         });
         $this->app->instance(FreeRadiusProvisioningService::class, $radiusProvisioning);
@@ -1328,7 +1392,7 @@ class CaptivePortalPaymentStatusTest extends TestCase
         $response->assertSee('id="cpRadiusAutoLoginForm"', false);
         $response->assertSee('action="http://' . $router->ip_address . '/login"', false);
         $response->assertSee('name="username"', false);
-        $response->assertSee('value="cb0712345678"', false);
+        $response->assertSee('value="' . $expectedUsername . '"', false);
         $response->assertSee('name="dst"', false);
         $response->assertSee('value="https://example.com/after-login"', false);
         $response->assertSee('Connecting you to WiFi', false);
@@ -1412,7 +1476,7 @@ JS, $content);
             'tenant_id' => $tenant->id,
             'router_id' => $router->id,
             'package_id' => $package->id,
-            'username' => 'cb0712345678',
+            'username' => $this->expectedPhoneRadiusUsername($payment),
             'phone' => '0712345678',
             'status' => 'active',
             'started_at' => now()->subHour(),
@@ -1421,7 +1485,7 @@ JS, $content);
             'metadata' => [
                 'radius' => [
                     'provisioned' => true,
-                    'username' => 'cb0712345678',
+                    'username' => $this->expectedPhoneRadiusUsername($payment),
                 ],
             ],
         ]);
@@ -1583,7 +1647,8 @@ JS, $content);
         config()->set('app.url', 'https://app.cloudbridge.network');
 
         $tenant = $this->createTenant();
-        $router = $this->createRouter($tenant, [
+        $router = $this->createRouter($tenant);
+        $router->forceFill([
             'captive_portal_url' => 'https://portal.example.com/wifi',
         ]);
 
@@ -1666,6 +1731,15 @@ JS, $content);
                 'gateway' => 'daraja',
             ],
         ], $overrides));
+    }
+
+    private function expectedPhoneRadiusUsername(Payment $payment): string
+    {
+        return (string) app(RadiusIdentityResolver::class)->resolve(
+            phone: (string) $payment->phone,
+            paymentId: (int) $payment->id,
+            macAddress: null
+        )['username'];
     }
 
     private function configureRadiusAccountingConnection(): void
