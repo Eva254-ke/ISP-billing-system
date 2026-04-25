@@ -30,7 +30,6 @@
             'tenant_id' => $tenantId > 0 ? $tenantId : null,
             'payment' => $payment->id,
         ], static fn ($value) => $value !== null && $value !== ''));
-        $radiusLoginSubmittedUrl = $statusCheckRoute . (str_contains($statusCheckRoute, '?') ? '&' : '?') . 'radius_login_submitted=1';
         $radiusAutoLogin = is_array($radiusAutoLogin ?? null) ? $radiusAutoLogin : null;
         $radiusPendingReauth = (bool) ($radiusPendingReauth ?? false);
         $shouldAutoPoll = in_array($statusView, ['pending', 'paid', 'verifying'], true);
@@ -347,7 +346,6 @@
     <script>
         @if($shouldAutoPoll || $radiusAutoLogin)
         let radiusAutoLogin = @json($radiusAutoLogin);
-        const radiusLoginSubmittedUrl = @json($radiusLoginSubmittedUrl);
         const radiusAutoLoginKey = `cp-radius-autologin:${@json((int) $payment->id)}`;
 
         function leftRotate(value, amount) {
@@ -593,16 +591,6 @@
                 sessionStorage.setItem(radiusAutoLoginKey, String(Date.now()));
             } catch (storageError) {
                 // Ignore storage failures.
-            }
-
-            try {
-                void fetch(radiusLoginSubmittedUrl, {
-                    headers: { 'Accept': 'application/json' },
-                    cache: 'no-store',
-                    keepalive: true,
-                });
-            } catch (fetchError) {
-                // Ignore notification failures and continue with the router login.
             }
 
             form.submit();

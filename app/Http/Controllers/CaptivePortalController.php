@@ -797,11 +797,6 @@ class CaptivePortalController extends Controller
             }
         }
 
-        if ($request->boolean('radius_login_submitted')) {
-            $this->markPaymentActivatedFromPortalLoginIfEligible($payment);
-            $payment = $payment->fresh() ?? $payment;
-        }
-
         $activeSession = $this->resolveConnectedSession($payment);
 
         $statusView = $this->deriveStatusView($payment, $activeSession);
@@ -1215,11 +1210,6 @@ class CaptivePortalController extends Controller
             }
         }
 
-        if ($request->boolean('radius_login_submitted')) {
-            $this->markPaymentActivatedFromPortalLoginIfEligible($payment);
-            $payment = $payment->fresh() ?? $payment;
-        }
-        
         $session = $this->resolveConnectedSession($payment);
 
         $status = $this->deriveStatusView($payment, $session);
@@ -2641,98 +2631,6 @@ class CaptivePortalController extends Controller
         $this->markPaymentActivatedFromRadius($payment, $session);
 
         return $session;
-    }
-
-    private function markPaymentActivatedFromPortalLoginIfEligible(Payment $payment): void
-    {
-        $session = UserSession::query()
-            ->where('payment_id', $payment->id)
-            ->latest('id')
-            ->first();
-
-        if (!$session || !$this->shouldUseOptimisticRadiusPortalActivation($payment, $session)) {
-            return;
-        }
-
-        $this->markPaymentActivatedFromPortalLogin($payment, $session);
-    }
-
-    private function shouldUseOptimisticRadiusPortalActivation(Payment $payment, UserSession $session): bool
-    {
-        if (
-            !(bool) config('radius.enabled', false)
-            || !(bool) config('radius.pure_radius', false)
-            || !(bool) config('radius.portal_auto_login', true)
-            || !(bool) config('radius.optimistic_portal_activation', true)
-        ) {
-            return false;
-        }
-
-        $activationMetadata = is_array(($session->metadata ?? [])['activation'] ?? null)
-            ? (array) $session->metadata['activation']
-            : [];
-
-        if ((bool) ($activationMetadata['waiting_for_reauth'] ?? false)) {
-            return false;
-        }
-
-        if (!((bool) ($activationMetadata['waiting_for_hotspot_login'] ?? false) || (string) ($activationMetadata['method'] ?? '') === 'radius_hotspot_login')) {
-            return false;
-        }
-
-        $identity = $this->resolveRadiusIdentityForPayment($payment);
-
-        return (($identity['identity_type'] ?? null) === 'phone')
-            && !app(RadiusIdentityResolver::class)->shouldBypassRouterActivation($identity);
-    }
-
-    private function markPaymentActivatedFromPortalLogin(Payment $payment, UserSession $session): void
-    {
-        $timestamp = now();
-
-        $sessionMetadata = is_array($session->metadata) ? $session->metadata : [];
-        $sessionActivation = is_array($sessionMetadata['activation'] ?? null) ? $sessionMetadata['activation'] : [];
-        $sessionActivation = array_merge($sessionActivation, [
-            'activated_via' => 'radius_portal_login',
-            'activated_at' => $timestamp->toIso8601String(),
-            'waiting_for_hotspot_login' => false,
-            'waiting_for_reauth' => false,
-            'portal_login_submitted_at' => $timestamp->toIso8601String(),
-            'optimistic_activation' => true,
-        ]);
-
-        $session->update([
-            'status' => 'active',
-            'started_at' => $session->started_at ?? $timestamp,
-            'last_activity_at' => $timestamp,
-            'last_synced_at' => $timestamp,
-            'sync_failed' => false,
-            'metadata' => array_merge($sessionMetadata, [
-                'activation' => $sessionActivation,
-            ]),
-        ]);
-
-        $paymentMetadata = is_array($payment->metadata) ? $payment->metadata : [];
-        $paymentActivation = is_array($paymentMetadata['activation'] ?? null) ? $paymentMetadata['activation'] : [];
-        $paymentActivation = array_merge($paymentActivation, [
-            'activated_via' => 'radius_portal_login',
-            'activated_at' => $timestamp->toIso8601String(),
-            'waiting_for_hotspot_login' => false,
-            'waiting_for_reauth' => false,
-            'portal_login_submitted_at' => $timestamp->toIso8601String(),
-            'optimistic_activation' => true,
-        ]);
-
-        $payment->update([
-            'status' => 'completed',
-            'completed_at' => $payment->completed_at ?? $timestamp,
-            'activated_at' => $payment->activated_at ?? $timestamp,
-            'session_id' => $session->id,
-            'reconciliation_notes' => null,
-            'metadata' => array_merge($paymentMetadata, [
-                'activation' => $paymentActivation,
-            ]),
-        ]);
     }
 
     private function markPaymentActivatedFromRadius(Payment $payment, UserSession $session): void

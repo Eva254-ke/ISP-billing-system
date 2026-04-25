@@ -576,12 +576,11 @@ class CaptivePortalPaymentStatusTest extends TestCase
         $response->assertJsonPath('radius_auto_login.popup', 'true');
     }
 
-    public function test_check_status_marks_pure_radius_hotspot_login_active_after_portal_submission(): void
+    public function test_check_status_keeps_pure_radius_payment_pending_until_real_session_is_detected(): void
     {
         config()->set('radius.enabled', true);
         config()->set('radius.pure_radius', true);
         config()->set('radius.portal_auto_login', true);
-        config()->set('radius.optimistic_portal_activation', true);
 
         $tenant = $this->createTenant();
         $package = $this->createPackage($tenant);
@@ -614,20 +613,18 @@ class CaptivePortalPaymentStatusTest extends TestCase
 
         $response->assertOk();
         $response->assertJson([
-            'status' => 'activated',
+            'status' => 'paid',
             'payment_id' => $payment->id,
-            'session_active' => true,
+            'session_active' => false,
         ]);
 
         $payment->refresh();
         $session = UserSession::query()->where('payment_id', $payment->id)->firstOrFail();
         $session->refresh();
 
-        $this->assertSame('completed', $payment->status);
-        $this->assertNotNull($payment->activated_at);
-        $this->assertSame('active', $session->status);
-        $this->assertSame('radius_portal_login', (string) data_get($payment->metadata, 'activation.activated_via'));
-        $this->assertTrue((bool) data_get($payment->metadata, 'activation.optimistic_activation'));
+        $this->assertSame('confirmed', $payment->status);
+        $this->assertNull($payment->activated_at);
+        $this->assertSame('idle', $session->status);
     }
 
     public function test_check_status_returns_radius_auto_login_payload_for_confirmed_radius_payment_when_router_activation_is_pending(): void
@@ -1339,7 +1336,7 @@ class CaptivePortalPaymentStatusTest extends TestCase
         $response->assertSee("form.target = shouldUseTopLevelRadiusAutoLogin(loginPayload) ? '_top' : 'cpRadiusAutoLoginFrame';", false);
         $response->assertSee("return actionUrl.origin !== window.location.origin;", false);
         $response->assertSee('If internet opens immediately, you can start browsing right away', false);
-        $response->assertSee('void fetch(radiusLoginSubmittedUrl, {', false);
+        $response->assertDontSee('radiusLoginSubmittedUrl', false);
     }
 
     public function test_status_hashes_password_field_for_chap_radius_autologin(): void
