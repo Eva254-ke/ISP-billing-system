@@ -576,6 +576,60 @@ class CaptivePortalPaymentStatusTest extends TestCase
         $response->assertJsonPath('radius_auto_login.popup', 'true');
     }
 
+    public function test_check_status_marks_pure_radius_hotspot_login_active_after_portal_submission(): void
+    {
+        config()->set('radius.enabled', true);
+        config()->set('radius.pure_radius', true);
+        config()->set('radius.portal_auto_login', true);
+        config()->set('radius.optimistic_portal_activation', true);
+
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant);
+        $router = $this->createRouter($tenant, [
+            'status' => 'online',
+            'last_seen_at' => now(),
+        ]);
+
+        $payment = $this->createPayment($tenant, $package, [
+            'status' => 'confirmed',
+            'confirmed_at' => now(),
+            'mpesa_checkout_request_id' => 'ws_CO_pure_radius_submit_001',
+        ]);
+
+        $sessionManager = Mockery::mock(SessionManager::class);
+        $sessionManager->shouldNotReceive('activateSession');
+        $this->app->instance(SessionManager::class, $sessionManager);
+
+        $radiusProvisioning = Mockery::mock(FreeRadiusProvisioningService::class);
+        $radiusProvisioning->shouldReceive('provisionUser')->once();
+        $this->app->instance(FreeRadiusProvisioningService::class, $radiusProvisioning);
+
+        $response = $this->getJson(route('wifi.status.check', [
+            'phone' => '0712345678',
+            'tenant_id' => $tenant->id,
+            'payment' => $payment->id,
+            'link-login-only' => 'http://' . $router->ip_address . '/login',
+            'radius_login_submitted' => 1,
+        ]));
+
+        $response->assertOk();
+        $response->assertJson([
+            'status' => 'activated',
+            'payment_id' => $payment->id,
+            'session_active' => true,
+        ]);
+
+        $payment->refresh();
+        $session = UserSession::query()->where('payment_id', $payment->id)->firstOrFail();
+        $session->refresh();
+
+        $this->assertSame('completed', $payment->status);
+        $this->assertNotNull($payment->activated_at);
+        $this->assertSame('active', $session->status);
+        $this->assertSame('radius_portal_login', (string) data_get($payment->metadata, 'activation.activated_via'));
+        $this->assertTrue((bool) data_get($payment->metadata, 'activation.optimistic_activation'));
+    }
+
     public function test_check_status_returns_radius_auto_login_payload_for_confirmed_radius_payment_when_router_activation_is_pending(): void
     {
         config()->set('radius.enabled', true);
@@ -1284,6 +1338,8 @@ class CaptivePortalPaymentStatusTest extends TestCase
         $response->assertSee('shouldUseTopLevelRadiusAutoLogin', false);
         $response->assertSee("form.target = shouldUseTopLevelRadiusAutoLogin(loginPayload) ? '_top' : 'cpRadiusAutoLoginFrame';", false);
         $response->assertSee("return actionUrl.origin !== window.location.origin;", false);
+        $response->assertSee('If internet opens immediately, you can start browsing right away', false);
+        $response->assertSee('void fetch(radiusLoginSubmittedUrl, {', false);
     }
 
     public function test_status_hashes_password_field_for_chap_radius_autologin(): void

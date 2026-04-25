@@ -30,6 +30,7 @@
             'tenant_id' => $tenantId > 0 ? $tenantId : null,
             'payment' => $payment->id,
         ], static fn ($value) => $value !== null && $value !== ''));
+        $radiusLoginSubmittedUrl = $statusCheckRoute . (str_contains($statusCheckRoute, '?') ? '&' : '?') . 'radius_login_submitted=1';
         $radiusAutoLogin = is_array($radiusAutoLogin ?? null) ? $radiusAutoLogin : null;
         $radiusPendingReauth = (bool) ($radiusPendingReauth ?? false);
         $shouldAutoPoll = in_array($statusView, ['pending', 'paid', 'verifying'], true);
@@ -185,7 +186,7 @@
                 @if($radiusAutoLogin)
                     <div class="cp-panel">
                         <h3>Hotspot sign-in in progress</h3>
-                        <p>Keep this page open while we submit your hotspot login and wait for the router to confirm the session through RADIUS accounting.</p>
+                        <p>We are submitting your hotspot login now. If internet opens immediately, you can start browsing right away without waiting for router or accounting confirmation on this page.</p>
                     </div>
                 @endif
 
@@ -346,6 +347,7 @@
     <script>
         @if($shouldAutoPoll || $radiusAutoLogin)
         let radiusAutoLogin = @json($radiusAutoLogin);
+        const radiusLoginSubmittedUrl = @json($radiusLoginSubmittedUrl);
         const radiusAutoLoginKey = `cp-radius-autologin:${@json((int) $payment->id)}`;
 
         function leftRotate(value, amount) {
@@ -591,6 +593,16 @@
                 sessionStorage.setItem(radiusAutoLoginKey, String(Date.now()));
             } catch (storageError) {
                 // Ignore storage failures.
+            }
+
+            try {
+                void fetch(radiusLoginSubmittedUrl, {
+                    headers: { 'Accept': 'application/json' },
+                    cache: 'no-store',
+                    keepalive: true,
+                });
+            } catch (fetchError) {
+                // Ignore notification failures and continue with the router login.
             }
 
             form.submit();

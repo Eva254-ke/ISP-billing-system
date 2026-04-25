@@ -7,6 +7,7 @@ return [
     // a deployment explicitly opts back into RouterOS API activation.
     'pure_radius' => (bool) env('RADIUS_PURE_RADIUS', env('RADIUS_ENABLED', false)),
     'portal_auto_login' => (bool) env('RADIUS_PORTAL_AUTO_LOGIN', true),
+    'optimistic_portal_activation' => (bool) env('RADIUS_OPTIMISTIC_PORTAL_ACTIVATION', true),
 
     // Router RADIUS client target
     'server_ip' => env('RADIUS_SERVER_IP', '127.0.0.1'),
