@@ -242,6 +242,8 @@ class DatabaseHealthCheck extends Command
             (string) ($tables['radcheck'] ?? 'radcheck'),
             (string) ($tables['radreply'] ?? 'radreply'),
             (string) ($tables['radacct'] ?? 'radacct'),
+            (string) ($tables['radpostauth'] ?? 'radpostauth'),
+            (string) ($tables['nasreload'] ?? 'nasreload'),
         ];
 
         foreach ($requiredTables as $table) {

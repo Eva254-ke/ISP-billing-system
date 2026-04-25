@@ -72,6 +72,7 @@ class RadiusHealthCheckTest extends TestCase
         config()->set('database.connections.radius', [
             'driver' => 'sqlite',
             'database' => ':memory:',
+            'username' => 'radius-test',
             'prefix' => '',
             'foreign_key_constraints' => true,
         ]);
@@ -79,7 +80,7 @@ class RadiusHealthCheckTest extends TestCase
         DB::purge('radius');
         $schema = Schema::connection('radius');
 
-        foreach (['radcheck', 'radreply', 'radacct'] as $table) {
+        foreach (['radcheck', 'radreply', 'radacct', 'radpostauth', 'nasreload'] as $table) {
             if ($schema->hasTable($table)) {
                 $schema->drop($table);
             }
@@ -104,6 +105,19 @@ class RadiusHealthCheckTest extends TestCase
         $schema->create('radacct', function (Blueprint $table): void {
             $table->id();
             $table->string('username')->nullable();
+        });
+
+        $schema->create('radpostauth', function (Blueprint $table): void {
+            $table->id();
+            $table->string('username')->nullable();
+            $table->string('pass')->nullable();
+            $table->string('reply')->nullable();
+            $table->timestamp('authdate')->nullable();
+        });
+
+        $schema->create('nasreload', function (Blueprint $table): void {
+            $table->string('nasipaddress')->primary();
+            $table->dateTime('reloadtime');
         });
     }
 

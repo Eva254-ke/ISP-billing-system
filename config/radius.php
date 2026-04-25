@@ -23,6 +23,8 @@ return [
         'radcheck' => env('RADIUS_TABLE_RADCHECK', 'radcheck'),
         'radreply' => env('RADIUS_TABLE_RADREPLY', 'radreply'),
         'radacct' => env('RADIUS_TABLE_RADACCT', 'radacct'),
+        'radpostauth' => env('RADIUS_TABLE_RADPOSTAUTH', 'radpostauth'),
+        'nasreload' => env('RADIUS_TABLE_NASRELOAD', 'nasreload'),
     ],
 
     // Attribute defaults used during provisioning
