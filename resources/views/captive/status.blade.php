@@ -575,7 +575,7 @@
             const passwordInput = form.querySelector('input[name="password"]');
 
             if (
-                && passwordInput
+                passwordInput
                 && radiusAutoLogin.chap_id
                 && radiusAutoLogin.chap_challenge
             ) {

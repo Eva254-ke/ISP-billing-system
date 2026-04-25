@@ -1264,6 +1264,16 @@ class CaptivePortalPaymentStatusTest extends TestCase
         $response->assertSee('return md5Hex(chapIdBinary + password + chapChallengeBinary);', false);
         $response->assertSee("setHiddenField(form, 'response', null);", false);
         $response->assertDontSee('name="response" value=""', false);
+
+        $content = str_replace(["\r\n", "\r"], "\n", (string) $response->getContent());
+        $this->assertStringContainsString(<<<'JS'
+if (
+                passwordInput
+                && radiusAutoLogin.chap_id
+                && radiusAutoLogin.chap_challenge
+            ) {
+JS, $content);
+        $this->assertStringNotContainsString("if (\n                && passwordInput", $content);
     }
 
     public function test_session_manager_skips_router_api_disconnect_for_expired_pure_radius_sessions(): void
