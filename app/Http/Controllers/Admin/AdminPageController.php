@@ -19,6 +19,7 @@ class AdminPageController extends Controller
     public function dashboard(): View
     {
         $tenant = $this->resolveTenant();
+        UserSession::expireStaleSessions($tenant?->id);
 
         $payments = Payment::query();
         $packages = Package::query();
@@ -384,6 +385,7 @@ class AdminPageController extends Controller
     public function clientsCustomers(): View
     {
         $tenant = $this->resolveTenant();
+        UserSession::expireStaleSessions($tenant?->id);
 
         $baseSessions = UserSession::query()
             ->when($tenant, fn ($query) => $query->where('tenant_id', $tenant->id));
@@ -396,7 +398,7 @@ class AdminPageController extends Controller
 
         $stats = [
             'total' => (clone $baseSessions)->count(),
-            'active' => (clone $baseSessions)->where('status', 'active')->count(),
+            'active' => (clone $baseSessions)->active()->count(),
             'suspended' => (clone $baseSessions)->where('status', 'suspended')->count(),
             'new_month' => (clone $baseSessions)->where('created_at', '>=', now()->startOfMonth())->count(),
         ];
@@ -436,22 +438,30 @@ class AdminPageController extends Controller
     private function clientsView(string $mode): View
     {
         $tenant = $this->resolveTenant();
+        UserSession::expireStaleSessions($tenant?->id);
 
         $baseSessions = UserSession::query()
             ->when($tenant, fn ($query) => $query->where('tenant_id', $tenant->id));
 
         if ($mode === 'pppoe') {
             $baseSessions->where('username', 'like', 'pppoe%');
+        } elseif ($mode === 'hotspot') {
+            $baseSessions->where(function ($query) {
+                $query->whereNull('username')
+                    ->orWhere('username', 'not like', 'pppoe%');
+            });
         }
 
         $sessions = (clone $baseSessions)
+            ->live()
             ->with(['package', 'router'])
-            ->latest('created_at')
+            ->orderByDesc('last_activity_at')
+            ->orderByDesc('started_at')
             ->limit(150)
             ->get();
 
         $stats = [
-            'active_sessions' => (clone $baseSessions)->where('status', 'active')->count(),
+            'active_sessions' => (clone $baseSessions)->active()->count(),
             'total_bandwidth' => round(((int) (clone $baseSessions)->sum('bytes_total')) / (1024 * 1024 * 1024), 2),
             'new_last_hour' => (clone $baseSessions)->where('created_at', '>=', now()->subHour())->count(),
             'routers_online' => Router::query()
@@ -470,6 +480,7 @@ class AdminPageController extends Controller
     private function settingsView(string $tab): View
     {
         $tenant = $this->resolveTenant();
+        UserSession::expireStaleSessions($tenant?->id);
 
         $tenantStats = [
             'routers_total' => Router::query()
@@ -480,7 +491,7 @@ class AdminPageController extends Controller
                 ->count(),
             'active_sessions' => UserSession::query()
                 ->when($tenant, fn ($query) => $query->where('tenant_id', $tenant->id))
-                ->where('status', 'active')
+                ->active()
                 ->count(),
             'payments_today' => (float) Payment::query()
                 ->when($tenant, fn ($query) => $query->where('tenant_id', $tenant->id))

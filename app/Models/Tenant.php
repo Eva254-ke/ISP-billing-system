@@ -659,7 +659,7 @@ class Tenant extends Model
     public function getActiveSessionCountAttribute(): int
     {
         return $this->userSessions()
-            ->where('status', 'active')
+            ->active()
             ->count();
     }
 

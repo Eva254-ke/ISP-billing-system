@@ -48,8 +48,8 @@ class SyncSessionUsage implements ShouldQueue
                 $success = $radiusAccountingService->syncActiveSession($session) !== null;
 
                 if (!$success && $session->expires_at?->isPast()) {
-                    $session->markTerminated('expired');
-                    Log::channel('radius')->info('Expired pure-RADIUS session marked terminated after accounting sync miss', [
+                    $session->markExpired('expired');
+                    Log::channel('radius')->info('Expired pure-RADIUS session marked expired after accounting sync miss', [
                         'session_id' => $session->id,
                         'username' => $session->username,
                     ]);

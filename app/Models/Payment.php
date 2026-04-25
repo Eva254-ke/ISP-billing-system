@@ -6,7 +6,6 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Facades\Log;
 
@@ -100,9 +99,9 @@ class Payment extends Model
         return $this->belongsTo(Package::class);
     }
 
-    public function session(): HasOne
+    public function session(): BelongsTo
     {
-        return $this->hasOne(UserSession::class);
+        return $this->belongsTo(UserSession::class, 'session_id');
     }
 
     public function sessions(): HasMany

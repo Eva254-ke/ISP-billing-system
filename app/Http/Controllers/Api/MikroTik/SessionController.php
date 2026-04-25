@@ -22,6 +22,7 @@ class SessionController extends Controller
     public function index(Request $request): JsonResponse
     {
         $tenant = $request->user()->tenant;
+        UserSession::expireStaleSessions($tenant?->id);
         
         $sessions = $tenant->userSessions()
             ->with(['router', 'package', 'payment'])
@@ -46,6 +47,7 @@ class SessionController extends Controller
     public function active(Request $request): JsonResponse
     {
         $tenant = $request->user()->tenant;
+        UserSession::expireStaleSessions($tenant?->id);
         
         $sessions = $tenant->userSessions()
             ->active()
@@ -85,6 +87,7 @@ class SessionController extends Controller
     public function expiring(Request $request): JsonResponse
     {
         $tenant = $request->user()->tenant;
+        UserSession::expireStaleSessions($tenant?->id);
         
         $sessions = $tenant->userSessions()
             ->active()

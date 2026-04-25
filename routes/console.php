@@ -29,9 +29,9 @@ Artisan::command('inspire', function () {
 // })->everyFiveMinutes();
 
 // Check expiring sessions every minute
-// Schedule::call(function () {
-//     // Check and handle expiring sessions
-// })->everyMinute();
+Schedule::command('sessions:check-expiring')
+    ->everyMinute()
+    ->withoutOverlapping();
 
 // Daily reconciliation at 2 AM
 // Schedule::call(function () {

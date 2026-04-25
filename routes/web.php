@@ -1208,6 +1208,7 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
         // Client Stats (Live)
         Route::get('/clients/stats', function () use ($resolveTenant) {
             $tenant = $resolveTenant();
+            UserSession::expireStaleSessions($tenant?->id);
 
             $mode = request()->query('mode');
 
@@ -1218,22 +1219,28 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
                     $inner->whereNull('username')->orWhere('username', 'not like', 'pppoe%');
                 }));
 
-            $activeSessions = (clone $sessions)->where('status', 'active')->count();
+            $activeSessions = (clone $sessions)->active()->count();
             $totalBytes = (int) (clone $sessions)->sum('bytes_total');
             $totalGb = round($totalBytes / (1024 * 1024 * 1024), 2);
+            $routersOnline = Router::query()
+                ->when($tenant, fn ($query) => $query->where('tenant_id', $tenant->id))
+                ->whereIn('status', ['online', 'warning'])
+                ->count();
 
             return response()->json([
                 'hotspot_active' => $activeSessions,
                 'pppoe_active' => 0,
                 'total_bandwidth' => $totalGb . ' GB',
+                'routers_online' => $routersOnline,
             ]);
         })->name('clients.stats');
 
         Route::get('/clients/sessions', function (Request $request) use ($resolveTenant) {
             $tenant = $resolveTenant();
+            UserSession::expireStaleSessions($tenant?->id);
 
             $limit = min(max((int) $request->integer('limit', 150), 1), 500);
-            $status = $request->string('status')->toString();
+            $status = strtolower(trim($request->string('status')->toString()));
             $search = trim($request->string('search')->toString());
             $mode = $request->string('mode')->toString();
 
@@ -1243,7 +1250,11 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
                 ->when($mode === 'hotspot', fn ($query) => $query->where(function ($inner) {
                     $inner->whereNull('username')->orWhere('username', 'not like', 'pppoe%');
                 }))
-                ->when($status !== '', fn ($query) => $query->where('status', $status))
+                ->when(in_array($mode, ['hotspot', 'pppoe'], true) && in_array($status, ['', 'all'], true), fn ($query) => $query->live())
+                ->when($status === 'active', fn ($query) => $query->active())
+                ->when($status === 'idle', fn ($query) => $query->where('status', 'idle')->notExpired())
+                ->when($status === 'expired', fn ($query) => $query->expired())
+                ->when($status !== '' && !in_array($status, ['all', 'active', 'idle', 'expired'], true), fn ($query) => $query->where('status', $status))
                 ->when($search !== '', function ($query) use ($search) {
                     $query->where(function ($inner) use ($search) {
                         $inner->where('username', 'like', "%{$search}%")
@@ -1285,7 +1296,7 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
             $session = UserSession::query()
                 ->when($tenant, fn ($q) => $q->where('tenant_id', $tenant->id))
                 ->where('username', $request->input('username'))
-                ->where('status', 'active')
+                ->active()
                 ->first();
 
             if (!$session) {

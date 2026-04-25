@@ -332,11 +332,6 @@
                     @if(!empty($radiusAutoLogin['popup']))
                         <input type="hidden" name="popup" value="{{ $radiusAutoLogin['popup'] }}">
                     @endif
-                    @if(!empty($radiusAutoLogin['chap_id']) && !empty($radiusAutoLogin['chap_challenge']))
-                        <input type="hidden" name="response" value="">
-                        <input type="hidden" name="chap-id" value="{{ $radiusAutoLogin['chap_id'] }}">
-                        <input type="hidden" name="chap-challenge" value="{{ $radiusAutoLogin['chap_challenge'] }}">
-                    @endif
                 @endif
             </form>
             <iframe id="cpRadiusAutoLoginFrame" name="cpRadiusAutoLoginFrame" hidden></iframe>
@@ -450,9 +445,61 @@
             return output;
         }
 
+        function percentHexToBinary(value) {
+            return String(value).replace(/%([0-9a-f]{2})/gi, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+        }
+
+        function slashEscapesToBinary(value) {
+            return String(value)
+                .replace(/\\x([0-9a-f]{2})/gi, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+                .replace(/\\([0-7]{1,3})/g, (_, octal) => String.fromCharCode(parseInt(octal, 8) & 0xff));
+        }
+
+        function decodeBinaryValue(value) {
+            if (value === null || value === undefined || value === '') {
+                return '';
+            }
+
+            let normalized = String(value);
+
+            if (normalized.includes('%')) {
+                normalized = percentHexToBinary(normalized);
+            }
+
+            if (normalized.includes('\\')) {
+                normalized = slashEscapesToBinary(normalized);
+            }
+
+            if (/^[0-9a-f]+$/i.test(normalized) && normalized.length % 2 === 0) {
+                return hexToBinary(normalized);
+            }
+
+            return normalized;
+        }
+
+        function decodeChapId(value) {
+            const normalized = decodeBinaryValue(value);
+
+            if (normalized.length === 1) {
+                return normalized;
+            }
+
+            if (/^[0-9a-f]{1,2}$/i.test(String(value))) {
+                return String.fromCharCode(parseInt(String(value), 16));
+            }
+
+            if (/^[0-9]{1,3}$/.test(String(value))) {
+                return String.fromCharCode(parseInt(String(value), 10) & 0xff);
+            }
+
+            return normalized.charAt(0);
+        }
+
         function buildChapResponse(chapId, chapChallenge, password) {
-            const chapByte = String.fromCharCode(parseInt(chapId, 16) || 0);
-            return `00${md5Hex(chapByte + password + hexToBinary(chapChallenge))}`;
+            const chapIdBinary = decodeChapId(chapId);
+            const chapChallengeBinary = decodeBinaryValue(chapChallenge);
+
+            return md5Hex(chapIdBinary + password + chapChallengeBinary);
         }
 
         function hasRecentRadiusAutoLoginAttempt(windowMs = 8000) {
@@ -508,16 +555,9 @@
             setHiddenField(form, 'password', loginPayload.password || '');
             setHiddenField(form, 'dst', loginPayload.dst || '');
             setHiddenField(form, 'popup', loginPayload.popup || '');
-
-            if (loginPayload.chap_id && loginPayload.chap_challenge) {
-                setHiddenField(form, 'response', '');
-                setHiddenField(form, 'chap-id', loginPayload.chap_id);
-                setHiddenField(form, 'chap-challenge', loginPayload.chap_challenge);
-            } else {
-                setHiddenField(form, 'response', null);
-                setHiddenField(form, 'chap-id', null);
-                setHiddenField(form, 'chap-challenge', null);
-            }
+            setHiddenField(form, 'response', null);
+            setHiddenField(form, 'chap-id', null);
+            setHiddenField(form, 'chap-challenge', null);
         }
 
         function submitRadiusAutoLogin(loginPayload = null) {
@@ -533,18 +573,16 @@
             hydrateRadiusAutoLoginForm(form, radiusAutoLogin);
 
             const passwordInput = form.querySelector('input[name="password"]');
-            const responseInput = form.querySelector('input[name="response"]');
 
             if (
-                responseInput
                 && passwordInput
                 && radiusAutoLogin.chap_id
                 && radiusAutoLogin.chap_challenge
             ) {
-                responseInput.value = buildChapResponse(
+                passwordInput.value = buildChapResponse(
                     radiusAutoLogin.chap_id,
                     radiusAutoLogin.chap_challenge,
-                    passwordInput.value || ''
+                    String(radiusAutoLogin.password || '')
                 );
             }
 

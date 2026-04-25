@@ -1224,6 +1224,48 @@ class CaptivePortalPaymentStatusTest extends TestCase
         $response->assertSee("form.target = shouldUseTopLevelRadiusAutoLogin(loginPayload) ? '_top' : 'cpRadiusAutoLoginFrame';", false);
     }
 
+    public function test_status_hashes_password_field_for_chap_radius_autologin(): void
+    {
+        config()->set('radius.enabled', true);
+        config()->set('radius.pure_radius', true);
+
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant);
+        $router = $this->createRouter($tenant, [
+            'status' => 'online',
+            'last_seen_at' => now(),
+        ]);
+
+        $payment = $this->createPayment($tenant, $package, [
+            'status' => 'confirmed',
+            'confirmed_at' => now(),
+            'mpesa_checkout_request_id' => 'ws_CO_pure_radius_chap_view_001',
+        ]);
+
+        $sessionManager = Mockery::mock(SessionManager::class);
+        $sessionManager->shouldNotReceive('activateSession');
+        $this->app->instance(SessionManager::class, $sessionManager);
+
+        $radiusProvisioning = Mockery::mock(FreeRadiusProvisioningService::class);
+        $radiusProvisioning->shouldReceive('provisionUser')->once();
+        $this->app->instance(FreeRadiusProvisioningService::class, $radiusProvisioning);
+
+        $response = $this->get(route('wifi.status', [
+            'phone' => '0712345678',
+            'tenant_id' => $tenant->id,
+            'payment' => $payment->id,
+            'link-login-only' => 'http://' . $router->ip_address . '/login',
+            'chap-id' => '01',
+            'chap-challenge' => '0123456789ABCDEF',
+        ]));
+
+        $response->assertOk();
+        $response->assertSee('passwordInput.value = buildChapResponse(', false);
+        $response->assertSee('return md5Hex(chapIdBinary + password + chapChallengeBinary);', false);
+        $response->assertSee("setHiddenField(form, 'response', null);", false);
+        $response->assertDontSee('name="response" value=""', false);
+    }
+
     public function test_session_manager_skips_router_api_disconnect_for_expired_pure_radius_sessions(): void
     {
         config()->set('radius.enabled', true);
@@ -1348,7 +1390,67 @@ class CaptivePortalPaymentStatusTest extends TestCase
         $this->assertSame('active', $session->status);
         $this->assertSame('completed', $payment->status);
         $this->assertSame($session->id, (int) $payment->session_id);
+        $this->assertSame($session->id, (int) $payment->load('session')->session?->id);
         $this->assertNotNull($payment->activated_at);
+    }
+
+    public function test_expire_stale_sessions_marks_overdue_active_and_idle_sessions_expired(): void
+    {
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant);
+        $router = $this->createRouter($tenant, [
+            'status' => 'online',
+            'last_seen_at' => now(),
+        ]);
+
+        $expiredActive = UserSession::query()->create([
+            'tenant_id' => $tenant->id,
+            'router_id' => $router->id,
+            'package_id' => $package->id,
+            'username' => 'cb-expired-active',
+            'phone' => '0712345678',
+            'status' => 'active',
+            'started_at' => now()->subHour(),
+            'expires_at' => now()->subMinute(),
+        ]);
+
+        $expiredIdle = UserSession::query()->create([
+            'tenant_id' => $tenant->id,
+            'router_id' => $router->id,
+            'package_id' => $package->id,
+            'username' => 'cb-expired-idle',
+            'phone' => '0712345678',
+            'status' => 'idle',
+            'started_at' => now()->subHour(),
+            'expires_at' => now()->subMinute(),
+        ]);
+
+        $liveSession = UserSession::query()->create([
+            'tenant_id' => $tenant->id,
+            'router_id' => $router->id,
+            'package_id' => $package->id,
+            'username' => 'cb-live-session',
+            'phone' => '0712345678',
+            'status' => 'active',
+            'started_at' => now()->subMinutes(10),
+            'expires_at' => now()->addMinutes(20),
+        ]);
+
+        $updated = UserSession::expireStaleSessions($tenant->id);
+
+        $expiredActive->refresh();
+        $expiredIdle->refresh();
+        $liveSession->refresh();
+
+        $this->assertSame(2, $updated);
+        $this->assertSame('expired', $expiredActive->status);
+        $this->assertSame('expired', $expiredIdle->status);
+        $this->assertSame('expired', $expiredActive->termination_reason);
+        $this->assertSame('expired', $expiredIdle->termination_reason);
+        $this->assertNotNull($expiredActive->terminated_at);
+        $this->assertNotNull($expiredIdle->terminated_at);
+        $this->assertSame('active', $liveSession->status);
+        $this->assertSame([$liveSession->id], UserSession::query()->live()->pluck('id')->all());
     }
 
     public function test_router_walled_garden_rules_include_portal_and_daraja_hosts_without_intasend(): void

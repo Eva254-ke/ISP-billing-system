@@ -108,6 +108,24 @@ class UserSession extends Model
             ->where('expires_at', '>', now());
     }
 
+    public function scopeNotExpired($query)
+    {
+        return $query->where(function ($inner) {
+            $inner->where('expires_at', '>', now())
+                ->orWhere(function ($grace) {
+                    $grace->where('grace_period_active', true)
+                        ->whereNotNull('grace_period_ends_at')
+                        ->where('grace_period_ends_at', '>', now());
+                });
+        });
+    }
+
+    public function scopeLive($query)
+    {
+        return $query->whereIn('status', ['active', 'idle'])
+            ->notExpired();
+    }
+
     public function scopeByPhone($query, $phone)
     {
         return $query->where('phone', $phone);
@@ -121,8 +139,18 @@ class UserSession extends Model
 
     public function scopeExpired($query)
     {
-        return $query->where('expires_at', '<', now())
-            ->where('status', 'active');
+        return $query->where(function ($expired) {
+            $expired->where('status', 'expired')
+                ->orWhere(function ($stale) {
+                    $stale->whereIn('status', ['active', 'idle'])
+                        ->where('expires_at', '<=', now())
+                        ->where(function ($graceState) {
+                            $graceState->where('grace_period_active', false)
+                                ->orWhereNull('grace_period_ends_at')
+                                ->orWhere('grace_period_ends_at', '<=', now());
+                        });
+                });
+        });
     }
 
     public function scopeInGracePeriod($query)
@@ -142,7 +170,7 @@ class UserSession extends Model
     public function scopeForCaptivePortal($query)
     {
         return $query->whereNotNull('phone')
-            ->where('status', 'active');
+            ->active();
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -151,7 +179,7 @@ class UserSession extends Model
 
     public function getIsExpiredAttribute(): bool
     {
-        return $this->expires_at->isPast() && !$this->grace_period_active;
+        return $this->expires_at->isPast() && !$this->is_in_grace_period;
     }
 
     public function getIsInGracePeriodAttribute(): bool
@@ -215,6 +243,11 @@ class UserSession extends Model
         return $this->status === 'active'
             && $this->expires_at->isFuture()
             && !$this->sync_failed;
+    }
+
+    public function isActive(): bool
+    {
+        return $this->status === 'active' && !$this->is_expired;
     }
 
     public function recordReconnect(string $method = 'manual'): void
@@ -340,6 +373,18 @@ class UserSession extends Model
             'terminated_at' => now(),
             'termination_reason' => $reason,
             'grace_period_active' => false,
+            'grace_period_ends_at' => null,
+        ]);
+    }
+
+    public function markExpired(string $reason = 'expired'): void
+    {
+        $this->update([
+            'status' => 'expired',
+            'terminated_at' => now(),
+            'termination_reason' => $reason,
+            'grace_period_active' => false,
+            'grace_period_ends_at' => null,
         ]);
     }
 
@@ -385,6 +430,27 @@ class UserSession extends Model
             ->active()
             ->orderBy('expires_at', 'desc')
             ->first();
+    }
+
+    public static function expireStaleSessions(?int $tenantId = null): int
+    {
+        return static::query()
+            ->when(($tenantId ?? 0) > 0, fn ($query) => $query->where('tenant_id', $tenantId))
+            ->whereIn('status', ['active', 'idle'])
+            ->where('expires_at', '<=', now())
+            ->where(function ($graceState) {
+                $graceState->where('grace_period_active', false)
+                    ->orWhereNull('grace_period_ends_at')
+                    ->orWhere('grace_period_ends_at', '<=', now());
+            })
+            ->update([
+                'status' => 'expired',
+                'terminated_at' => now(),
+                'termination_reason' => 'expired',
+                'grace_period_active' => false,
+                'grace_period_ends_at' => null,
+                'updated_at' => now(),
+            ]);
     }
 
     public static function createFromPayment(Payment $payment, array $extra = []): self
