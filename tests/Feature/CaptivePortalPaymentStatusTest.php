@@ -1283,6 +1283,7 @@ class CaptivePortalPaymentStatusTest extends TestCase
         $response->assertSee('Connecting you to WiFi', false);
         $response->assertSee('shouldUseTopLevelRadiusAutoLogin', false);
         $response->assertSee("form.target = shouldUseTopLevelRadiusAutoLogin(loginPayload) ? '_top' : 'cpRadiusAutoLoginFrame';", false);
+        $response->assertSee("return actionUrl.origin !== window.location.origin;", false);
     }
 
     public function test_status_hashes_password_field_for_chap_radius_autologin(): void

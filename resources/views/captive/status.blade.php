@@ -519,10 +519,11 @@
             try {
                 const actionUrl = new URL(loginPayload.action, window.location.href);
 
-                // Hidden iframe submission to an insecure router login from a secure
-                // captive page is frequently blocked as mixed content. In that case
-                // we need a top-level form post so the hotspot can finish login.
-                return window.location.protocol === 'https:' && actionUrl.protocol === 'http:';
+                // Router hotspot login is usually hosted on a different origin from
+                // the captive app. Submitting that login in a hidden iframe is often
+                // delayed or ignored by browsers, which leaves users stuck waiting
+                // for accounting updates instead of finishing captive auth.
+                return actionUrl.origin !== window.location.origin;
             } catch (urlError) {
                 return false;
             }
