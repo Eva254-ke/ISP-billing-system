@@ -1445,14 +1445,84 @@ class CaptivePortalPaymentStatusTest extends TestCase
         $response->assertDontSee('name="response" value=""', false);
 
         $content = str_replace(["\r\n", "\r"], "\n", (string) $response->getContent());
-        $this->assertStringContainsString(<<<'JS'
-if (
-                passwordInput
-                && radiusAutoLogin.chap_id
-                && radiusAutoLogin.chap_challenge
-            ) {
-JS, $content);
+        $this->assertStringContainsString("if (\n                passwordInput\n                && radiusAutoLogin.chap_id\n                && radiusAutoLogin.chap_challenge\n            ) {", $content);
         $this->assertStringNotContainsString("if (\n                && passwordInput", $content);
+    }
+
+    public function test_status_accepts_login_wifi_hotspot_alias_for_radius_autologin(): void
+    {
+        config()->set('radius.enabled', true);
+        config()->set('radius.pure_radius', true);
+
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant);
+        $this->createRouter($tenant, [
+            'status' => 'online',
+            'last_seen_at' => now(),
+        ]);
+
+        $payment = $this->createPayment($tenant, $package, [
+            'status' => 'confirmed',
+            'confirmed_at' => now(),
+            'mpesa_checkout_request_id' => 'ws_CO_pure_radius_login_wifi_001',
+        ]);
+
+        $sessionManager = Mockery::mock(SessionManager::class);
+        $sessionManager->shouldNotReceive('activateSession');
+        $this->app->instance(SessionManager::class, $sessionManager);
+
+        $radiusProvisioning = Mockery::mock(FreeRadiusProvisioningService::class);
+        $radiusProvisioning->shouldReceive('provisionUser')->once();
+        $this->app->instance(FreeRadiusProvisioningService::class, $radiusProvisioning);
+
+        $response = $this->get(route('wifi.status', [
+            'phone' => '0712345678',
+            'tenant_id' => $tenant->id,
+            'payment' => $payment->id,
+            'link-login-only' => 'http://login.wifi/login',
+        ]));
+
+        $response->assertOk();
+        $response->assertSee('action="http://login.wifi/login"', false);
+    }
+
+    public function test_status_prefers_login_wifi_referrer_for_radius_autologin_when_public_router_ip_is_passed(): void
+    {
+        config()->set('radius.enabled', true);
+        config()->set('radius.pure_radius', true);
+
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant);
+        $router = $this->createRouter($tenant, [
+            'status' => 'online',
+            'last_seen_at' => now(),
+        ]);
+
+        $payment = $this->createPayment($tenant, $package, [
+            'status' => 'confirmed',
+            'confirmed_at' => now(),
+            'mpesa_checkout_request_id' => 'ws_CO_pure_radius_login_wifi_referrer_001',
+        ]);
+
+        $sessionManager = Mockery::mock(SessionManager::class);
+        $sessionManager->shouldNotReceive('activateSession');
+        $this->app->instance(SessionManager::class, $sessionManager);
+
+        $radiusProvisioning = Mockery::mock(FreeRadiusProvisioningService::class);
+        $radiusProvisioning->shouldReceive('provisionUser')->once();
+        $this->app->instance(FreeRadiusProvisioningService::class, $radiusProvisioning);
+
+        $response = $this->withHeader('referer', 'http://login.wifi/')
+            ->get(route('wifi.status', [
+                'phone' => '0712345678',
+                'tenant_id' => $tenant->id,
+                'payment' => $payment->id,
+                'link-login-only' => 'http://' . $router->ip_address . '/login',
+            ]));
+
+        $response->assertOk();
+        $response->assertSee('action="http://login.wifi/login"', false);
+        $response->assertDontSee('action="http://' . $router->ip_address . '/login"', false);
     }
 
     public function test_session_manager_skips_router_api_disconnect_for_expired_pure_radius_sessions(): void

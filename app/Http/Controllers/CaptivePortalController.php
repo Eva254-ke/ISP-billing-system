@@ -38,6 +38,9 @@ class CaptivePortalController extends Controller
         'link_orig',
         'link_orig_esc',
     ];
+    private const TRUSTED_HOTSPOT_HOST_ALIASES = [
+        'login.wifi',
+    ];
 
     /**
      * Show package selection page (public, no auth required)
@@ -2211,10 +2214,12 @@ class CaptivePortalController extends Controller
         $stored = session(self::HOTSPOT_CONTEXT_SESSION_KEY, []);
         $stored = is_array($stored) ? $stored : [];
         $router = $this->resolvePreferredHotspotRouter($tenantId);
+        $refererLoginUrl = $this->resolveHotspotLoginUrlFromReferer($request, $router);
 
         $context = array_filter([
             'link_login_only' => $this->resolveHotspotLoginUrl(
                 candidates: [
+                    (string) ($refererLoginUrl ?? ''),
                     (string) $request->input('link-login-only', ''),
                     (string) $request->input('link_login_only', ''),
                     (string) $request->query('link-login-only', ''),
@@ -2226,6 +2231,7 @@ class CaptivePortalController extends Controller
             ) ?? $this->resolveRouterLoginFallbackUrl($router),
             'link_login' => $this->resolveHotspotLoginUrl(
                 candidates: [
+                    (string) ($refererLoginUrl ?? ''),
                     (string) $request->input('link-login', ''),
                     (string) $request->input('link_login', ''),
                     (string) $request->query('link-login', ''),
@@ -2403,6 +2409,37 @@ class CaptivePortalController extends Controller
         return null;
     }
 
+    private function resolveHotspotLoginUrlFromReferer(Request $request, ?Router $router = null): ?string
+    {
+        foreach (['referer', 'origin'] as $header) {
+            $value = trim((string) $request->headers->get($header, ''));
+            if ($value === '' || !filter_var($value, FILTER_VALIDATE_URL)) {
+                continue;
+            }
+
+            $scheme = strtolower((string) parse_url($value, PHP_URL_SCHEME));
+            $host = strtolower((string) parse_url($value, PHP_URL_HOST));
+            if (!in_array($scheme, ['http', 'https'], true) || $host === '') {
+                continue;
+            }
+
+            $path = trim((string) parse_url($value, PHP_URL_PATH));
+            $loginPath = $path === '' || $path === '/' ? '/login' : $path;
+
+            if (!str_ends_with(strtolower($loginPath), '/login')) {
+                $loginPath = rtrim($loginPath, '/') . '/login';
+            }
+
+            $candidate = sprintf('%s://%s%s', $scheme, $host, $loginPath);
+            $normalized = $this->normalizeHotspotLoginUrl($candidate, $router);
+            if ($normalized !== null) {
+                return $normalized;
+            }
+        }
+
+        return null;
+    }
+
     private function normalizeHotspotLoginUrl(?string $value, ?Router $router = null): ?string
     {
         $candidate = trim((string) $value);
@@ -2444,6 +2481,10 @@ class CaptivePortalController extends Controller
     {
         $routerIp = strtolower(trim((string) ($router?->ip_address ?? '')));
         if ($routerIp !== '' && $host === $routerIp) {
+            return true;
+        }
+
+        if (in_array($host, self::TRUSTED_HOTSPOT_HOST_ALIASES, true)) {
             return true;
         }
 
