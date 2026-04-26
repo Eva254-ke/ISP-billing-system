@@ -161,6 +161,9 @@
         @if(session('message'))
             <div class="cp-flash success">{{ session('message') }}</div>
         @endif
+        @if(request()->boolean('expired'))
+            <div class="cp-flash error">Your previous session expired. Select a package and pay again to reconnect.</div>
+        @endif
         @if(!empty($tenantResolutionError))
             <div class="cp-flash error">{{ $tenantResolutionError }}</div>
         @endif

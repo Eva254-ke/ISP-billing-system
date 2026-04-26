@@ -184,6 +184,11 @@ class UserSession extends Model
             return false;
         }
 
+        $pendingRadiusExpiry = $this->pendingRadiusAuthorizationExpiresAt();
+        if ($pendingRadiusExpiry instanceof Carbon && $pendingRadiusExpiry->isFuture()) {
+            return false;
+        }
+
         if ($this->isInGracePeriod || $this->hasPendingGraceWindow()) {
             return false;
         }
@@ -365,6 +370,11 @@ class UserSession extends Model
             return true;
         }
 
+        $pendingRadiusExpiry = $this->pendingRadiusAuthorizationExpiresAt();
+        if ($pendingRadiusExpiry instanceof Carbon && $pendingRadiusExpiry->isFuture()) {
+            return false;
+        }
+
         if (!$this->expires_at) {
             return false;
         }
@@ -452,6 +462,10 @@ class UserSession extends Model
 
     public function shouldActivateGracePeriod(): bool
     {
+        if ($this->awaitsRadiusReauthentication()) {
+            return false;
+        }
+
         if ($this->grace_period_active || !$this->expires_at || !$this->expires_at->isPast()) {
             return false;
         }
@@ -493,6 +507,60 @@ class UserSession extends Model
         }
 
         return max(0, (int) config('wifi.grace_period_seconds', 300));
+    }
+
+    public function awaitsRadiusReauthentication(): bool
+    {
+        $metadata = is_array($this->metadata) ? $this->metadata : [];
+        $activationMetadata = is_array($metadata['activation'] ?? null) ? $metadata['activation'] : [];
+        $radiusMetadata = is_array($metadata['radius'] ?? null) ? $metadata['radius'] : [];
+
+        return (bool) ($activationMetadata['waiting_for_hotspot_login'] ?? false)
+            || (bool) ($activationMetadata['waiting_for_reauth'] ?? false)
+            || (bool) ($radiusMetadata['waiting_for_hotspot_login'] ?? false)
+            || (bool) ($radiusMetadata['waiting_for_reauth'] ?? false);
+    }
+
+    public function pendingRadiusAuthorizationExpiresAt(): ?Carbon
+    {
+        if (!$this->awaitsRadiusReauthentication()) {
+            return null;
+        }
+
+        $metadata = is_array($this->metadata) ? $this->metadata : [];
+        $activationMetadata = is_array($metadata['activation'] ?? null) ? $metadata['activation'] : [];
+        $radiusMetadata = is_array($metadata['radius'] ?? null) ? $metadata['radius'] : [];
+        $windowMinutes = max(
+            max(1, (int) config('radius.pending_login_window_minutes', 360)),
+            max(1, (int) ($this->package?->duration_in_minutes ?? 0))
+        );
+
+        $baseTime = $this->parseFlexibleDateTimeValue($activationMetadata['authorization_started_at'] ?? null)
+            ?? $this->parseFlexibleDateTimeValue($activationMetadata['last_attempt_at'] ?? null)
+            ?? $this->parseFlexibleDateTimeValue($radiusMetadata['authorization_started_at'] ?? null)
+            ?? $this->parseFlexibleDateTimeValue($radiusMetadata['last_attempt_at'] ?? null)
+            ?? ($this->last_synced_at instanceof Carbon ? $this->last_synced_at->copy() : null)
+            ?? ($this->started_at instanceof Carbon ? $this->started_at->copy() : null)
+            ?? ($this->created_at instanceof Carbon ? $this->created_at->copy() : null);
+
+        return $baseTime?->copy()->addMinutes($windowMinutes);
+    }
+
+    private function parseFlexibleDateTimeValue(mixed $value): ?Carbon
+    {
+        if ($value instanceof Carbon) {
+            return $value->copy();
+        }
+
+        if ($value === null || trim((string) $value) === '') {
+            return null;
+        }
+
+        try {
+            return Carbon::parse((string) $value);
+        } catch (\Throwable) {
+            return null;
+        }
     }
 
     // ──────────────────────────────────────────────────────────────────────

@@ -180,6 +180,60 @@ class CaptivePortalPaymentStatusTest extends TestCase
         $response->assertViewIs('captive.packages');
     }
 
+    public function test_packages_resumes_radius_payment_waiting_for_hotspot_login_even_after_raw_idle_expiry(): void
+    {
+        config()->set('radius.enabled', true);
+        config()->set('radius.pure_radius', true);
+        config()->set('radius.pending_login_window_minutes', 120);
+
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant, [
+            'duration_value' => 10,
+        ]);
+        $router = $this->createRouter($tenant, [
+            'status' => 'online',
+            'last_seen_at' => now(),
+        ]);
+        $payment = $this->createPayment($tenant, $package, [
+            'status' => 'completed',
+            'completed_at' => now()->subMinutes(25),
+            'confirmed_at' => now()->subMinutes(25),
+        ]);
+
+        UserSession::query()->create([
+            'tenant_id' => $tenant->id,
+            'router_id' => $router->id,
+            'payment_id' => $payment->id,
+            'package_id' => $package->id,
+            'username' => $this->expectedPhoneRadiusUsername($payment),
+            'phone' => '0712345678',
+            'mac_address' => 'AA:BB:CC:DD:EE:FF',
+            'ip_address' => '10.0.0.50',
+            'status' => 'idle',
+            'started_at' => now()->subMinutes(25),
+            'expires_at' => now()->subMinutes(15),
+            'metadata' => [
+                'activation' => [
+                    'method' => 'radius_hotspot_login',
+                    'waiting_for_hotspot_login' => true,
+                    'last_attempt_at' => now()->subMinutes(25)->toIso8601String(),
+                ],
+            ],
+        ]);
+
+        $response = $this->get(route('wifi.packages', [
+            'tenant_id' => $tenant->id,
+            'mac' => 'AA-BB-CC-DD-EE-FF',
+        ]));
+
+        $response->assertRedirect(route('wifi.status', [
+            'phone' => '0712345678',
+            'tenant_id' => $tenant->id,
+            'payment' => $payment->id,
+            'mac' => 'AA:BB:CC:DD:EE:FF',
+        ]));
+    }
+
     public function test_status_route_uses_explicit_payment_query_parameter(): void
     {
         $tenant = $this->createTenant();
@@ -259,12 +313,65 @@ class CaptivePortalPaymentStatusTest extends TestCase
         ]));
 
         $response->assertOk();
+        $response->assertJsonPath('status', 'expired');
         $response->assertJsonPath('session_active', false);
         $response->assertJsonPath('radius_auto_login', null);
         $response->assertJsonPath('radius_pending_reauth', false);
+        $redirectUrl = (string) $response->json('redirect_url');
+        $this->assertStringStartsWith(route('wifi.packages', [
+            'phone' => '0712345678',
+            'tenant_id' => $tenant->id,
+        ]), $redirectUrl);
+        $this->assertStringContainsString('expired=1', $redirectUrl);
 
         $session->refresh();
         $this->assertTrue($session->expires_at->isPast());
+    }
+
+    public function test_status_redirects_to_packages_when_completed_session_has_expired(): void
+    {
+        config()->set('radius.enabled', true);
+        config()->set('radius.pure_radius', true);
+
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant, [
+            'duration_value' => 10,
+        ]);
+        $router = $this->createRouter($tenant, [
+            'status' => 'online',
+            'last_seen_at' => now(),
+        ]);
+        $payment = $this->createPayment($tenant, $package, [
+            'status' => 'completed',
+            'completed_at' => now()->subMinutes(15),
+            'confirmed_at' => now()->subMinutes(15),
+        ]);
+
+        UserSession::query()->create([
+            'tenant_id' => $tenant->id,
+            'router_id' => $router->id,
+            'payment_id' => $payment->id,
+            'package_id' => $package->id,
+            'username' => $this->expectedPhoneRadiusUsername($payment),
+            'phone' => '0712345678',
+            'status' => 'idle',
+            'started_at' => now()->subMinutes(15),
+            'expires_at' => now()->subMinute(),
+        ]);
+
+        $response = $this->get(route('wifi.status', [
+            'phone' => '0712345678',
+            'tenant_id' => $tenant->id,
+            'payment' => $payment->id,
+        ]));
+
+        $redirectUrl = $response->headers->get('Location');
+        $this->assertIsString($redirectUrl);
+        $this->assertStringStartsWith(route('wifi.packages', [
+            'phone' => '0712345678',
+            'tenant_id' => $tenant->id,
+        ]), $redirectUrl);
+        $this->assertStringContainsString('expired=1', $redirectUrl);
     }
 
     public function test_check_status_returns_verifying_for_pending_verification_payment(): void
@@ -2170,6 +2277,47 @@ class CaptivePortalPaymentStatusTest extends TestCase
         $this->assertNotNull($expiredIdle->terminated_at);
         $this->assertSame('active', $liveSession->status);
         $this->assertSame([$liveSession->id], UserSession::query()->live()->pluck('id')->all());
+    }
+
+    public function test_expire_stale_sessions_keeps_radius_sessions_waiting_for_hotspot_login_alive(): void
+    {
+        config()->set('radius.pending_login_window_minutes', 120);
+
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant, [
+            'duration_value' => 10,
+        ]);
+        $router = $this->createRouter($tenant, [
+            'status' => 'online',
+            'last_seen_at' => now(),
+        ]);
+
+        $waitingSession = UserSession::query()->create([
+            'tenant_id' => $tenant->id,
+            'router_id' => $router->id,
+            'package_id' => $package->id,
+            'username' => 'cb-radius-waiting',
+            'phone' => '0712345678',
+            'status' => 'idle',
+            'started_at' => now()->subMinutes(25),
+            'expires_at' => now()->subMinutes(15),
+            'grace_period_seconds' => 0,
+            'metadata' => [
+                'activation' => [
+                    'method' => 'radius_hotspot_login',
+                    'waiting_for_hotspot_login' => true,
+                    'last_attempt_at' => now()->subMinutes(25)->toIso8601String(),
+                ],
+            ],
+        ]);
+
+        $updated = UserSession::expireStaleSessions($tenant->id);
+
+        $waitingSession->refresh();
+
+        $this->assertSame(0, $updated);
+        $this->assertSame('idle', $waitingSession->status);
+        $this->assertFalse($waitingSession->shouldDisconnect());
     }
 
     public function test_expire_stale_sessions_keeps_sessions_with_remaining_grace_buffer_active(): void

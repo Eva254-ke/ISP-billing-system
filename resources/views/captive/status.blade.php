@@ -55,6 +55,7 @@
             'phone' => $phone,
             'tenant_id' => $tenantId > 0 ? $tenantId : null,
         ], $routeContext), static fn ($value) => $value !== null && $value !== '');
+        $expiredPackagesUrl = route('wifi.packages', array_merge($packagesParams, ['expired' => 1]));
         $gatewayStatus = trim((string) ($paymentMeta['daraja_last_status'] ?? ''));
         $pendingStatusLabel = match ($gatewayStatus) {
             'pending_customer_confirmation' => 'Prompt sent',
@@ -364,6 +365,7 @@
         @if($shouldAutoPoll || $radiusAutoLogin)
         let radiusAutoLogin = @json($radiusAutoLogin);
         const radiusAutoLoginKey = `cp-radius-autologin:${@json((int) $payment->id)}`;
+        const expiredPackagesUrl = @json($expiredPackagesUrl);
 
         function leftRotate(value, amount) {
             return (value << amount) | (value >>> (32 - amount));
@@ -657,6 +659,11 @@
                     return;
                 }
 
+                if (typeof payload.redirect_url === 'string' && payload.redirect_url !== '') {
+                    window.location.replace(payload.redirect_url);
+                    return;
+                }
+
                 if (payload.session_active === true) {
                     if (currentStatus !== 'activated') {
                         window.location.reload();
@@ -705,7 +712,9 @@
         @endif
 
         @if($statusView === 'activated' && !empty($activeSession?->expires_at))
+        const expiredPackagesUrl = @json($expiredPackagesUrl);
         const expiresAt = new Date('{{ $activeSession->expires_at->toIso8601String() }}').getTime();
+        let expiryRedirectTriggered = false;
 
         function updateCountdown() {
             const expiresNode = document.getElementById('expiresAt');
@@ -719,6 +728,10 @@
             if (distance <= 0) {
                 countdownNode.textContent = 'Session Expired';
                 expiresNode.textContent = 'Expired';
+                if (!expiryRedirectTriggered) {
+                    expiryRedirectTriggered = true;
+                    window.location.replace(expiredPackagesUrl);
+                }
                 return;
             }
 

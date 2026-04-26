@@ -412,6 +412,16 @@ class CaptivePortalController extends Controller
         ], $this->buildCaptiveRouteContext($payment), $extra), static fn ($value) => $value !== null && $value !== '');
     }
 
+    private function buildPackagesRouteParameters(?string $phone = null, ?Payment $payment = null, ?int $tenantId = null, array $extra = []): array
+    {
+        $resolvedTenantId = $tenantId ?? (int) ($payment?->tenant_id ?? 0);
+
+        return array_filter(array_merge([
+            'phone' => $phone,
+            'tenant_id' => $resolvedTenantId > 0 ? $resolvedTenantId : null,
+        ], $this->buildCaptiveRouteContext($payment), $extra), static fn ($value) => $value !== null && $value !== '');
+    }
+
     /**
      * @return array<string, string>
      */
@@ -597,16 +607,28 @@ class CaptivePortalController extends Controller
                     return $candidate;
                 }
             }
+
+            $olderCandidates = $this->buildStatusPaymentQuery($phone, $tenantId)
+                ->orderByDesc('created_at')
+                ->orderByDesc('id')
+                ->limit(6)
+                ->get();
+
+            foreach ($olderCandidates as $candidate) {
+                if ($this->shouldResumePackagesPayment($candidate)) {
+                    return $candidate;
+                }
+            }
         }
 
         if ($clientMac === null && $clientIp === null) {
             return null;
         }
 
-        $session = UserSession::query()
+        $candidateSessions = UserSession::query()
             ->where('tenant_id', $tenantId)
-            ->live()
             ->whereNotNull('payment_id')
+            ->whereIn('status', ['active', 'idle', 'expired'])
             ->where(function ($query) use ($clientMac, $clientIp) {
                 if ($clientMac !== null) {
                     $query->orWhere('mac_address', $clientMac);
@@ -622,24 +644,29 @@ class CaptivePortalController extends Controller
             )
             ->orderByDesc('last_activity_at')
             ->orderByDesc('id')
-            ->first();
+            ->limit(6)
+            ->get();
 
-        if (!$session || (int) ($session->payment_id ?? 0) <= 0) {
-            return null;
+        foreach ($candidateSessions as $session) {
+            if ((int) ($session->payment_id ?? 0) <= 0) {
+                continue;
+            }
+
+            $payment = Payment::query()
+                ->whereKey((int) $session->payment_id)
+                ->where('tenant_id', $tenantId)
+                ->whereIn('payment_channel', self::STATUS_CHANNELS)
+                ->first();
+
+            if ($payment && $this->shouldResumePackagesPayment($payment, $session)) {
+                return $payment;
+            }
         }
 
-        $payment = Payment::query()
-            ->whereKey((int) $session->payment_id)
-            ->where('tenant_id', $tenantId)
-            ->whereIn('payment_channel', self::STATUS_CHANNELS)
-            ->first();
-
-        return $payment && $this->shouldResumePackagesPayment($payment)
-            ? $payment
-            : null;
+        return null;
     }
 
-    private function shouldResumePackagesPayment(Payment $payment): bool
+    private function shouldResumePackagesPayment(Payment $payment, ?UserSession $session = null): bool
     {
         if ($this->shouldReuseCaptivePaymentAttempt($payment)
             && ($payment->created_at?->gte(now()->subMinutes(self::DUPLICATE_PAYMENT_WINDOW_MINUTES)) ?? false)
@@ -651,8 +678,17 @@ class CaptivePortalController extends Controller
             return false;
         }
 
-        if (!$this->paymentCanStillAuthorizeAccess($payment)) {
+        $session = $session ?? UserSession::query()
+            ->where('payment_id', $payment->id)
+            ->latest('id')
+            ->first();
+
+        if (!$this->paymentCanStillAuthorizeAccess($payment, $session)) {
             return false;
+        }
+
+        if ($session && $this->sessionAwaitsRadiusLogin($session)) {
+            return true;
         }
 
         return UserSession::query()
@@ -832,6 +868,17 @@ class CaptivePortalController extends Controller
         }
 
         $activeSession = $this->resolveConnectedSession($payment);
+        $latestSession = $activeSession
+            ?? UserSession::query()->where('payment_id', $payment->id)->latest('id')->first();
+
+        if ($this->shouldRedirectToPackagesAfterExpiry($payment, $latestSession)) {
+            return redirect()->route('wifi.packages', $this->buildPackagesRouteParameters(
+                phone: $phone,
+                payment: $payment,
+                tenantId: (int) $payment->tenant_id,
+                extra: ['expired' => 1]
+            ))->with('message', 'Your previous session expired. Select a package to reconnect.');
+        }
 
         $statusView = $this->deriveStatusView($payment, $activeSession);
         $radiusPortalState = $this->resolveRadiusPortalState($payment, $statusView, $activeSession);
@@ -1245,6 +1292,29 @@ class CaptivePortalController extends Controller
         }
 
         $session = $this->resolveConnectedSession($payment);
+        $latestSession = $session
+            ?? UserSession::query()->where('payment_id', $payment->id)->latest('id')->first();
+
+        if ($this->shouldRedirectToPackagesAfterExpiry($payment, $latestSession)) {
+            return response()->json([
+                'status' => 'expired',
+                'payment_id' => $payment->id,
+                'session_active' => false,
+                'expires_at' => null,
+                'radius_auto_login' => null,
+                'radius_pending_reauth' => false,
+                'redirect_url' => route('wifi.packages', $this->buildPackagesRouteParameters(
+                    phone: $phone,
+                    payment: $payment,
+                    tenantId: (int) $payment->tenant_id,
+                    extra: ['expired' => 1]
+                )),
+                'package' => $payment->package ? [
+                    'name' => $payment->package->name,
+                    'duration_minutes' => $payment->package->duration_in_minutes,
+                ] : null,
+            ]);
+        }
 
         $status = $this->deriveStatusView($payment, $session);
         $radiusPortalState = $this->resolveRadiusPortalState($payment, $status, $session);
@@ -1256,6 +1326,7 @@ class CaptivePortalController extends Controller
             'expires_at' => $session ? $session->expires_at->toIso8601String() : null,
             'radius_auto_login' => $radiusPortalState['auto_login'],
             'radius_pending_reauth' => (bool) $radiusPortalState['pending_reauth'],
+            'redirect_url' => null,
             'package' => $payment->package ? [
                 'name' => $payment->package->name,
                 'duration_minutes' => $payment->package->duration_in_minutes,
@@ -2108,11 +2179,15 @@ class CaptivePortalController extends Controller
                 (bool) ($existingActivationMetadata['waiting_for_hotspot_login'] ?? false)
                 && (string) ($existingActivationMetadata['method'] ?? '') === 'radius_hotspot_login'
             ) {
-                return $session->fresh();
+                return $this->syncPendingRadiusAuthorizationWindowState($payment, $session);
             }
 
+            $authorizationPreparedAt = now();
+            $authorizationExpiresAt = $this->resolvePendingRadiusAuthorizationExpiresAt($payment, $session, $authorizationPreparedAt);
             $activationMetadata = [
-                'last_attempt_at' => now()->toIso8601String(),
+                'authorization_started_at' => $authorizationPreparedAt->toIso8601String(),
+                'authorization_expires_at' => $authorizationExpiresAt->toIso8601String(),
+                'last_attempt_at' => $authorizationPreparedAt->toIso8601String(),
                 'method' => ($identity['identity_type'] ?? null) === 'mac' ? 'radius_mac_auth' : 'radius_hotspot_login',
                 'router_api_skipped' => true,
                 'waiting_for_hotspot_login' => true,
@@ -2121,7 +2196,7 @@ class CaptivePortalController extends Controller
 
             $session->update([
                 'status' => 'idle',
-                'expires_at' => $expiresAt,
+                'expires_at' => $authorizationExpiresAt,
                 'metadata' => array_merge($session->metadata ?? [], [
                     'activation' => array_merge(
                         (array) (($session->metadata ?? [])['activation'] ?? []),
@@ -2155,11 +2230,15 @@ class CaptivePortalController extends Controller
                 : [];
 
             if ((bool) ($existingActivationMetadata['waiting_for_reauth'] ?? false)) {
-                return $session->fresh();
+                return $this->syncPendingRadiusAuthorizationWindowState($payment, $session);
             }
 
+            $authorizationPreparedAt = now();
+            $authorizationExpiresAt = $this->resolvePendingRadiusAuthorizationExpiresAt($payment, $session, $authorizationPreparedAt);
             $activationMetadata = [
-                'last_attempt_at' => now()->toIso8601String(),
+                'authorization_started_at' => $authorizationPreparedAt->toIso8601String(),
+                'authorization_expires_at' => $authorizationExpiresAt->toIso8601String(),
+                'last_attempt_at' => $authorizationPreparedAt->toIso8601String(),
                 'method' => 'radius_mac_auth',
                 'router_api_skipped' => true,
                 'waiting_for_reauth' => true,
@@ -2167,7 +2246,7 @@ class CaptivePortalController extends Controller
 
             $session->update([
                 'status' => 'idle',
-                'expires_at' => $expiresAt,
+                'expires_at' => $authorizationExpiresAt,
                 'metadata' => array_merge($session->metadata ?? [], [
                     'activation' => array_merge(
                         (array) (($session->metadata ?? [])['activation'] ?? []),
@@ -2924,6 +3003,10 @@ class CaptivePortalController extends Controller
     private function resolvePaymentAccessExpiresAt(Payment $payment, ?UserSession $session = null): ?Carbon
     {
         if ($session) {
+            if ($this->sessionAwaitsRadiusLogin($session)) {
+                return $this->resolvePendingRadiusAuthorizationExpiresAt($payment, $session);
+            }
+
             if ($session->grace_period_active && $session->grace_period_ends_at instanceof Carbon) {
                 return $session->grace_period_ends_at->copy();
             }
@@ -2948,6 +3031,101 @@ class CaptivePortalController extends Controller
         }
 
         return null;
+    }
+
+    private function shouldRedirectToPackagesAfterExpiry(Payment $payment, ?UserSession $session = null): bool
+    {
+        if (!in_array((string) $payment->status, ['confirmed', 'completed'], true)) {
+            return false;
+        }
+
+        $session = $session ?? UserSession::query()
+            ->where('payment_id', $payment->id)
+            ->latest('id')
+            ->first();
+
+        return !$this->paymentCanStillAuthorizeAccess($payment, $session);
+    }
+
+    private function sessionAwaitsRadiusLogin(?UserSession $session): bool
+    {
+        return $session?->awaitsRadiusReauthentication() ?? false;
+    }
+
+    private function resolvePendingRadiusAuthorizationExpiresAt(
+        Payment $payment,
+        ?UserSession $session = null,
+        ?Carbon $preparedAt = null
+    ): Carbon {
+        $windowMinutes = max(
+            max(1, (int) config('radius.pending_login_window_minutes', 360)),
+            max(1, (int) ($payment->package?->duration_in_minutes ?? 0))
+        );
+
+        $baseTime = $preparedAt
+            ?? ($session?->pendingRadiusAuthorizationExpiresAt()?->subMinutes($windowMinutes))
+            ?? $this->parseFlexibleDateTime(data_get($session?->metadata, 'activation.authorization_started_at'))
+            ?? $this->parseFlexibleDateTime(data_get($session?->metadata, 'activation.last_attempt_at'))
+            ?? $this->parseFlexibleDateTime(data_get($session?->metadata, 'radius.authorization_started_at'))
+            ?? $this->parseFlexibleDateTime(data_get($session?->metadata, 'radius.last_attempt_at'))
+            ?? $this->parseFlexibleDateTime(data_get($payment->metadata, 'activation.authorization_started_at'))
+            ?? $this->parseFlexibleDateTime(data_get($payment->metadata, 'activation.last_attempt_at'))
+            ?? ($payment->confirmed_at?->copy())
+            ?? ($payment->completed_at?->copy())
+            ?? ($payment->initiated_at?->copy())
+            ?? ($payment->created_at?->copy())
+            ?? now()->copy();
+
+        return $baseTime->copy()->addMinutes($windowMinutes);
+    }
+
+    private function syncPendingRadiusAuthorizationWindowState(Payment $payment, UserSession $session): UserSession
+    {
+        if (!$this->sessionAwaitsRadiusLogin($session)) {
+            return $session->fresh() ?? $session;
+        }
+
+        $sessionMetadata = is_array($session->metadata) ? $session->metadata : [];
+        $paymentMetadata = is_array($payment->metadata) ? $payment->metadata : [];
+        $activationMetadata = is_array($sessionMetadata['activation'] ?? null) ? $sessionMetadata['activation'] : [];
+        $paymentActivationMetadata = is_array($paymentMetadata['activation'] ?? null) ? $paymentMetadata['activation'] : [];
+        $preparedAt = $this->parseFlexibleDateTime($activationMetadata['authorization_started_at'] ?? null)
+            ?? $this->parseFlexibleDateTime($activationMetadata['last_attempt_at'] ?? null)
+            ?? $this->parseFlexibleDateTime($paymentActivationMetadata['authorization_started_at'] ?? null)
+            ?? $this->parseFlexibleDateTime($paymentActivationMetadata['last_attempt_at'] ?? null)
+            ?? ($payment->confirmed_at?->copy())
+            ?? ($payment->completed_at?->copy())
+            ?? ($payment->created_at?->copy())
+            ?? now()->copy();
+        $authorizationExpiresAt = $this->resolvePendingRadiusAuthorizationExpiresAt($payment, $session, $preparedAt);
+        $authorizationWindowMetadata = [
+            'authorization_started_at' => $preparedAt->toIso8601String(),
+            'authorization_expires_at' => $authorizationExpiresAt->toIso8601String(),
+        ];
+
+        $radiusMetadata = is_array($sessionMetadata['radius'] ?? null) ? $sessionMetadata['radius'] : [];
+        if ($radiusMetadata !== []) {
+            $sessionMetadata['radius'] = array_merge($radiusMetadata, $authorizationWindowMetadata);
+        }
+
+        $sessionMetadata['activation'] = array_merge($activationMetadata, $authorizationWindowMetadata);
+        $session->update([
+            'status' => 'idle',
+            'expires_at' => $authorizationExpiresAt,
+            'metadata' => $sessionMetadata,
+        ]);
+
+        $paymentRadiusMetadata = is_array($paymentMetadata['radius'] ?? null) ? $paymentMetadata['radius'] : [];
+        if ($paymentRadiusMetadata !== []) {
+            $paymentMetadata['radius'] = array_merge($paymentRadiusMetadata, $authorizationWindowMetadata);
+        }
+
+        $paymentMetadata['activation'] = array_merge($paymentActivationMetadata, $authorizationWindowMetadata);
+        $payment->update([
+            'metadata' => $paymentMetadata,
+        ]);
+
+        return $session->fresh() ?? $session;
     }
 
     private function resolveConnectedSession(Payment $payment): ?UserSession

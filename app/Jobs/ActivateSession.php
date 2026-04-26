@@ -6,6 +6,7 @@ use App\Models\UserSession;
 use App\Services\MikroTik\SessionManager;
 use App\Services\Radius\FreeRadiusProvisioningService;
 use App\Services\Radius\RadiusIdentityResolver;
+use Illuminate\Support\Carbon;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -58,17 +59,24 @@ class ActivateSession implements ShouldQueue
             );
 
             if ($identityResolver->shouldUsePureRadiusFlow($identity)) {
+                $preparedAt = now();
+                $authorizationExpiresAt = $this->resolvePendingRadiusAuthorizationExpiresAt($freshSession, $preparedAt);
+
                 $this->storeRadiusMetadata($freshSession, [
                     'authorization_prepared' => true,
                     'authorization_mode' => (string) ($identity['identity_type'] ?? 'phone'),
                     'waiting_for_hotspot_login' => true,
                     'waiting_for_reauth' => ($identity['identity_type'] ?? null) === 'mac',
+                    'authorization_started_at' => $preparedAt->toIso8601String(),
+                    'authorization_expires_at' => $authorizationExpiresAt->toIso8601String(),
+                    'last_attempt_at' => $preparedAt->toIso8601String(),
                     'last_error' => null,
                     'last_failed_at' => null,
                 ]);
 
                 $freshSession->update([
                     'status' => 'idle',
+                    'expires_at' => $authorizationExpiresAt,
                     'last_synced_at' => now(),
                 ]);
 
@@ -95,16 +103,23 @@ class ActivateSession implements ShouldQueue
                 $identityResolver->shouldBypassRouterActivation($identity)
                 && $identityResolver->matchesMacIdentity((string) $freshSession->username, $freshSession->mac_address)
             ) {
+                $preparedAt = now();
+                $authorizationExpiresAt = $this->resolvePendingRadiusAuthorizationExpiresAt($freshSession, $preparedAt);
+
                 $this->storeRadiusMetadata($freshSession, [
                     'authorization_prepared' => true,
                     'authorization_mode' => 'mac',
                     'waiting_for_reauth' => true,
+                    'authorization_started_at' => $preparedAt->toIso8601String(),
+                    'authorization_expires_at' => $authorizationExpiresAt->toIso8601String(),
+                    'last_attempt_at' => $preparedAt->toIso8601String(),
                     'last_error' => null,
                     'last_failed_at' => null,
                 ]);
 
                 $freshSession->update([
                     'status' => 'idle',
+                    'expires_at' => $authorizationExpiresAt,
                     'last_synced_at' => now(),
                 ]);
 
@@ -249,5 +264,15 @@ class ActivateSession implements ShouldQueue
         $existingPaymentRadius = is_array($paymentMetadata['radius'] ?? null) ? $paymentMetadata['radius'] : [];
         $paymentMetadata['radius'] = array_merge($existingPaymentRadius, $radiusMetadata);
         $payment->update(['metadata' => $paymentMetadata]);
+    }
+
+    private function resolvePendingRadiusAuthorizationExpiresAt(UserSession $session, Carbon $preparedAt): Carbon
+    {
+        $windowMinutes = max(
+            max(1, (int) config('radius.pending_login_window_minutes', 360)),
+            max(1, (int) ($session->package?->duration_in_minutes ?? 0))
+        );
+
+        return $preparedAt->copy()->addMinutes($windowMinutes);
     }
 }
