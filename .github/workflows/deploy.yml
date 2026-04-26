@@ -119,6 +119,11 @@ jobs:
                 echo "Rolling back to: ${PREVIOUS_RELEASE}"
                 ln -sfn "${PREVIOUS_RELEASE}" "$CURRENT"
                 ln -sfn "${PREVIOUS_RELEASE}/public" "$APP_ROOT/public"
+                if systemctl cat cloudbridge-queue >/dev/null 2>&1; then
+                  systemctl reload cloudbridge-queue || systemctl restart cloudbridge-queue
+                else
+                  echo "cloudbridge-queue service not found during rollback; skipping queue reload."
+                fi
                 systemctl reload php8.4-fpm || true
                 systemctl reload nginx || true
               else
@@ -176,6 +181,13 @@ jobs:
 
             ln -sfn "$RELEASE" "$CURRENT"
             ln -sfn "$RELEASE/public" "$APP_ROOT/public"
+
+            if systemctl cat cloudbridge-queue >/dev/null 2>&1; then
+              echo "Reloading queue workers..."
+              systemctl reload cloudbridge-queue || systemctl restart cloudbridge-queue
+            else
+              echo "cloudbridge-queue service not found; skipping queue reload."
+            fi
 
             systemctl reload php8.4-fpm
             systemctl reload nginx

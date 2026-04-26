@@ -1954,7 +1954,8 @@ class CaptivePortalController extends Controller
                         username: $username,
                         password: $password,
                         package: $payment->package,
-                        expiresAt: $extensionExpiresAt
+                        expiresAt: $extensionExpiresAt,
+                        callingStationId: $reusedExtensionSession->mac_address ?? $clientMac
                     );
 
                     $radiusMetadata = array_merge($radiusMetadata, [
@@ -2123,7 +2124,8 @@ class CaptivePortalController extends Controller
                     username: $username,
                     password: $password,
                     package: $payment->package,
-                    expiresAt: $expiresAt
+                    expiresAt: $expiresAt,
+                    callingStationId: $session->mac_address ?? $clientMac
                 );
 
                 $radiusMetadata = [

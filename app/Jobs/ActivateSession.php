@@ -216,7 +216,8 @@ class ActivateSession implements ShouldQueue
                 username: (string) $session->username,
                 password: (string) $session->username,
                 package: $package,
-                expiresAt: $expiresAt
+                expiresAt: $expiresAt,
+                callingStationId: $session->mac_address
             );
 
             $this->storeRadiusMetadata($session, [

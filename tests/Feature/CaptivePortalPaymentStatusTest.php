@@ -888,10 +888,11 @@ class CaptivePortalPaymentStatusTest extends TestCase
 
         $expectedUsername = $this->expectedPhoneRadiusUsername($payment);
         $radiusProvisioning = Mockery::mock(FreeRadiusProvisioningService::class);
-        $radiusProvisioning->shouldReceive('provisionUser')->once()->withArgs(function (string $username, string $password, Package $resolvedPackage) use ($package, $expectedUsername) {
+        $radiusProvisioning->shouldReceive('provisionUser')->once()->withArgs(function (string $username, string $password, Package $resolvedPackage, ?\DateTimeInterface $expiresAt = null, ?string $callingStationId = null) use ($package, $expectedUsername) {
             return $username === $expectedUsername
                 && $password === $expectedUsername
-                && (int) $resolvedPackage->id === (int) $package->id;
+                && (int) $resolvedPackage->id === (int) $package->id
+                && $callingStationId === null;
         });
         $this->app->instance(FreeRadiusProvisioningService::class, $radiusProvisioning);
 
@@ -1542,10 +1543,11 @@ class CaptivePortalPaymentStatusTest extends TestCase
         $sessionManager->shouldNotReceive('activateSession');
 
         $radiusProvisioning = Mockery::mock(FreeRadiusProvisioningService::class);
-        $radiusProvisioning->shouldReceive('provisionUser')->once()->withArgs(function (string $username, string $password, Package $resolvedPackage) use ($package) {
+        $radiusProvisioning->shouldReceive('provisionUser')->once()->withArgs(function (string $username, string $password, Package $resolvedPackage, ?\DateTimeInterface $expiresAt = null, ?string $callingStationId = null) use ($package) {
             return $username === 'AA:BB:CC:DD:EE:FF'
                 && $password === 'AA:BB:CC:DD:EE:FF'
-                && (int) $resolvedPackage->id === (int) $package->id;
+                && (int) $resolvedPackage->id === (int) $package->id
+                && $callingStationId === 'AA:BB:CC:DD:EE:FF';
         });
 
         $job = new ActivateSession($session);
@@ -1585,10 +1587,11 @@ class CaptivePortalPaymentStatusTest extends TestCase
 
         $expectedUsername = $this->expectedPhoneRadiusUsername($payment);
         $radiusProvisioning = Mockery::mock(FreeRadiusProvisioningService::class);
-        $radiusProvisioning->shouldReceive('provisionUser')->once()->withArgs(function (string $username, string $password, Package $resolvedPackage) use ($package, $expectedUsername) {
+        $radiusProvisioning->shouldReceive('provisionUser')->once()->withArgs(function (string $username, string $password, Package $resolvedPackage, ?\DateTimeInterface $expiresAt = null, ?string $callingStationId = null) use ($package, $expectedUsername) {
             return $username === $expectedUsername
                 && $password === $expectedUsername
-                && (int) $resolvedPackage->id === (int) $package->id;
+                && (int) $resolvedPackage->id === (int) $package->id
+                && $callingStationId === null;
         });
         $this->app->instance(FreeRadiusProvisioningService::class, $radiusProvisioning);
 
@@ -1614,6 +1617,52 @@ class CaptivePortalPaymentStatusTest extends TestCase
         $response->assertSee("return actionUrl.origin !== window.location.origin;", false);
         $response->assertSee('If internet opens immediately, you can start browsing right away', false);
         $response->assertDontSee('radiusLoginSubmittedUrl', false);
+    }
+
+    public function test_pure_radius_phone_provisioning_binds_paid_access_to_the_client_mac(): void
+    {
+        config()->set('radius.enabled', true);
+        config()->set('radius.pure_radius', true);
+        config()->set('radius.access_mode', 'phone');
+        $this->configureRadiusProvisioningConnection();
+
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant);
+        $router = $this->createRouter($tenant, [
+            'status' => 'online',
+            'last_seen_at' => now(),
+        ]);
+
+        $payment = $this->createPayment($tenant, $package, [
+            'status' => 'confirmed',
+            'confirmed_at' => now(),
+            'mpesa_checkout_request_id' => 'ws_CO_radius_mac_binding_001',
+        ]);
+
+        $sessionManager = Mockery::mock(SessionManager::class);
+        $sessionManager->shouldNotReceive('activateSession');
+        $this->app->instance(SessionManager::class, $sessionManager);
+
+        $response = $this->get(route('wifi.status', [
+            'phone' => '0712345678',
+            'tenant_id' => $tenant->id,
+            'payment' => $payment->id,
+            'mac' => 'AA-BB-CC-DD-EE-FF',
+            'ip' => '10.0.0.25',
+            'link-login-only' => 'http://' . $router->ip_address . '/login',
+        ]));
+
+        $response->assertOk();
+
+        $username = $this->expectedPhoneRadiusUsername($payment);
+        $macBinding = DB::connection('radius')->table('radcheck')
+            ->where('username', $username)
+            ->where('attribute', 'Calling-Station-Id')
+            ->first();
+
+        $this->assertNotNull($macBinding);
+        $this->assertSame('==', $macBinding->op);
+        $this->assertSame('AA:BB:CC:DD:EE:FF', $macBinding->value);
     }
 
     public function test_status_hashes_password_field_for_chap_radius_autologin(): void

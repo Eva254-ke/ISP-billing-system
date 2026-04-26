@@ -37,6 +37,7 @@ return [
     // Attribute defaults used during provisioning
     'attributes' => [
         'cleartext_password' => 'Cleartext-Password',
+        'calling_station_id' => 'Calling-Station-Id',
         'expiration' => 'Expiration',
         'session_timeout' => 'Session-Timeout',
         'rate_limit' => 'Mikrotik-Rate-Limit',
