@@ -113,7 +113,7 @@ class PackageController extends Controller
             'tenant_id' => $tenant->id,
             'name' => $request->name,
             'description' => $request->description,
-            'code' => strtoupper(substr($request->name, 0, 3)) . '-' . uniqid(),
+            'code' => Package::generateUniqueCode(fallbackName: (string) $request->name),
             'price' => $request->price,
             'currency' => 'KES',
             'duration_value' => $request->duration_value,

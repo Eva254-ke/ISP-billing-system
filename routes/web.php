@@ -1037,19 +1037,6 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
                 }
             }
 
-            $codeBase = strtoupper(preg_replace('/[^A-Z0-9]+/', '-', (string) $validated['name']));
-            $codeBase = trim($codeBase, '-');
-            if ($codeBase === '') {
-                $codeBase = 'PKG';
-            }
-
-            $code = $codeBase;
-            $attempt = 1;
-            while (Package::query()->where('code', $code)->exists()) {
-                $attempt++;
-                $code = $codeBase . '-' . $attempt;
-            }
-
             $sortOrder = (int) (Package::query()
                 ->where('tenant_id', $tenant->id)
                 ->max('sort_order') ?? 0) + 1;
@@ -1058,7 +1045,7 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
                 'tenant_id' => $tenant->id,
                 'name' => $validated['name'],
                 'description' => null,
-                'code' => $code,
+                'code' => Package::generateUniqueCode(fallbackName: (string) $validated['name']),
                 'price' => $validated['price'],
                 'currency' => 'KES',
                 'duration_value' => $validated['duration_value'],

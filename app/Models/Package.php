@@ -8,10 +8,21 @@ use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 
 class Package extends Model
 {
     use HasFactory, SoftDeletes;
+
+    protected static function booted(): void
+    {
+        static::creating(function (self $package): void {
+            $package->code = static::generateUniqueCode(
+                preferredCode: (string) ($package->code ?? ''),
+                fallbackName: (string) ($package->name ?? '')
+            );
+        });
+    }
 
     protected $fillable = [
         'tenant_id',
@@ -357,5 +368,36 @@ class Package extends Model
                 return $p->duration_in_minutes / max($p->price, 1);
             })
             ->first();
+    }
+
+    public static function generateUniqueCode(?string $preferredCode = null, ?string $fallbackName = null): string
+    {
+        $base = static::normalizeCodeBase($preferredCode);
+
+        if ($base === '') {
+            $base = static::normalizeCodeBase($fallbackName);
+        }
+
+        if ($base === '') {
+            $base = 'PKG';
+        }
+
+        if (!static::query()->where('code', $base)->exists()) {
+            return $base;
+        }
+
+        do {
+            $candidate = $base . '-' . Str::upper(Str::random(4));
+        } while (static::query()->where('code', $candidate)->exists());
+
+        return $candidate;
+    }
+
+    private static function normalizeCodeBase(?string $value): string
+    {
+        $normalized = strtoupper((string) $value);
+        $normalized = preg_replace('/[^A-Z0-9]+/', '-', $normalized) ?? '';
+
+        return trim(substr($normalized, 0, 48), '-');
     }
 }
