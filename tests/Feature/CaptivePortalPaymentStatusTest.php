@@ -11,6 +11,7 @@ use App\Jobs\ActivateSession;
 use App\Jobs\ProcessMpesaCallback;
 use App\Services\MikroTik\SessionManager;
 use App\Services\Mpesa\DarajaService;
+use App\Services\Radius\RadiusDisconnectService;
 use App\Services\Radius\FreeRadiusProvisioningService;
 use App\Services\Radius\RadiusIdentityResolver;
 use Illuminate\Database\Schema\Blueprint;
@@ -1525,7 +1526,7 @@ class CaptivePortalPaymentStatusTest extends TestCase
         $response->assertDontSee('action="http://' . $router->ip_address . '/login"', false);
     }
 
-    public function test_session_manager_skips_router_api_disconnect_for_expired_pure_radius_sessions(): void
+    public function test_session_manager_uses_radius_disconnect_for_expired_pure_radius_sessions(): void
     {
         config()->set('radius.enabled', true);
         config()->set('radius.pure_radius', true);
@@ -1563,7 +1564,19 @@ class CaptivePortalPaymentStatusTest extends TestCase
         $mikrotikService = Mockery::mock(\App\Services\MikroTik\MikroTikService::class);
         $mikrotikService->shouldNotReceive('disconnectSession');
 
-        $manager = new SessionManager($mikrotikService);
+        $radiusDisconnectService = Mockery::mock(RadiusDisconnectService::class);
+        $radiusDisconnectService->shouldReceive('disconnect')->once()->with($session)->andReturn([
+            'success' => true,
+            'error' => null,
+            'nas_ip' => $router->ip_address,
+            'port' => 3799,
+            'used_accounting_record' => true,
+            'attributes' => [
+                'User-Name' => $session->username,
+            ],
+        ]);
+
+        $manager = new SessionManager($mikrotikService, $radiusDisconnectService);
 
         $this->assertTrue($manager->terminateSession($session, 'expired'));
 
@@ -1571,6 +1584,66 @@ class CaptivePortalPaymentStatusTest extends TestCase
         $this->assertSame('terminated', $session->status);
         $this->assertSame('expired', $session->termination_reason);
         $this->assertNotNull($session->terminated_at);
+    }
+
+    public function test_session_manager_preserves_pure_radius_session_when_radius_disconnect_fails(): void
+    {
+        config()->set('radius.enabled', true);
+        config()->set('radius.pure_radius', true);
+
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant);
+        $router = $this->createRouter($tenant, [
+            'status' => 'online',
+            'last_seen_at' => now(),
+        ]);
+
+        $payment = $this->createPayment($tenant, $package, [
+            'status' => 'completed',
+            'completed_at' => now()->subHour(),
+        ]);
+
+        $session = UserSession::query()->create([
+            'tenant_id' => $tenant->id,
+            'router_id' => $router->id,
+            'package_id' => $package->id,
+            'username' => $this->expectedPhoneRadiusUsername($payment),
+            'phone' => '0712345678',
+            'status' => 'active',
+            'started_at' => now()->subHour(),
+            'expires_at' => now()->subMinute(),
+            'payment_id' => $payment->id,
+            'metadata' => [
+                'radius' => [
+                    'provisioned' => true,
+                    'username' => $this->expectedPhoneRadiusUsername($payment),
+                ],
+            ],
+        ]);
+
+        $mikrotikService = Mockery::mock(\App\Services\MikroTik\MikroTikService::class);
+        $mikrotikService->shouldNotReceive('disconnectSession');
+
+        $radiusDisconnectService = Mockery::mock(RadiusDisconnectService::class);
+        $radiusDisconnectService->shouldReceive('disconnect')->once()->with($session)->andReturn([
+            'success' => false,
+            'error' => 'Disconnect-NAK',
+            'nas_ip' => $router->ip_address,
+            'port' => 3799,
+            'used_accounting_record' => false,
+            'attributes' => [
+                'User-Name' => $session->username,
+            ],
+        ]);
+
+        $manager = new SessionManager($mikrotikService, $radiusDisconnectService);
+
+        $this->assertFalse($manager->terminateSession($session, 'expired'));
+
+        $session->refresh();
+        $this->assertSame('active', $session->status);
+        $this->assertNull($session->terminated_at);
+        $this->assertNull($session->termination_reason);
     }
 
     public function test_check_status_marks_mac_authorized_session_active_from_radius_accounting(): void

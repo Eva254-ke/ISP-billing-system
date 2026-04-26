@@ -7,11 +7,10 @@ use Illuminate\Support\Facades\Schema;
 return new class extends Migration {
     public function up(): void
     {
-        if (!(bool) config('radius.enabled', false)) {
+        $schema = $this->resolveRadiusSchema();
+        if ($schema === null) {
             return;
         }
-
-        $schema = Schema::connection('radius');
         $tables = (array) config('radius.tables', []);
         $radpostauth = (string) ($tables['radpostauth'] ?? 'radpostauth');
         $nasreload = (string) ($tables['nasreload'] ?? 'nasreload');
@@ -38,11 +37,10 @@ return new class extends Migration {
 
     public function down(): void
     {
-        if (!(bool) config('radius.enabled', false)) {
+        $schema = $this->resolveRadiusSchema();
+        if ($schema === null) {
             return;
         }
-
-        $schema = Schema::connection('radius');
         $tables = (array) config('radius.tables', []);
         $radpostauth = (string) ($tables['radpostauth'] ?? 'radpostauth');
         $nasreload = (string) ($tables['nasreload'] ?? 'nasreload');
@@ -53,6 +51,24 @@ return new class extends Migration {
 
         if ($radpostauth !== '' && $schema->hasTable($radpostauth)) {
             $schema->drop($radpostauth);
+        }
+    }
+
+    private function resolveRadiusSchema(): ?\Illuminate\Database\Schema\Builder
+    {
+        $connection = (string) config('radius.db_connection', 'radius');
+
+        if (!is_array(config("database.connections.{$connection}"))) {
+            return null;
+        }
+
+        try {
+            $schema = Schema::connection($connection);
+            $schema->hasTable('migrations');
+
+            return $schema;
+        } catch (\Throwable) {
+            return null;
         }
     }
 };

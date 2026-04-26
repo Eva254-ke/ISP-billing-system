@@ -5,12 +5,14 @@ namespace App\Services\MikroTik;
 use App\Models\Router;
 use App\Models\UserSession;
 use App\Models\Package;
+use App\Services\Radius\RadiusDisconnectService;
 use Illuminate\Support\Facades\Log;
 
 class SessionManager
 {
     public function __construct(
-        protected MikroTikService $mikrotikService
+        protected MikroTikService $mikrotikService,
+        protected ?RadiusDisconnectService $radiusDisconnectService = null
     ) {}
 
     /**
@@ -207,16 +209,7 @@ class SessionManager
     public function terminateSession(UserSession $session, string $reason): bool
     {
         if ($this->shouldUseRadiusManagedDisconnect($session, $reason)) {
-            $session->markTerminated($reason);
-
-            Log::channel('radius')->info('Session termination recorded without RouterOS API', [
-                'session_id' => $session->id,
-                'username' => $session->username,
-                'reason' => $reason,
-                'router_id' => $session->router_id,
-            ]);
-
-            return true;
+            return $this->terminateRadiusManagedSession($session, $reason);
         }
 
         $router = $session->router;
@@ -367,6 +360,41 @@ class SessionManager
             return false;
         }
 
-        return in_array($reason, ['expired', 'data_limit_reached', 'expiry_check'], true);
+        return in_array($reason, ['expired', 'data_limit_reached', 'expiry_check', 'admin_request', 'admin_bulk_disconnect'], true);
+    }
+
+    private function terminateRadiusManagedSession(UserSession $session, string $reason): bool
+    {
+        $result = $this->resolveRadiusDisconnectService()->disconnect($session);
+
+        if (!($result['success'] ?? false)) {
+            Log::channel('radius')->warning('Session termination failed during RADIUS disconnect', [
+                'session_id' => $session->id,
+                'username' => $session->username,
+                'reason' => $reason,
+                'router_id' => $session->router_id,
+                'nas_ip' => $result['nas_ip'] ?? null,
+                'error' => $result['error'] ?? 'Unknown RADIUS disconnect failure.',
+            ]);
+
+            return false;
+        }
+
+        $session->markTerminated($reason);
+
+        Log::channel('radius')->info('Session terminated via RADIUS disconnect', [
+            'session_id' => $session->id,
+            'username' => $session->username,
+            'reason' => $reason,
+            'router_id' => $session->router_id,
+            'nas_ip' => $result['nas_ip'] ?? null,
+        ]);
+
+        return true;
+    }
+
+    private function resolveRadiusDisconnectService(): RadiusDisconnectService
+    {
+        return $this->radiusDisconnectService ??= app(RadiusDisconnectService::class);
     }
 }

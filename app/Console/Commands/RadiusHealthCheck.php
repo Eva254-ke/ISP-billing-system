@@ -116,6 +116,18 @@ class RadiusHealthCheck extends Command
                         $errors[] = "Missing required table: {$table}";
                     }
                 }
+
+                $radacct = (string) ($tables['radacct'] ?? 'radacct');
+                if ($radacct !== '' && Schema::connection($connection)->hasTable($radacct)) {
+                    $missingColumns = array_values(array_filter(
+                        $this->requiredRadacctColumns(),
+                        static fn (string $column): bool => !Schema::connection($connection)->hasColumn($radacct, $column)
+                    ));
+
+                    if ($missingColumns !== []) {
+                        $errors[] = "{$radacct} is missing required FreeRADIUS columns: " . implode(', ', $missingColumns);
+                    }
+                }
             } catch (\Throwable $e) {
                 $errors[] = 'DB connectivity failed: ' . $e->getMessage();
             }
@@ -272,5 +284,40 @@ class RadiusHealthCheck extends Command
             || str_contains($error, 'requested address')
             || str_contains($error, 'cannot assign')
             || str_contains($error, 'not available');
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private function requiredRadacctColumns(): array
+    {
+        return [
+            'acctsessionid',
+            'acctuniqueid',
+            'username',
+            'realm',
+            'nasipaddress',
+            'nasportid',
+            'nasporttype',
+            'acctstarttime',
+            'acctupdatetime',
+            'acctstoptime',
+            'acctsessiontime',
+            'acctauthentic',
+            'connectinfo_start',
+            'connectinfo_stop',
+            'acctinputoctets',
+            'acctoutputoctets',
+            'calledstationid',
+            'callingstationid',
+            'acctterminatecause',
+            'servicetype',
+            'framedprotocol',
+            'framedipaddress',
+            'framedipv6address',
+            'framedipv6prefix',
+            'framedinterfaceid',
+            'delegatedipv6prefix',
+        ];
     }
 }

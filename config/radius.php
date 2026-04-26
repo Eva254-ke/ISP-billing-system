@@ -14,6 +14,10 @@ return [
     'acct_port' => (int) env('RADIUS_ACCT_PORT', 1813),
     'timeout' => max(1, (int) env('RADIUS_TIMEOUT', 5)),
     'shared_secret' => env('RADIUS_SHARED_SECRET', ''),
+    'disconnect_port' => (int) env('RADIUS_DISCONNECT_PORT', 3799),
+    'disconnect_timeout' => max(1, (int) env('RADIUS_DISCONNECT_TIMEOUT', 5)),
+    'disconnect_secret' => env('RADIUS_DISCONNECT_SECRET', env('RADIUS_SHARED_SECRET', '')),
+    'disconnect_binary' => env('RADIUS_DISCONNECT_BINARY', 'radclient'),
 
     // FreeRADIUS SQL connection name from config/database.php
     'db_connection' => env('RADIUS_DB_CONNECTION', 'radius'),

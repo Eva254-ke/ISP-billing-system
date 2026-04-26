@@ -60,6 +60,29 @@ class RadiusHealthCheckTest extends TestCase
             ->assertExitCode(SymfonyCommand::SUCCESS);
     }
 
+    public function test_radius_health_check_fails_when_radacct_schema_is_incomplete(): void
+    {
+        if (!function_exists('socket_create')) {
+            $this->markTestSkipped('PHP sockets extension is not available.');
+        }
+
+        [$authPort] = $this->reserveUdpPort(true);
+        [$acctPort] = $this->reserveUdpPort(true);
+
+        $this->configureRadiusHealthCheck($authPort, $acctPort);
+
+        $schema = Schema::connection('radius');
+        $schema->drop('radacct');
+        $schema->create('radacct', function (Blueprint $table): void {
+            $table->id();
+            $table->string('username')->nullable();
+        });
+
+        $this->artisan('radius:health-check')
+            ->expectsOutputToContain('radacct is missing required FreeRADIUS columns')
+            ->assertExitCode(SymfonyCommand::FAILURE);
+    }
+
     private function configureRadiusHealthCheck(int $authPort, int $acctPort): void
     {
         config()->set('app.env', 'testing');
@@ -103,8 +126,33 @@ class RadiusHealthCheckTest extends TestCase
         });
 
         $schema->create('radacct', function (Blueprint $table): void {
-            $table->id();
-            $table->string('username')->nullable();
+            $table->unsignedBigInteger('radacctid', true);
+            $table->string('acctsessionid', 64)->default('');
+            $table->string('acctuniqueid', 32)->default('');
+            $table->string('username', 64)->default('');
+            $table->string('realm', 64)->default('');
+            $table->string('nasipaddress', 15)->default('');
+            $table->string('nasportid', 15)->nullable();
+            $table->string('nasporttype', 32)->nullable();
+            $table->dateTime('acctstarttime')->nullable();
+            $table->dateTime('acctupdatetime')->nullable();
+            $table->dateTime('acctstoptime')->nullable();
+            $table->unsignedInteger('acctsessiontime')->nullable();
+            $table->string('acctauthentic', 32)->nullable();
+            $table->string('connectinfo_start', 50)->nullable();
+            $table->string('connectinfo_stop', 50)->nullable();
+            $table->unsignedBigInteger('acctinputoctets')->nullable();
+            $table->unsignedBigInteger('acctoutputoctets')->nullable();
+            $table->string('calledstationid', 50)->default('');
+            $table->string('callingstationid', 50)->default('');
+            $table->string('acctterminatecause', 32)->default('');
+            $table->string('servicetype', 32)->nullable();
+            $table->string('framedprotocol', 32)->nullable();
+            $table->string('framedipaddress', 15)->default('');
+            $table->string('framedipv6address', 45)->nullable();
+            $table->string('framedipv6prefix', 45)->nullable();
+            $table->string('framedinterfaceid', 44)->nullable();
+            $table->string('delegatedipv6prefix', 45)->nullable();
         });
 
         $schema->create('radpostauth', function (Blueprint $table): void {

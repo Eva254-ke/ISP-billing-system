@@ -257,10 +257,57 @@ class DatabaseHealthCheck extends Command
             }
         }
 
+        $radacct = (string) ($tables['radacct'] ?? 'radacct');
+        if ($radacct !== '' && Schema::connection($connection)->hasTable($radacct)) {
+            $missingColumns = array_values(array_filter(
+                $this->requiredRadacctColumns(),
+                static fn (string $column): bool => !Schema::connection($connection)->hasColumn($radacct, $column)
+            ));
+
+            if ($missingColumns !== []) {
+                $errors[] = "{$radacct} is missing required FreeRADIUS columns: " . implode(', ', $missingColumns);
+            }
+        }
+
         $sslCa = trim((string) env('RADIUS_DB_SSL_CA', ''));
         $host = trim((string) config("database.connections.{$connection}.host", ''));
         if ($host !== '' && !in_array($host, ['127.0.0.1', 'localhost'], true) && $sslCa === '') {
             $warnings[] = 'RADIUS_DB_SSL_CA is empty for a remote RADIUS database host.';
         }
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private function requiredRadacctColumns(): array
+    {
+        return [
+            'acctsessionid',
+            'acctuniqueid',
+            'username',
+            'realm',
+            'nasipaddress',
+            'nasportid',
+            'nasporttype',
+            'acctstarttime',
+            'acctupdatetime',
+            'acctstoptime',
+            'acctsessiontime',
+            'acctauthentic',
+            'connectinfo_start',
+            'connectinfo_stop',
+            'acctinputoctets',
+            'acctoutputoctets',
+            'calledstationid',
+            'callingstationid',
+            'acctterminatecause',
+            'servicetype',
+            'framedprotocol',
+            'framedipaddress',
+            'framedipv6address',
+            'framedipv6prefix',
+            'framedinterfaceid',
+            'delegatedipv6prefix',
+        ];
     }
 }
