@@ -41,9 +41,8 @@ class CheckExpiringSessions extends Command
         // ──────────────────────────────────────────────────────────────────
         $expiring = UserSession::query()
             ->whereIn('status', ['active', 'idle'])
-            ->where('expires_at', '<=', now()->addMinutes(30))
             ->where(function ($query) {
-                $query->where('expires_at', '>', now()->subMinutes(10))
+                $query->where('expires_at', '<=', now()->addMinutes(30))
                     ->orWhere('grace_period_active', true);
             })
             ->with(['router', 'package'])
@@ -69,8 +68,9 @@ class CheckExpiringSessions extends Command
             // ──────────────────────────────────────────────────────────────
             // EDGE CASE: Activate grace period when expired (but within 5 min)
             // ──────────────────────────────────────────────────────────────
-            if ($session->expires_at->isPast() && !$session->grace_period_active) {
+            if ($session->shouldActivateGracePeriod()) {
                 $session->activateGracePeriod();
+                $session->refresh();
                 $graceActivated++;
                 
                 Log::channel('mikrotik')->info('Grace period activated', [

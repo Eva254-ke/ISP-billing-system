@@ -173,20 +173,16 @@ class SessionManager
         if (!in_array($session->status, ['active', 'idle'])) {
             return;
         }
-        
-        // Check if session should be disconnected
-        if ($session->shouldDisconnect()) {
-            $this->terminateSession($session, 'expired');
-            return;
-        }
-        
+
+        $minutesRemaining = now()->diffInMinutes($session->expires_at, false);
+
         // Check if session is expiring soon (send warning)
-        if ($session->expires_at->diffInMinutes(now()) <= 10 && !$session->grace_period_active) {
+        if ($minutesRemaining <= 10 && $minutesRemaining > 0 && !$session->grace_period_active) {
             $this->sendExpiryWarning($session);
         }
-        
-        // Activate grace period if expired but within grace window
-        if ($session->expires_at->isPast() && !$session->grace_period_active) {
+
+        // Activate grace period if expired but still inside the configured buffer.
+        if ($session->shouldActivateGracePeriod()) {
             $session->activateGracePeriod();
             
             Log::channel('mikrotik')->info('Grace period activated', [
@@ -194,6 +190,12 @@ class SessionManager
                 'username' => $session->username,
                 'grace_ends_at' => $session->grace_period_ends_at->toIso8601String(),
             ]);
+        }
+
+        // Check if session should be disconnected
+        if ($session->shouldDisconnect()) {
+            $this->terminateSession($session, 'expired');
+            return;
         }
         
         // Pure RADIUS mode uses accounting updates instead of RouterOS API polling.

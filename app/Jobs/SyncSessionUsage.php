@@ -52,7 +52,17 @@ class SyncSessionUsage implements ShouldQueue
             if ((bool) config('radius.enabled', false) && (bool) config('radius.pure_radius', false)) {
                 $success = $radiusAccountingService->syncActiveSession($session) !== null;
 
-                if (!$success && $session->expires_at?->isPast()) {
+                if (!$success && $session->shouldActivateGracePeriod()) {
+                    $session->activateGracePeriod();
+                    Log::channel('radius')->info('Grace period activated after accounting sync miss', [
+                        'session_id' => $session->id,
+                        'username' => $session->username,
+                        'grace_ends_at' => $session->fresh()?->grace_period_ends_at?->toIso8601String(),
+                    ]);
+                    return;
+                }
+
+                if (!$success && $session->shouldDisconnect()) {
                     $sessionManager->terminateSession($session, 'expired');
                     $session->markExpired('expired');
                     Log::channel('radius')->info('Expired pure-RADIUS session marked expired after accounting sync miss', [

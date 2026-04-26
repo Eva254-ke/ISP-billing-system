@@ -235,7 +235,7 @@ class Payment extends Model
         }
 
         $expiry = $this->activated_at ?? $this->completed_at ?? $this->created_at;
-        return $expiry->copy()->addMinutes($this->package->duration_minutes)->isFuture();
+        return $expiry->copy()->addMinutes($this->package->duration_in_minutes)->isFuture();
     }
 
     public function getMpesaCodeDisplayAttribute(): ?string
@@ -253,7 +253,7 @@ class Payment extends Model
         }
 
         $baseTime = $this->activated_at ?? $this->completed_at ?? $this->created_at;
-        return $baseTime->copy()->addMinutes($this->package->duration_minutes)->toIso8601String();
+        return $baseTime->copy()->addMinutes($this->package->duration_in_minutes)->toIso8601String();
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -366,7 +366,7 @@ class Payment extends Model
             'package' => $this->package ? [
                 'id' => $this->package->id,
                 'name' => $this->package->name,
-                'duration_minutes' => $this->package->duration_minutes,
+                'duration_minutes' => $this->package->duration_in_minutes,
                 'duration_formatted' => $this->package->duration_formatted,
                 'price' => $this->package->price,
                 'data_limit_mb' => $this->package->data_limit_mb,

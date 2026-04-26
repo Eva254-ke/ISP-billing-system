@@ -61,32 +61,59 @@ class RadiusAccountingService
             return null;
         }
 
-        $startedAt = $this->parseDateTimeValue($record['acctstarttime'] ?? null) ?? $session->started_at ?? now();
+        $sessionMetadata = is_array($session->metadata) ? $session->metadata : [];
+        $radiusMetadata = $this->sessionRadiusMetadata($session);
+        $activationMetadata = $this->sessionActivationMetadata($sessionMetadata);
+        $accountingStartedAt = $this->parseDateTimeValue($record['acctstarttime'] ?? null);
+        $shouldRealignTiming = $this->shouldRealignSessionTiming($session, $radiusMetadata, $activationMetadata);
+        $startedAt = $shouldRealignTiming
+            ? ($accountingStartedAt ?? $session->started_at ?? now())
+            : ($session->started_at ?? $accountingStartedAt ?? now());
         $lastActivityAt = $this->parseDateTimeValue($record['acctupdatetime'] ?? null)
             ?? $startedAt;
         $normalizedMac = $this->identityResolver->normalizeMacAddress($record['callingstationid'] ?? null);
         $normalizedIp = $this->normalizeIpAddress($record['framedipaddress'] ?? null);
         $bytesIn = max(0, (int) ($record['acctinputoctets'] ?? 0));
         $bytesOut = max(0, (int) ($record['acctoutputoctets'] ?? 0));
+        $expiresAt = $session->expires_at;
+
+        if (($shouldRealignTiming || $expiresAt === null) && $session->package) {
+            $durationMinutes = max(1, (int) ($session->package->duration_in_minutes ?? 60));
+            $expiresAt = $startedAt->copy()->addMinutes($durationMinutes);
+        }
+
+        $metadata = $this->mergeRadiusMetadata($session, [
+            'active_username' => $this->cleanValue($record['username'] ?? null),
+            'acct_session_id' => $this->cleanValue($record['acctsessionid'] ?? null),
+            'acct_unique_session_id' => $this->cleanValue($record['acctuniqueid'] ?? null),
+            'calling_station_id' => $normalizedMac,
+            'framed_ip_address' => $normalizedIp,
+            'nas_ip_address' => $this->normalizeIpAddress($record['nasipaddress'] ?? null),
+            'last_accounting_sync_at' => now()->toIso8601String(),
+            'waiting_for_hotspot_login' => false,
+            'waiting_for_reauth' => false,
+            'expires_at' => $expiresAt?->toIso8601String(),
+        ]);
+
+        $metadata['activation'] = array_merge($activationMetadata, [
+            'waiting_for_hotspot_login' => false,
+            'waiting_for_reauth' => false,
+            'activated_via' => 'radius_accounting',
+            'activated_at' => $startedAt->toIso8601String(),
+            'last_success_at' => now()->toIso8601String(),
+        ]);
 
         $updates = [
             'status' => 'active',
             'started_at' => $startedAt,
+            'expires_at' => $expiresAt,
             'last_activity_at' => $lastActivityAt,
             'last_synced_at' => now(),
             'sync_failed' => false,
             'bytes_in' => $bytesIn,
             'bytes_out' => $bytesOut,
             'bytes_total' => $bytesIn + $bytesOut,
-            'metadata' => $this->mergeRadiusMetadata($session, [
-                'active_username' => $this->cleanValue($record['username'] ?? null),
-                'acct_session_id' => $this->cleanValue($record['acctsessionid'] ?? null),
-                'acct_unique_session_id' => $this->cleanValue($record['acctuniqueid'] ?? null),
-                'calling_station_id' => $normalizedMac,
-                'framed_ip_address' => $normalizedIp,
-                'nas_ip_address' => $this->normalizeIpAddress($record['nasipaddress'] ?? null),
-                'last_accounting_sync_at' => now()->toIso8601String(),
-            ]),
+            'metadata' => $metadata,
         ];
 
         if ($normalizedMac !== null && $session->mac_address !== $normalizedMac) {
@@ -287,6 +314,36 @@ class RadiusAccountingService
         $radius = $metadata['radius'] ?? null;
 
         return is_array($radius) ? $radius : [];
+    }
+
+    /**
+     * @param  array<string, mixed>  $sessionMetadata
+     * @return array<string, mixed>
+     */
+    private function sessionActivationMetadata(array $sessionMetadata): array
+    {
+        $activation = $sessionMetadata['activation'] ?? null;
+
+        return is_array($activation) ? $activation : [];
+    }
+
+    /**
+     * @param  array<string, mixed>  $radiusMetadata
+     * @param  array<string, mixed>  $activationMetadata
+     */
+    private function shouldRealignSessionTiming(
+        UserSession $session,
+        array $radiusMetadata,
+        array $activationMetadata
+    ): bool {
+        if ($session->status !== 'active' || $session->started_at === null || $session->expires_at === null) {
+            return true;
+        }
+
+        return (bool) ($radiusMetadata['waiting_for_hotspot_login'] ?? false)
+            || (bool) ($radiusMetadata['waiting_for_reauth'] ?? false)
+            || (bool) ($activationMetadata['waiting_for_hotspot_login'] ?? false)
+            || (bool) ($activationMetadata['waiting_for_reauth'] ?? false);
     }
 
     /**

@@ -300,6 +300,7 @@ class ProcessMpesaCallback implements ShouldQueue
 
                 $sessionPhone = $this->normalizePhoneForStorage($mpesaPhone) ?? (string) $payment->phone;
                 $durationMinutes = max(1, (int) ($package->duration_in_minutes ?? 60));
+                $gracePeriodSeconds = max(0, (int) ($package->grace_period_seconds ?? config('wifi.grace_period_seconds', 300)));
                 $paymentMetadata = is_array($payment->metadata) ? $payment->metadata : [];
                 $paymentClientContext = is_array($paymentMetadata['client_context'] ?? null) ? $paymentMetadata['client_context'] : [];
                 $clientMac = $this->normalizeMacAddress((string) ($paymentClientContext['mac'] ?? ''));
@@ -325,7 +326,7 @@ class ProcessMpesaCallback implements ShouldQueue
                         'status' => 'idle',
                         'started_at' => $startAt,
                         'expires_at' => $startAt->copy()->addMinutes($durationMinutes),
-                        'grace_period_seconds' => 300,
+                        'grace_period_seconds' => $gracePeriodSeconds,
                         'payment_id' => $payment->id,
                     ]);
                 } else {
@@ -347,6 +348,7 @@ class ProcessMpesaCallback implements ShouldQueue
                         'status' => ((string) $session->status === 'active') ? 'active' : 'idle',
                         'started_at' => $startedAt,
                         'expires_at' => $targetExpiry,
+                        'grace_period_seconds' => $gracePeriodSeconds,
                     ]);
                 }
 

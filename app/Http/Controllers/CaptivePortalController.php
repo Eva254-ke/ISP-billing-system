@@ -1976,6 +1976,8 @@ class CaptivePortalController extends Controller
             return $reusedExtensionSession->fresh();
         }
 
+        $gracePeriodSeconds = max(0, (int) ($payment->package?->grace_period_seconds ?? config('wifi.grace_period_seconds', 300)));
+
         $session = UserSession::firstOrCreate(
             ['payment_id' => $payment->id],
             [
@@ -1989,6 +1991,7 @@ class CaptivePortalController extends Controller
                 'status' => 'idle',
                 'started_at' => now(),
                 'expires_at' => $defaultExpiresAt,
+                'grace_period_seconds' => $gracePeriodSeconds,
             ]
         );
 
@@ -2008,6 +2011,9 @@ class CaptivePortalController extends Controller
         }
         if ($clientIp !== null && $session->ip_address !== $clientIp) {
             $sessionUpdates['ip_address'] = $clientIp;
+        }
+        if ((int) ($session->grace_period_seconds ?? -1) !== $gracePeriodSeconds) {
+            $sessionUpdates['grace_period_seconds'] = $gracePeriodSeconds;
         }
         if ($session->status !== 'active') {
             // Keep session credentials aligned with RADIUS provisioning username.
@@ -2997,13 +3003,13 @@ class CaptivePortalController extends Controller
         $activationMetadata = is_array($paymentMetadata['activation'] ?? null) ? $paymentMetadata['activation'] : [];
         $activationMetadata = array_merge($activationMetadata, [
             'activated_via' => 'radius_accounting',
-            'activated_at' => now()->toIso8601String(),
+            'activated_at' => ($session->started_at ?? now())->toIso8601String(),
         ]);
 
         $payment->update([
             'status' => 'completed',
-            'completed_at' => $payment->completed_at ?? now(),
-            'activated_at' => $payment->activated_at ?? now(),
+            'completed_at' => $payment->completed_at ?? $session->started_at ?? now(),
+            'activated_at' => $payment->activated_at ?? $session->started_at ?? now(),
             'session_id' => $session->id,
             'reconciliation_notes' => null,
             'metadata' => array_merge($paymentMetadata, [

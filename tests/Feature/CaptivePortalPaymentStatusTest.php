@@ -9,10 +9,13 @@ use App\Models\Tenant;
 use App\Models\UserSession;
 use App\Jobs\ActivateSession;
 use App\Jobs\ProcessMpesaCallback;
+use App\Jobs\SyncSessionUsage;
+use App\Services\MikroTik\MikroTikService;
 use App\Services\MikroTik\SessionManager;
 use App\Services\Mpesa\DarajaService;
 use App\Services\Radius\RadiusDisconnectService;
 use App\Services\Radius\FreeRadiusProvisioningService;
+use App\Services\Radius\RadiusAccountingService;
 use App\Services\Radius\RadiusIdentityResolver;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -2014,6 +2017,100 @@ class CaptivePortalPaymentStatusTest extends TestCase
         $this->assertSame($activeUsername, (string) data_get($extensionPayment->metadata, 'radius.username'));
     }
 
+    public function test_radius_accounting_realigns_idle_session_timing_to_the_actual_hotspot_login(): void
+    {
+        config()->set('radius.enabled', true);
+        config()->set('radius.pure_radius', true);
+        config()->set('radius.access_mode', 'mac');
+        $this->configureRadiusAccountingConnection();
+
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant);
+        $router = $this->createRouter($tenant, [
+            'status' => 'online',
+            'last_seen_at' => now(),
+        ]);
+
+        $payment = $this->createPayment($tenant, $package, [
+            'phone' => '0712345678',
+            'status' => 'confirmed',
+            'mpesa_checkout_request_id' => 'ws_CO_radacct_activation_delay_001',
+            'metadata' => [
+                'gateway' => 'daraja',
+                'client_context' => [
+                    'mac' => 'AA:BB:CC:DD:EE:FF',
+                    'ip' => '10.0.0.25',
+                ],
+            ],
+        ]);
+
+        $queuedAt = now()->subMinutes(5)->startOfSecond();
+        $actualLoginAt = now()->startOfSecond();
+        $originalExpiry = $queuedAt->copy()->addMinutes((int) $package->duration_in_minutes);
+        $expectedExpiry = $actualLoginAt->copy()->addMinutes((int) $package->duration_in_minutes);
+
+        $session = UserSession::query()->create([
+            'tenant_id' => $tenant->id,
+            'router_id' => $router->id,
+            'package_id' => $package->id,
+            'username' => 'AA:BB:CC:DD:EE:FF',
+            'phone' => '0712345678',
+            'mac_address' => 'AA:BB:CC:DD:EE:FF',
+            'ip_address' => '10.0.0.25',
+            'status' => 'idle',
+            'started_at' => $queuedAt,
+            'expires_at' => $originalExpiry,
+            'grace_period_seconds' => $package->grace_period_seconds,
+            'payment_id' => $payment->id,
+            'metadata' => [
+                'activation' => [
+                    'method' => 'radius_hotspot_login',
+                    'waiting_for_hotspot_login' => true,
+                ],
+            ],
+        ]);
+
+        $this->seedRadiusAccountingRecord([
+            'username' => 'AA:BB:CC:DD:EE:FF',
+            'callingstationid' => 'AA:BB:CC:DD:EE:FF',
+            'framedipaddress' => '10.0.0.25',
+            'acctstarttime' => $actualLoginAt->toDateTimeString(),
+            'acctupdatetime' => $actualLoginAt->copy()->addSeconds(30)->toDateTimeString(),
+        ]);
+
+        $sessionManager = Mockery::mock(SessionManager::class);
+        $sessionManager->shouldNotReceive('activateSession');
+        $this->app->instance(SessionManager::class, $sessionManager);
+
+        $radiusProvisioning = Mockery::mock(FreeRadiusProvisioningService::class);
+        $radiusProvisioning->shouldReceive('provisionUser')->once();
+        $this->app->instance(FreeRadiusProvisioningService::class, $radiusProvisioning);
+
+        $response = $this->getJson(route('wifi.status.check', [
+            'phone' => '0712345678',
+            'tenant_id' => $tenant->id,
+            'payment' => $payment->id,
+        ]));
+
+        $response->assertOk();
+        $response->assertJson([
+            'status' => 'activated',
+            'payment_id' => $payment->id,
+            'session_active' => true,
+        ]);
+
+        $payment->refresh();
+        $session->refresh();
+
+        $this->assertSame('active', $session->status);
+        $this->assertSame($actualLoginAt->toDateTimeString(), $session->started_at->toDateTimeString());
+        $this->assertSame($expectedExpiry->toDateTimeString(), $session->expires_at->toDateTimeString());
+        $this->assertTrue($session->expires_at->gt($originalExpiry));
+        $this->assertSame($actualLoginAt->toDateTimeString(), $payment->activated_at?->toDateTimeString());
+        $this->assertSame('radius_accounting', (string) data_get($session->metadata, 'activation.activated_via'));
+        $this->assertFalse((bool) data_get($session->metadata, 'activation.waiting_for_hotspot_login'));
+    }
+
     public function test_expire_stale_sessions_marks_overdue_active_and_idle_sessions_expired(): void
     {
         $tenant = $this->createTenant();
@@ -2032,6 +2129,7 @@ class CaptivePortalPaymentStatusTest extends TestCase
             'status' => 'active',
             'started_at' => now()->subHour(),
             'expires_at' => now()->subMinute(),
+            'grace_period_seconds' => 0,
         ]);
 
         $expiredIdle = UserSession::query()->create([
@@ -2043,6 +2141,7 @@ class CaptivePortalPaymentStatusTest extends TestCase
             'status' => 'idle',
             'started_at' => now()->subHour(),
             'expires_at' => now()->subMinute(),
+            'grace_period_seconds' => 0,
         ]);
 
         $liveSession = UserSession::query()->create([
@@ -2071,6 +2170,87 @@ class CaptivePortalPaymentStatusTest extends TestCase
         $this->assertNotNull($expiredIdle->terminated_at);
         $this->assertSame('active', $liveSession->status);
         $this->assertSame([$liveSession->id], UserSession::query()->live()->pluck('id')->all());
+    }
+
+    public function test_expire_stale_sessions_keeps_sessions_with_remaining_grace_buffer_active(): void
+    {
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant);
+        $router = $this->createRouter($tenant, [
+            'status' => 'online',
+            'last_seen_at' => now(),
+        ]);
+
+        $session = UserSession::query()->create([
+            'tenant_id' => $tenant->id,
+            'router_id' => $router->id,
+            'package_id' => $package->id,
+            'username' => 'cb-grace-window',
+            'phone' => '0712345678',
+            'status' => 'active',
+            'started_at' => now()->subHour(),
+            'expires_at' => now()->subMinutes(4),
+            'grace_period_seconds' => $package->grace_period_seconds,
+        ]);
+
+        $updated = UserSession::expireStaleSessions($tenant->id);
+
+        $session->refresh();
+
+        $this->assertSame(0, $updated);
+        $this->assertSame('active', $session->status);
+        $this->assertTrue($session->shouldActivateGracePeriod());
+        $this->assertFalse($session->shouldDisconnect());
+    }
+
+    public function test_sync_session_usage_activates_only_the_remaining_grace_window_after_an_accounting_sync_miss(): void
+    {
+        config()->set('radius.enabled', true);
+        config()->set('radius.pure_radius', true);
+
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant);
+        $router = $this->createRouter($tenant, [
+            'status' => 'online',
+            'last_seen_at' => now(),
+        ]);
+
+        $expiresAt = now()->subMinutes(4)->startOfSecond();
+        $expectedGraceEndsAt = $expiresAt->copy()->addSeconds($package->grace_period_seconds);
+
+        $session = UserSession::query()->create([
+            'tenant_id' => $tenant->id,
+            'router_id' => $router->id,
+            'package_id' => $package->id,
+            'username' => 'cb-grace-sync',
+            'phone' => '0712345678',
+            'status' => 'active',
+            'started_at' => now()->subHour(),
+            'expires_at' => $expiresAt,
+            'grace_period_seconds' => $package->grace_period_seconds,
+        ]);
+
+        $radiusAccountingService = Mockery::mock(RadiusAccountingService::class);
+        $radiusAccountingService->shouldReceive('syncActiveSession')->once()->withArgs(
+            fn (UserSession $resolvedSession): bool => (int) $resolvedSession->id === (int) $session->id
+        )->andReturnNull();
+
+        $mikroTikService = Mockery::mock(MikroTikService::class);
+        $sessionManager = Mockery::mock(SessionManager::class);
+        $sessionManager->shouldNotReceive('terminateSession');
+
+        (new SyncSessionUsage($session->id))->handle(
+            $mikroTikService,
+            $radiusAccountingService,
+            $sessionManager
+        );
+
+        $session->refresh();
+
+        $this->assertTrue($session->grace_period_active);
+        $this->assertSame('active', $session->status);
+        $this->assertSame($expectedGraceEndsAt->toDateTimeString(), $session->grace_period_ends_at?->toDateTimeString());
+        $this->assertFalse($session->shouldDisconnect());
     }
 
     public function test_router_walled_garden_rules_include_portal_and_daraja_hosts_without_intasend(): void

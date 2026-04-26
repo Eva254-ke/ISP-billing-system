@@ -198,7 +198,7 @@ class VoucherController extends Controller
                 'status' => 'idle',
                 'started_at' => now(),
                 'expires_at' => now()->addMinutes($voucher->package->duration_in_minutes),
-                'grace_period_seconds' => 300,
+                'grace_period_seconds' => $voucher->package->grace_period_seconds,
                 'voucher_id' => $voucher->id,
             ]);
 

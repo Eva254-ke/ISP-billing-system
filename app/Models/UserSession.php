@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Log;
 
 class UserSession extends Model
@@ -105,7 +106,7 @@ class UserSession extends Model
     public function scopeActive($query)
     {
         return $query->where('status', 'active')
-            ->where('expires_at', '>', now());
+            ->notExpired();
     }
 
     public function scopeNotExpired($query)
@@ -179,7 +180,15 @@ class UserSession extends Model
 
     public function getIsExpiredAttribute(): bool
     {
-        return $this->expires_at->isPast() && !$this->is_in_grace_period;
+        if (!$this->expires_at) {
+            return false;
+        }
+
+        if ($this->isInGracePeriod || $this->hasPendingGraceWindow()) {
+            return false;
+        }
+
+        return $this->expires_at->isPast();
     }
 
     public function getIsInGracePeriodAttribute(): bool
@@ -191,10 +200,15 @@ class UserSession extends Model
 
     public function getTimeRemainingAttribute(): int
     {
-        if ($this->isInGracePeriod && $this->grace_period_ends_at) {
-            return max(0, $this->grace_period_ends_at->diffInSeconds(now()));
+        if ($this->isInGracePeriod) {
+            return $this->secondsUntil($this->grace_period_ends_at);
         }
-        return max(0, $this->expires_at->diffInSeconds(now()));
+
+        if ($this->hasPendingGraceWindow()) {
+            return $this->secondsUntil($this->gracePeriodDeadline());
+        }
+
+        return $this->secondsUntil($this->expires_at);
     }
 
     public function getTimeRemainingFormattedAttribute(): string
@@ -311,7 +325,7 @@ class UserSession extends Model
             'package' => $this->package ? [
                 'id' => $this->package->id,
                 'name' => $this->package->name,
-                'duration_minutes' => $this->package->duration_minutes,
+                'duration_minutes' => $this->package->duration_in_minutes,
                 'price' => $this->package->price,
             ] : null,
         ];
@@ -323,9 +337,17 @@ class UserSession extends Model
 
     public function activateGracePeriod(): void
     {
+        $gracePeriodSeconds = $this->resolveGracePeriodSeconds();
+        $gracePeriodEndsAt = $this->gracePeriodDeadline();
+
+        if ($gracePeriodSeconds <= 0 || !$gracePeriodEndsAt) {
+            return;
+        }
+
         $this->update([
             'grace_period_active' => true,
-            'grace_period_ends_at' => now()->addSeconds($this->grace_period_seconds),
+            'grace_period_seconds' => $gracePeriodSeconds,
+            'grace_period_ends_at' => $gracePeriodEndsAt,
         ]);
     }
 
@@ -339,16 +361,24 @@ class UserSession extends Model
 
     public function shouldDisconnect(): bool
     {
-        if ($this->isInGracePeriod) {
+        if ($this->data_limit_mb && $this->bytes_total >= ($this->data_limit_mb * 1024 * 1024)) {
+            return true;
+        }
+
+        if (!$this->expires_at) {
             return false;
         }
 
         if ($this->expires_at->isPast()) {
+            if ($this->isInGracePeriod || $this->hasPendingGraceWindow()) {
+                return false;
+            }
+
             return true;
         }
 
-        if ($this->data_limit_mb && $this->bytes_total >= ($this->data_limit_mb * 1024 * 1024)) {
-            return true;
+        if ($this->isInGracePeriod) {
+            return false;
         }
 
         return false;
@@ -420,6 +450,51 @@ class UserSession extends Model
         ]);
     }
 
+    public function shouldActivateGracePeriod(): bool
+    {
+        if ($this->grace_period_active || !$this->expires_at || !$this->expires_at->isPast()) {
+            return false;
+        }
+
+        $graceDeadline = $this->gracePeriodDeadline();
+
+        return $graceDeadline !== null && $graceDeadline->isFuture();
+    }
+
+    public function hasPendingGraceWindow(): bool
+    {
+        return $this->shouldActivateGracePeriod();
+    }
+
+    public function gracePeriodDeadline(): ?Carbon
+    {
+        if (!$this->expires_at) {
+            return null;
+        }
+
+        $gracePeriodSeconds = $this->resolveGracePeriodSeconds();
+
+        if ($gracePeriodSeconds <= 0) {
+            return $this->expires_at->copy();
+        }
+
+        return $this->expires_at->copy()->addSeconds($gracePeriodSeconds);
+    }
+
+    public function resolveGracePeriodSeconds(): int
+    {
+        if ($this->grace_period_seconds !== null) {
+            return max(0, (int) $this->grace_period_seconds);
+        }
+
+        $packageGracePeriod = $this->package?->grace_period_seconds;
+        if ($packageGracePeriod !== null) {
+            return max(0, (int) $packageGracePeriod);
+        }
+
+        return max(0, (int) config('wifi.grace_period_seconds', 300));
+    }
+
     // ──────────────────────────────────────────────────────────────────────
     // STATIC HELPERS FOR CAPTIVE PORTAL
     // ──────────────────────────────────────────────────────────────────────
@@ -434,23 +509,26 @@ class UserSession extends Model
 
     public static function expireStaleSessions(?int $tenantId = null): int
     {
-        return static::query()
+        $expiredCount = 0;
+
+        static::query()
             ->when(($tenantId ?? 0) > 0, fn ($query) => $query->where('tenant_id', $tenantId))
             ->whereIn('status', ['active', 'idle'])
             ->where('expires_at', '<=', now())
-            ->where(function ($graceState) {
-                $graceState->where('grace_period_active', false)
-                    ->orWhereNull('grace_period_ends_at')
-                    ->orWhere('grace_period_ends_at', '<=', now());
-            })
-            ->update([
-                'status' => 'expired',
-                'terminated_at' => now(),
-                'termination_reason' => 'expired',
-                'grace_period_active' => false,
-                'grace_period_ends_at' => null,
-                'updated_at' => now(),
-            ]);
+            ->with('package')
+            ->orderBy('id')
+            ->chunkById(100, function ($sessions) use (&$expiredCount): void {
+                foreach ($sessions as $session) {
+                    if (!$session->shouldDisconnect()) {
+                        continue;
+                    }
+
+                    $session->markExpired('expired');
+                    $expiredCount++;
+                }
+            });
+
+        return $expiredCount;
     }
 
     public static function createFromPayment(Payment $payment, array $extra = []): self
@@ -465,10 +543,10 @@ class UserSession extends Model
             'username' => $payment->phone,
             'status' => 'active',
             'started_at' => now(),
-            'expires_at' => now()->copy()->addMinutes($package->duration_minutes),
-            'grace_period_seconds' => config('wifi.grace_period_seconds', 300),
+            'expires_at' => now()->copy()->addMinutes($package->duration_in_minutes),
+            'grace_period_seconds' => $package->grace_period_seconds,
             'data_limit_mb' => $package->data_limit_mb,
-            'mikrotik_user_profile' => $package->mikrotik_profile,
+            'mikrotik_user_profile' => $package->mikrotik_profile_name,
             'payment_id' => $payment->id,
             'metadata' => [
                 'created_via' => 'captive_portal',
@@ -506,5 +584,14 @@ class UserSession extends Model
             ]),
             ['voucher_id' => $voucher->id]
         );
+    }
+
+    private function secondsUntil(?Carbon $deadline): int
+    {
+        if (!$deadline) {
+            return 0;
+        }
+
+        return max(0, now()->diffInSeconds($deadline, false));
     }
 }
