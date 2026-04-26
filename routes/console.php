@@ -28,10 +28,7 @@ Artisan::command('inspire', function () {
 //     // Sync all active sessions with routers
 // })->everyFiveMinutes();
 
-// Check expiring sessions every minute
-Schedule::command('sessions:check-expiring')
-    ->everyMinute()
-    ->withoutOverlapping();
+// Session scheduling is defined in app/Console/Kernel.php.
 
 // Daily reconciliation at 2 AM
 // Schedule::call(function () {

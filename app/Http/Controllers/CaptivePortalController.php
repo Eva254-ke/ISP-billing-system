@@ -14,6 +14,7 @@ use App\Services\Mpesa\DarajaService;
 use App\Services\Radius\RadiusAccountingService;
 use App\Services\Radius\FreeRadiusProvisioningService;
 use App\Services\Radius\RadiusIdentityResolver;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Cache;
@@ -1751,6 +1752,7 @@ class CaptivePortalController extends Controller
 
     private function activatePaidAccess(Payment $payment): ?UserSession
     {
+        $reusedExtensionSession = $this->resolveReusableExtensionSession($payment);
         $activeSession = UserSession::where('payment_id', $payment->id)
             ->active()
             ->first();
@@ -1771,7 +1773,8 @@ class CaptivePortalController extends Controller
         $durationMinutes = max(1, (int) ($payment->package?->duration_in_minutes ?? 60));
         $paymentMetadata = is_array($payment->metadata) ? $payment->metadata : [];
         $paymentClientContext = is_array($paymentMetadata['client_context'] ?? null) ? $paymentMetadata['client_context'] : [];
-        $existingSession = UserSession::query()->where('payment_id', $payment->id)->latest('id')->first();
+        $existingSession = $reusedExtensionSession
+            ?? UserSession::query()->where('payment_id', $payment->id)->latest('id')->first();
         $clientMac = $this->normalizeMacAddress((string) ($paymentClientContext['mac'] ?? ''))
             ?? $this->normalizeMacAddress((string) ($existingSession?->mac_address ?? ''));
         $clientIp = $this->normalizeClientIpAddress((string) ($paymentClientContext['ip'] ?? ''))
@@ -1783,10 +1786,20 @@ class CaptivePortalController extends Controller
             paymentId: (int) $payment->id,
             macAddress: $clientMac
         );
+        if ($radiusEnabled && $reusedExtensionSession) {
+            $preservedUsername = $this->resolveStoredRadiusUsername($reusedExtensionSession);
+            if ($preservedUsername !== '') {
+                $identity['username'] = $preservedUsername;
+                $identity['password'] = $preservedUsername;
+            }
+        }
         $radiusPureFlow = $identityResolver->shouldUsePureRadiusFlow($identity);
         $username = (string) $identity['username'];
         $password = (string) $identity['password'];
         $defaultExpiresAt = now()->copy()->addMinutes($durationMinutes);
+        $extensionExpiresAt = $reusedExtensionSession?->expires_at && $reusedExtensionSession->expires_at->isFuture()
+            ? $reusedExtensionSession->expires_at->copy()->addMinutes($durationMinutes)
+            : $defaultExpiresAt;
 
         if ($radiusEnabled && $clientMac === null && $clientIp === null) {
             Log::warning('Paid access activation missing captive client MAC/IP context in RADIUS mode', [
@@ -1796,6 +1809,126 @@ class CaptivePortalController extends Controller
                 'phone' => $payment->phone,
                 'status' => $payment->status,
             ]);
+        }
+
+        if ($radiusEnabled && $reusedExtensionSession && $payment->package) {
+            $existingSessionMetadata = is_array($reusedExtensionSession->metadata) ? $reusedExtensionSession->metadata : [];
+            $existingRadiusMetadata = is_array($existingSessionMetadata['radius'] ?? null)
+                ? $existingSessionMetadata['radius']
+                : [];
+            $provisionedUntil = $this->parseFlexibleDateTime($existingRadiusMetadata['expires_at'] ?? null);
+            $radiusProvisioned = (bool) ($existingRadiusMetadata['provisioned'] ?? false)
+                && (string) ($existingRadiusMetadata['username'] ?? '') === $username
+                && $provisionedUntil !== null
+                && !$provisionedUntil->lt($extensionExpiresAt);
+
+            $radiusMetadata = array_merge($existingRadiusMetadata, [
+                'username' => $username,
+                'active_username' => $username,
+                'expires_at' => $extensionExpiresAt->toIso8601String(),
+                'identity_type' => $identity['identity_type'],
+                'access_mode' => $identity['access_mode'],
+                'fallback_used' => (bool) ($identity['fallback_used'] ?? false),
+            ]);
+
+            if (!$radiusProvisioned) {
+                try {
+                    $radiusProvisioning = app(FreeRadiusProvisioningService::class);
+                    $radiusProvisioning->provisionUser(
+                        username: $username,
+                        password: $password,
+                        package: $payment->package,
+                        expiresAt: $extensionExpiresAt
+                    );
+
+                    $radiusMetadata = array_merge($radiusMetadata, [
+                        'provisioned' => true,
+                        'provisioned_at' => now()->toIso8601String(),
+                        'auth_hint' => 'password_equals_username',
+                        'last_error' => null,
+                        'last_failed_at' => null,
+                    ]);
+                } catch (\Throwable $e) {
+                    $radiusMetadata = array_merge($radiusMetadata, [
+                        'provisioned' => false,
+                        'last_error' => $e->getMessage(),
+                        'last_failed_at' => now()->toIso8601String(),
+                    ]);
+
+                    $reusedExtensionSession->update([
+                        'metadata' => array_merge($existingSessionMetadata, [
+                            'radius' => $radiusMetadata,
+                        ]),
+                    ]);
+
+                    $payment->update([
+                        'metadata' => array_merge($paymentMetadata, [
+                            'radius' => $radiusMetadata,
+                        ]),
+                    ]);
+
+                    Log::error('FreeRADIUS provisioning failed while extending an active session', [
+                        'payment_id' => $payment->id,
+                        'session_id' => $reusedExtensionSession->id,
+                        'username' => $username,
+                        'error' => $e->getMessage(),
+                    ]);
+
+                    return $reusedExtensionSession->fresh();
+                }
+            }
+
+            $extensionMetadata = [
+                'applied_at' => now()->toIso8601String(),
+                'payment_id' => $payment->id,
+                'previous_payment_id' => $payment->parent_payment_id,
+                'session_reused' => true,
+                'expires_at' => $extensionExpiresAt->toIso8601String(),
+            ];
+
+            $reusedExtensionSession->update([
+                'payment_id' => $payment->id,
+                'router_id' => $routerId,
+                'package_id' => $payment->package_id ?? $reusedExtensionSession->package_id,
+                'username' => $username,
+                'phone' => $payment->phone ?: $reusedExtensionSession->phone,
+                'mac_address' => $clientMac ?? $reusedExtensionSession->mac_address,
+                'ip_address' => $clientIp ?? $reusedExtensionSession->ip_address,
+                'expires_at' => $extensionExpiresAt,
+                'last_activity_at' => now(),
+                'last_synced_at' => now(),
+                'metadata' => array_merge($existingSessionMetadata, [
+                    'radius' => $radiusMetadata,
+                    'extension' => array_merge(
+                        (array) ($existingSessionMetadata['extension'] ?? []),
+                        $extensionMetadata
+                    ),
+                ]),
+            ]);
+
+            $payment->update([
+                'status' => 'completed',
+                'completed_at' => $payment->completed_at ?? now(),
+                'activated_at' => $payment->activated_at ?? now(),
+                'session_id' => $reusedExtensionSession->id,
+                'reconciliation_notes' => null,
+                'metadata' => array_merge($paymentMetadata, [
+                    'radius' => $radiusMetadata,
+                    'extension' => array_merge(
+                        (array) ($paymentMetadata['extension'] ?? []),
+                        $extensionMetadata
+                    ),
+                ]),
+            ]);
+
+            Log::info('Applied RADIUS session extension to the active session identity', [
+                'payment_id' => $payment->id,
+                'session_id' => $reusedExtensionSession->id,
+                'username' => $username,
+                'previous_payment_id' => $payment->parent_payment_id,
+            ]);
+
+            return $reusedExtensionSession->fresh();
         }
 
         $session = UserSession::firstOrCreate(
@@ -2670,6 +2803,60 @@ class CaptivePortalController extends Controller
             macAddress: $this->normalizeMacAddress((string) ($clientContext['mac'] ?? ''))
                 ?? $this->normalizeMacAddress((string) ($session?->mac_address ?? ''))
         );
+    }
+
+    private function resolveReusableExtensionSession(Payment $payment): ?UserSession
+    {
+        if (!$payment->is_extension) {
+            return null;
+        }
+
+        $query = UserSession::query()
+            ->where('tenant_id', $payment->tenant_id)
+            ->active();
+
+        if ((int) ($payment->parent_payment_id ?? 0) > 0) {
+            $query->where('payment_id', $payment->parent_payment_id);
+        } else {
+            $query->where('phone', $payment->phone);
+        }
+
+        return $query
+            ->orderByDesc('expires_at')
+            ->orderByDesc('id')
+            ->first();
+    }
+
+    private function resolveStoredRadiusUsername(UserSession $session): string
+    {
+        $metadata = is_array($session->metadata) ? $session->metadata : [];
+        $radiusMetadata = is_array($metadata['radius'] ?? null) ? $metadata['radius'] : [];
+
+        foreach ([
+            $radiusMetadata['active_username'] ?? null,
+            $radiusMetadata['username'] ?? null,
+            $session->username,
+        ] as $candidate) {
+            $username = trim((string) $candidate);
+            if ($username !== '') {
+                return $username;
+            }
+        }
+
+        return '';
+    }
+
+    private function parseFlexibleDateTime(mixed $value): ?Carbon
+    {
+        if ($value === null || trim((string) $value) === '') {
+            return null;
+        }
+
+        try {
+            return Carbon::parse((string) $value);
+        } catch (\Throwable) {
+            return null;
+        }
     }
 
     private function resolveConnectedSession(Payment $payment): ?UserSession

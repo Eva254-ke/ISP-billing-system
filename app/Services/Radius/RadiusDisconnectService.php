@@ -25,17 +25,8 @@ class RadiusDisconnectService
      */
     public function disconnect(UserSession $session): array
     {
-        $username = trim((string) $session->username);
-        if ($username === '') {
-            return $this->failure($session, 'Cannot issue a RADIUS disconnect without a username.');
-        }
-
         $router = $session->router;
-        $accountingRecord = $this->radiusAccountingService->findOpenSession(
-            username: $username,
-            macAddress: $session->mac_address,
-            ipAddress: $session->ip_address
-        );
+        $accountingRecord = $this->radiusAccountingService->findOpenSessionForSession($session);
 
         $nasIp = $this->resolveNasIp($accountingRecord, $router);
         if ($nasIp === null) {
@@ -55,7 +46,17 @@ class RadiusDisconnectService
         $port = max(1, (int) config('radius.disconnect_port', 3799));
         $timeout = max(1, (int) config('radius.disconnect_timeout', 5));
         $attributes = $this->buildAttributes($session, $accountingRecord, $nasIp);
+        if (!$this->hasTargetingAttributes($attributes)) {
+            return $this->failure(
+                $session,
+                'Cannot issue a RADIUS disconnect without a username, Acct-Session-Id, MAC, or IP.',
+                $accountingRecord,
+                $nasIp
+            );
+        }
+
         $payload = $this->buildPayload($attributes);
+        $username = $attributes['User-Name'] ?? trim((string) $session->username);
 
         $result = Process::path(base_path())
             ->timeout($timeout + 5)
@@ -127,14 +128,40 @@ class RadiusDisconnectService
     private function buildAttributes(UserSession $session, ?array $accountingRecord, string $nasIp): array
     {
         $record = $accountingRecord ?? [];
+        $radiusMetadata = $this->sessionRadiusMetadata($session);
 
         return array_filter([
-            'User-Name' => $this->cleanValue($record['username'] ?? $session->username),
-            'Acct-Session-Id' => $this->cleanValue($record['acctsessionid'] ?? null),
-            'Acct-Unique-Session-Id' => $this->cleanValue($record['acctuniqueid'] ?? null),
-            'Calling-Station-Id' => $this->cleanValue($record['callingstationid'] ?? $session->mac_address),
-            'Framed-IP-Address' => $this->normalizeIpAddress($record['framedipaddress'] ?? $session->ip_address),
-            'NAS-IP-Address' => $this->normalizeIpAddress($record['nasipaddress'] ?? $nasIp) ?? $nasIp,
+            'User-Name' => $this->cleanValue(
+                $record['username']
+                ?? $radiusMetadata['active_username']
+                ?? $radiusMetadata['username']
+                ?? $session->username
+            ),
+            'Acct-Session-Id' => $this->cleanValue(
+                $record['acctsessionid']
+                ?? $radiusMetadata['acct_session_id']
+                ?? null
+            ),
+            'Acct-Unique-Session-Id' => $this->cleanValue(
+                $record['acctuniqueid']
+                ?? $radiusMetadata['acct_unique_session_id']
+                ?? null
+            ),
+            'Calling-Station-Id' => $this->cleanValue(
+                $record['callingstationid']
+                ?? $radiusMetadata['calling_station_id']
+                ?? $session->mac_address
+            ),
+            'Framed-IP-Address' => $this->normalizeIpAddress(
+                $record['framedipaddress']
+                ?? $radiusMetadata['framed_ip_address']
+                ?? $session->ip_address
+            ),
+            'NAS-IP-Address' => $this->normalizeIpAddress(
+                $record['nasipaddress']
+                ?? $radiusMetadata['nas_ip_address']
+                ?? $nasIp
+            ) ?? $nasIp,
             'NAS-Port-Id' => $this->cleanValue($record['nasportid'] ?? null),
             'NAS-Port-Type' => $this->cleanValue($record['nasporttype'] ?? null),
             'Class' => $this->cleanValue($record['class'] ?? null),
@@ -200,6 +227,31 @@ class RadiusDisconnectService
         }
 
         return filter_var($candidate, FILTER_VALIDATE_IP) ? $candidate : null;
+    }
+
+    /**
+     * @param  array<string, string>  $attributes
+     */
+    private function hasTargetingAttributes(array $attributes): bool
+    {
+        foreach (['User-Name', 'Acct-Session-Id', 'Calling-Station-Id', 'Framed-IP-Address'] as $attribute) {
+            if (($attributes[$attribute] ?? '') !== '') {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function sessionRadiusMetadata(UserSession $session): array
+    {
+        $metadata = is_array($session->metadata) ? $session->metadata : [];
+        $radius = $metadata['radius'] ?? null;
+
+        return is_array($radius) ? $radius : [];
     }
 
     /**

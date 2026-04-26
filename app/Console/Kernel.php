@@ -29,10 +29,10 @@ class Kernel extends ConsoleKernel
     protected function schedule(Schedule $schedule): void
     {
         // ──────────────────────────────────────────────────────────────────
-        // SESSION MANAGEMENT (Every 5 minutes)
+        // SESSION MANAGEMENT (Every minute)
         // ──────────────────────────────────────────────────────────────────
         $schedule->command('sessions:check-expiring')
-            ->everyFiveMinutes()
+            ->everyMinute()
             ->timezone('Africa/Nairobi')
             ->withoutOverlapping()
             ->sendOutputTo(storage_path('logs/sessions-check.log'));

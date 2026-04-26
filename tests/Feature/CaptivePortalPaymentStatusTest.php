@@ -16,6 +16,7 @@ use App\Services\Radius\FreeRadiusProvisioningService;
 use App\Services\Radius\RadiusIdentityResolver;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Schema;
@@ -1724,6 +1725,111 @@ class CaptivePortalPaymentStatusTest extends TestCase
         $this->assertSame($session->id, (int) $payment->session_id);
         $this->assertSame($session->id, (int) $payment->load('session')->session?->id);
         $this->assertNotNull($payment->activated_at);
+        $this->assertSame('sess-001', (string) data_get($session->metadata, 'radius.acct_session_id'));
+        $this->assertSame('AA:BB:CC:DD:EE:FF', (string) data_get($session->metadata, 'radius.calling_station_id'));
+        $this->assertSame('10.0.0.25', (string) data_get($session->metadata, 'radius.framed_ip_address'));
+        $this->assertSame('AA:BB:CC:DD:EE:FF', (string) data_get($session->metadata, 'radius.active_username'));
+    }
+
+    public function test_session_extension_reuses_active_radius_identity_and_extends_the_existing_session(): void
+    {
+        config()->set('radius.enabled', true);
+        config()->set('radius.pure_radius', true);
+
+        $tenant = $this->createTenant();
+        $basePackage = $this->createPackage($tenant, [
+            'name' => 'Monthly Pass',
+            'duration_value' => 30,
+            'duration_unit' => 'days',
+        ]);
+        $extensionPackage = $this->createPackage($tenant, [
+            'name' => 'Annual Top-up',
+            'duration_value' => 365,
+            'duration_unit' => 'days',
+            'price' => 12000,
+        ]);
+        $router = $this->createRouter($tenant, [
+            'status' => 'online',
+            'last_seen_at' => now(),
+        ]);
+
+        $parentPayment = $this->createPayment($tenant, $basePackage, [
+            'status' => 'completed',
+            'completed_at' => now()->subDay(),
+            'activated_at' => now()->subDay(),
+        ]);
+
+        $activeUsername = $this->expectedPhoneRadiusUsername($parentPayment);
+        $originalExpiry = now()->addDays(30);
+
+        $session = UserSession::query()->create([
+            'tenant_id' => $tenant->id,
+            'router_id' => $router->id,
+            'package_id' => $basePackage->id,
+            'username' => $activeUsername,
+            'phone' => '0712345678',
+            'status' => 'active',
+            'started_at' => now()->subDay(),
+            'expires_at' => $originalExpiry,
+            'payment_id' => $parentPayment->id,
+            'metadata' => [
+                'radius' => [
+                    'provisioned' => true,
+                    'username' => $activeUsername,
+                    'active_username' => $activeUsername,
+                    'expires_at' => $originalExpiry->toIso8601String(),
+                ],
+            ],
+        ]);
+
+        $extensionPayment = $this->createPayment($tenant, $extensionPackage, [
+            'status' => 'confirmed',
+            'confirmed_at' => now(),
+            'type' => Payment::TYPE_SESSION_EXTENSION,
+            'payment_channel' => Payment::CHANNEL_SESSION_EXTENSION,
+            'parent_payment_id' => $parentPayment->id,
+            'mpesa_checkout_request_id' => 'ws_CO_radius_extension_reuse_001',
+        ]);
+
+        $sessionManager = Mockery::mock(SessionManager::class);
+        $sessionManager->shouldNotReceive('activateSession');
+        $this->app->instance(SessionManager::class, $sessionManager);
+
+        $radiusProvisioning = Mockery::mock(FreeRadiusProvisioningService::class);
+        $radiusProvisioning->shouldReceive('provisionUser')->once()->withArgs(
+            function (string $username, string $password, Package $resolvedPackage, ?\DateTimeInterface $expiresAt) use ($activeUsername, $extensionPackage, $originalExpiry) {
+                return $username === $activeUsername
+                    && $password === $activeUsername
+                    && (int) $resolvedPackage->id === (int) $extensionPackage->id
+                    && $expiresAt !== null
+                    && Carbon::instance(\DateTimeImmutable::createFromInterface($expiresAt))->gt($originalExpiry);
+            }
+        );
+        $this->app->instance(FreeRadiusProvisioningService::class, $radiusProvisioning);
+
+        $response = $this->getJson(route('wifi.status.check', [
+            'phone' => '0712345678',
+            'tenant_id' => $tenant->id,
+            'payment' => $extensionPayment->id,
+        ]));
+
+        $response->assertOk();
+        $response->assertJson([
+            'status' => 'activated',
+            'payment_id' => $extensionPayment->id,
+            'session_active' => true,
+        ]);
+
+        $session->refresh();
+        $extensionPayment->refresh();
+
+        $this->assertSame($extensionPayment->id, (int) $session->payment_id);
+        $this->assertSame($session->id, (int) $extensionPayment->session_id);
+        $this->assertSame('completed', $extensionPayment->status);
+        $this->assertSame($activeUsername, $session->username);
+        $this->assertTrue($session->expires_at->gt($originalExpiry));
+        $this->assertSame($activeUsername, (string) data_get($session->metadata, 'radius.active_username'));
+        $this->assertSame($activeUsername, (string) data_get($extensionPayment->metadata, 'radius.username'));
     }
 
     public function test_expire_stale_sessions_marks_overdue_active_and_idle_sessions_expired(): void
