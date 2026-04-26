@@ -100,6 +100,40 @@ class FreeRadiusProvisioningService
         ]);
     }
 
+    public function revokeUser(string $username): void
+    {
+        $username = trim($username);
+        if ($username === '') {
+            throw new \InvalidArgumentException('RADIUS username cannot be empty.');
+        }
+
+        $connection = (string) config('radius.db_connection', 'radius');
+        $radcheck = (string) config('radius.tables.radcheck', 'radcheck');
+        $radreply = (string) config('radius.tables.radreply', 'radreply');
+        $db = DB::connection($connection);
+
+        [$radcheckDeleted, $radreplyDeleted] = $db->transaction(function () use ($db, $radcheck, $radreply, $username): array {
+            $radcheckDeleted = $db
+                ->table($radcheck)
+                ->where('username', $username)
+                ->delete();
+
+            $radreplyDeleted = $db
+                ->table($radreply)
+                ->where('username', $username)
+                ->delete();
+
+            return [$radcheckDeleted, $radreplyDeleted];
+        });
+
+        Log::channel('radius')->info('Revoked FreeRADIUS user profile', [
+            'username' => $username,
+            'connection' => $connection,
+            'radcheck_deleted' => $radcheckDeleted,
+            'radreply_deleted' => $radreplyDeleted,
+        ]);
+    }
+
     private function buildMikrotikRateLimit(Package $package): string
     {
         $down = (int) ($package->download_limit_mbps ?? 0);

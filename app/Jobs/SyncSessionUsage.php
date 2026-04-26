@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Models\UserSession;
 use App\Services\MikroTik\MikroTikService;
+use App\Services\MikroTik\SessionManager;
 use App\Services\Radius\RadiusAccountingService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -33,7 +34,11 @@ class SyncSessionUsage implements ShouldQueue
         $this->onQueue('medium');
     }
 
-    public function handle(MikroTikService $mikrotikService, RadiusAccountingService $radiusAccountingService): void
+    public function handle(
+        MikroTikService $mikrotikService,
+        RadiusAccountingService $radiusAccountingService,
+        SessionManager $sessionManager
+    ): void
     {
         $session = UserSession::find($this->sessionId);
 
@@ -48,6 +53,7 @@ class SyncSessionUsage implements ShouldQueue
                 $success = $radiusAccountingService->syncActiveSession($session) !== null;
 
                 if (!$success && $session->expires_at?->isPast()) {
+                    $sessionManager->terminateSession($session, 'expired');
                     $session->markExpired('expired');
                     Log::channel('radius')->info('Expired pure-RADIUS session marked expired after accounting sync miss', [
                         'session_id' => $session->id,

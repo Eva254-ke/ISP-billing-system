@@ -129,6 +129,54 @@ class CaptivePortalPaymentStatusTest extends TestCase
         ]));
     }
 
+    public function test_packages_does_not_resume_expired_idle_radius_session_payment(): void
+    {
+        config()->set('radius.enabled', true);
+        config()->set('radius.pure_radius', true);
+
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant, [
+            'duration_value' => 10,
+        ]);
+        $router = $this->createRouter($tenant, [
+            'status' => 'online',
+            'last_seen_at' => now(),
+        ]);
+        $payment = $this->createPayment($tenant, $package, [
+            'status' => 'completed',
+            'completed_at' => now()->subMinutes(15),
+        ]);
+
+        UserSession::query()->create([
+            'tenant_id' => $tenant->id,
+            'router_id' => $router->id,
+            'payment_id' => $payment->id,
+            'package_id' => $package->id,
+            'username' => $this->expectedPhoneRadiusUsername($payment),
+            'phone' => '0712345678',
+            'mac_address' => 'AA:BB:CC:DD:EE:FF',
+            'ip_address' => '10.0.0.50',
+            'status' => 'idle',
+            'started_at' => now()->subMinutes(15),
+            'expires_at' => now()->subMinute(),
+            'metadata' => [
+                'radius' => [
+                    'provisioned' => true,
+                    'username' => $this->expectedPhoneRadiusUsername($payment),
+                    'expires_at' => now()->subMinute()->toIso8601String(),
+                ],
+            ],
+        ]);
+
+        $response = $this->get(route('wifi.packages', [
+            'tenant_id' => $tenant->id,
+            'mac' => 'AA-BB-CC-DD-EE-FF',
+        ]));
+
+        $response->assertOk();
+        $response->assertViewIs('captive.packages');
+    }
+
     public function test_status_route_uses_explicit_payment_query_parameter(): void
     {
         $tenant = $this->createTenant();
@@ -161,6 +209,59 @@ class CaptivePortalPaymentStatusTest extends TestCase
         $response->assertOk();
         $response->assertSeeText('This payment attempt did not go through');
         $response->assertSeeText('Customer cancelled the prompt.');
+    }
+
+    public function test_check_status_does_not_offer_radius_auto_login_for_expired_completed_payment(): void
+    {
+        config()->set('radius.enabled', true);
+        config()->set('radius.pure_radius', true);
+
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant, [
+            'duration_value' => 10,
+        ]);
+        $router = $this->createRouter($tenant, [
+            'status' => 'online',
+            'last_seen_at' => now(),
+        ]);
+        $payment = $this->createPayment($tenant, $package, [
+            'status' => 'completed',
+            'completed_at' => now()->subMinutes(15),
+            'confirmed_at' => now()->subMinutes(15),
+        ]);
+
+        $session = UserSession::query()->create([
+            'tenant_id' => $tenant->id,
+            'router_id' => $router->id,
+            'payment_id' => $payment->id,
+            'package_id' => $package->id,
+            'username' => $this->expectedPhoneRadiusUsername($payment),
+            'phone' => '0712345678',
+            'status' => 'idle',
+            'started_at' => now()->subMinutes(15),
+            'expires_at' => now()->subMinute(),
+            'metadata' => [
+                'radius' => [
+                    'provisioned' => true,
+                    'username' => $this->expectedPhoneRadiusUsername($payment),
+                    'expires_at' => now()->subMinute()->toIso8601String(),
+                ],
+            ],
+        ]);
+
+        $response = $this->getJson(route('wifi.status.check', [
+            'phone' => '0712345678',
+            'tenant_id' => $tenant->id,
+            'payment' => $payment->id,
+        ]));
+
+        $response->assertOk();
+        $response->assertJsonPath('session_active', false);
+        $response->assertJsonPath('radius_auto_login', null);
+        $response->assertJsonPath('radius_pending_reauth', false);
+
+        $session->refresh();
+        $this->assertTrue($session->expires_at->isPast());
     }
 
     public function test_check_status_returns_verifying_for_pending_verification_payment(): void
@@ -1587,6 +1688,87 @@ class CaptivePortalPaymentStatusTest extends TestCase
         $this->assertNotNull($session->terminated_at);
     }
 
+    public function test_session_manager_revokes_radius_profile_when_expiring_pure_radius_session(): void
+    {
+        config()->set('radius.enabled', true);
+        config()->set('radius.pure_radius', true);
+        $this->configureRadiusProvisioningConnection();
+
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant);
+        $router = $this->createRouter($tenant, [
+            'status' => 'online',
+            'last_seen_at' => now(),
+        ]);
+
+        $payment = $this->createPayment($tenant, $package, [
+            'status' => 'completed',
+            'completed_at' => now()->subHour(),
+        ]);
+
+        $username = $this->expectedPhoneRadiusUsername($payment);
+
+        DB::connection('radius')->table('radcheck')->insert([
+            'username' => $username,
+            'attribute' => 'Cleartext-Password',
+            'op' => ':=',
+            'value' => $username,
+        ]);
+
+        DB::connection('radius')->table('radreply')->insert([
+            'username' => $username,
+            'attribute' => 'Session-Timeout',
+            'op' => ':=',
+            'value' => '3600',
+        ]);
+
+        $session = UserSession::query()->create([
+            'tenant_id' => $tenant->id,
+            'router_id' => $router->id,
+            'package_id' => $package->id,
+            'username' => $username,
+            'phone' => '0712345678',
+            'status' => 'active',
+            'started_at' => now()->subHour(),
+            'expires_at' => now()->subMinute(),
+            'payment_id' => $payment->id,
+            'metadata' => [
+                'radius' => [
+                    'provisioned' => true,
+                    'username' => $username,
+                ],
+            ],
+        ]);
+
+        $mikrotikService = Mockery::mock(\App\Services\MikroTik\MikroTikService::class);
+        $mikrotikService->shouldNotReceive('disconnectSession');
+
+        $radiusDisconnectService = Mockery::mock(RadiusDisconnectService::class);
+        $radiusDisconnectService->shouldReceive('disconnect')->once()->with($session)->andReturn([
+            'success' => true,
+            'error' => null,
+            'nas_ip' => $router->ip_address,
+            'port' => 3799,
+            'used_accounting_record' => true,
+            'attributes' => [
+                'User-Name' => $session->username,
+            ],
+        ]);
+
+        $manager = new SessionManager($mikrotikService, $radiusDisconnectService, new FreeRadiusProvisioningService());
+
+        $this->assertTrue($manager->terminateSession($session, 'expired'));
+
+        $session->refresh();
+        $payment->refresh();
+
+        $this->assertSame(0, DB::connection('radius')->table('radcheck')->where('username', $username)->count());
+        $this->assertSame(0, DB::connection('radius')->table('radreply')->where('username', $username)->count());
+        $this->assertFalse((bool) data_get($session->metadata, 'radius.provisioned'));
+        $this->assertFalse((bool) data_get($payment->metadata, 'radius.provisioned'));
+        $this->assertNotNull(data_get($session->metadata, 'radius.revoked_at'));
+    }
+
     public function test_session_manager_preserves_pure_radius_session_when_radius_disconnect_fails(): void
     {
         config()->set('radius.enabled', true);
@@ -1980,6 +2162,44 @@ class CaptivePortalPaymentStatusTest extends TestCase
                 'gateway' => 'daraja',
             ],
         ], $overrides));
+    }
+
+    private function configureRadiusProvisioningConnection(): void
+    {
+        config()->set('radius.db_connection', 'radius');
+        config()->set('radius.tables.radcheck', 'radcheck');
+        config()->set('radius.tables.radreply', 'radreply');
+        config()->set('database.connections.radius', [
+            'driver' => 'sqlite',
+            'database' => ':memory:',
+            'prefix' => '',
+            'foreign_key_constraints' => true,
+        ]);
+
+        DB::purge('radius');
+
+        $schema = Schema::connection('radius');
+        foreach (['radcheck', 'radreply'] as $table) {
+            if ($schema->hasTable($table)) {
+                $schema->drop($table);
+            }
+        }
+
+        $schema->create('radcheck', function (Blueprint $table): void {
+            $table->id();
+            $table->string('username');
+            $table->string('attribute');
+            $table->string('op', 8)->default(':=');
+            $table->text('value')->nullable();
+        });
+
+        $schema->create('radreply', function (Blueprint $table): void {
+            $table->id();
+            $table->string('username');
+            $table->string('attribute');
+            $table->string('op', 8)->default(':=');
+            $table->text('value')->nullable();
+        });
     }
 
     private function expectedPhoneRadiusUsername(Payment $payment): string

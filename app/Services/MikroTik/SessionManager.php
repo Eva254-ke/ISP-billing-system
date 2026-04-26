@@ -5,6 +5,7 @@ namespace App\Services\MikroTik;
 use App\Models\Router;
 use App\Models\UserSession;
 use App\Models\Package;
+use App\Services\Radius\FreeRadiusProvisioningService;
 use App\Services\Radius\RadiusDisconnectService;
 use Illuminate\Support\Facades\Log;
 
@@ -12,7 +13,8 @@ class SessionManager
 {
     public function __construct(
         protected MikroTikService $mikrotikService,
-        protected ?RadiusDisconnectService $radiusDisconnectService = null
+        protected ?RadiusDisconnectService $radiusDisconnectService = null,
+        protected ?FreeRadiusProvisioningService $radiusProvisioningService = null
     ) {}
 
     /**
@@ -365,6 +367,8 @@ class SessionManager
 
     private function terminateRadiusManagedSession(UserSession $session, string $reason): bool
     {
+        $this->revokeRadiusAuthorization($session, $reason);
+
         $result = $this->resolveRadiusDisconnectService()->disconnect($session);
 
         if (!($result['success'] ?? false)) {
@@ -396,5 +400,82 @@ class SessionManager
     private function resolveRadiusDisconnectService(): RadiusDisconnectService
     {
         return $this->radiusDisconnectService ??= app(RadiusDisconnectService::class);
+    }
+
+    private function resolveRadiusProvisioningService(): FreeRadiusProvisioningService
+    {
+        return $this->radiusProvisioningService ??= app(FreeRadiusProvisioningService::class);
+    }
+
+    private function revokeRadiusAuthorization(UserSession $session, string $reason): void
+    {
+        $radiusUsername = $this->resolveRadiusUsername($session);
+        if ($radiusUsername === '') {
+            return;
+        }
+
+        try {
+            $this->resolveRadiusProvisioningService()->revokeUser($radiusUsername);
+            $this->storeRadiusRevocationMetadata($session, $radiusUsername, $reason);
+        } catch (\Throwable $e) {
+            Log::channel('radius')->warning('Failed to revoke RADIUS user profile during session termination', [
+                'session_id' => $session->id,
+                'username' => $radiusUsername,
+                'reason' => $reason,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    private function resolveRadiusUsername(UserSession $session): string
+    {
+        $metadata = is_array($session->metadata) ? $session->metadata : [];
+        $radiusMetadata = is_array($metadata['radius'] ?? null) ? $metadata['radius'] : [];
+
+        foreach ([
+            $radiusMetadata['active_username'] ?? null,
+            $radiusMetadata['username'] ?? null,
+            $session->username,
+        ] as $candidate) {
+            $username = trim((string) $candidate);
+            if ($username !== '') {
+                return $username;
+            }
+        }
+
+        return '';
+    }
+
+    private function storeRadiusRevocationMetadata(UserSession $session, string $username, string $reason): void
+    {
+        $revokedAt = now()->toIso8601String();
+        $sessionMetadata = is_array($session->metadata) ? $session->metadata : [];
+        $sessionRadius = is_array($sessionMetadata['radius'] ?? null) ? $sessionMetadata['radius'] : [];
+        $sessionMetadata['radius'] = array_merge($sessionRadius, [
+            'username' => $username,
+            'active_username' => $username,
+            'provisioned' => false,
+            'revoked_at' => $revokedAt,
+            'revocation_reason' => $reason,
+        ]);
+
+        $session->update(['metadata' => $sessionMetadata]);
+
+        $payment = $session->payment()->first();
+        if (!$payment) {
+            return;
+        }
+
+        $paymentMetadata = is_array($payment->metadata) ? $payment->metadata : [];
+        $paymentRadius = is_array($paymentMetadata['radius'] ?? null) ? $paymentMetadata['radius'] : [];
+        $paymentMetadata['radius'] = array_merge($paymentRadius, [
+            'username' => $username,
+            'active_username' => $username,
+            'provisioned' => false,
+            'revoked_at' => $revokedAt,
+            'revocation_reason' => $reason,
+        ]);
+
+        $payment->update(['metadata' => $paymentMetadata]);
     }
 }

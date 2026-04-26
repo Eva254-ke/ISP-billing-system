@@ -605,7 +605,7 @@ class CaptivePortalController extends Controller
 
         $session = UserSession::query()
             ->where('tenant_id', $tenantId)
-            ->whereIn('status', ['active', 'idle'])
+            ->live()
             ->whereNotNull('payment_id')
             ->where(function ($query) use ($clientMac, $clientIp) {
                 if ($clientMac !== null) {
@@ -651,9 +651,13 @@ class CaptivePortalController extends Controller
             return false;
         }
 
+        if (!$this->paymentCanStillAuthorizeAccess($payment)) {
+            return false;
+        }
+
         return UserSession::query()
             ->where('payment_id', $payment->id)
-            ->whereIn('status', ['active', 'idle'])
+            ->live()
             ->exists();
     }
 
@@ -1285,6 +1289,15 @@ class CaptivePortalController extends Controller
             ->where('payment_id', $payment->id)
             ->latest('id')
             ->first();
+
+        if (!$this->paymentCanStillAuthorizeAccess($payment, $latestSession)) {
+            return [
+                'auto_login' => null,
+                'pending_reauth' => false,
+                'fallback' => null,
+            ];
+        }
+
         $radiusAutoLogin = !$radiusPendingReauth
             && $this->hasProvisionedRadiusAccess($payment, $latestSession, $radiusIdentity)
                 ? $this->buildHotspotAutoLoginPayload($payment, $radiusIdentity)
@@ -1307,6 +1320,10 @@ class CaptivePortalController extends Controller
      */
     private function hasProvisionedRadiusAccess(Payment $payment, ?UserSession $session = null, array $identity = []): bool
     {
+        if (!$this->paymentCanStillAuthorizeAccess($payment, $session)) {
+            return false;
+        }
+
         $username = trim((string) ($identity['username'] ?? ''));
         $paymentMetadata = is_array($payment->metadata) ? $payment->metadata : [];
         $paymentRadius = is_array($paymentMetadata['radius'] ?? null) ? $paymentMetadata['radius'] : [];
@@ -1796,7 +1813,35 @@ class CaptivePortalController extends Controller
         $radiusPureFlow = $identityResolver->shouldUsePureRadiusFlow($identity);
         $username = (string) $identity['username'];
         $password = (string) $identity['password'];
-        $defaultExpiresAt = now()->copy()->addMinutes($durationMinutes);
+        $authorizationWindowSession = $reusedExtensionSession ?? $existingSession;
+        $defaultExpiresAt = $this->resolvePaymentAccessExpiresAt($payment, $authorizationWindowSession)
+            ?? now()->copy()->addMinutes($durationMinutes);
+
+        if ($payment->is_extension && !$reusedExtensionSession) {
+            Log::warning('Access activation skipped: extension payment has no live parent session to extend', [
+                'payment_id' => $payment->id,
+                'tenant_id' => $payment->tenant_id,
+                'parent_payment_id' => $payment->parent_payment_id,
+            ]);
+
+            return $existingSession?->fresh();
+        }
+
+        if (!$this->paymentCanStillAuthorizeAccess($payment, $authorizationWindowSession)) {
+            if ($existingSession && in_array((string) $existingSession->status, ['active', 'idle'], true)) {
+                $existingSession->markExpired('payment_window_elapsed');
+            }
+
+            Log::info('Skipped access activation because the payment entitlement has already expired', [
+                'payment_id' => $payment->id,
+                'tenant_id' => $payment->tenant_id,
+                'session_id' => $existingSession?->id,
+                'entitlement_expires_at' => $defaultExpiresAt?->toIso8601String(),
+            ]);
+
+            return $existingSession?->fresh();
+        }
+
         $extensionExpiresAt = $reusedExtensionSession?->expires_at && $reusedExtensionSession->expires_at->isFuture()
             ? $reusedExtensionSession->expires_at->copy()->addMinutes($durationMinutes)
             : $defaultExpiresAt;
@@ -2859,6 +2904,46 @@ class CaptivePortalController extends Controller
         }
     }
 
+    private function paymentCanStillAuthorizeAccess(Payment $payment, ?UserSession $session = null): bool
+    {
+        if ($payment->is_extension && $session === null) {
+            return false;
+        }
+
+        $expiresAt = $this->resolvePaymentAccessExpiresAt($payment, $session);
+
+        return $expiresAt === null || $expiresAt->isFuture();
+    }
+
+    private function resolvePaymentAccessExpiresAt(Payment $payment, ?UserSession $session = null): ?Carbon
+    {
+        if ($session) {
+            if ($session->grace_period_active && $session->grace_period_ends_at instanceof Carbon) {
+                return $session->grace_period_ends_at->copy();
+            }
+
+            if ($session->expires_at instanceof Carbon) {
+                return $session->expires_at->copy();
+            }
+        }
+
+        $durationMinutes = max(1, (int) ($payment->package?->duration_in_minutes ?? 0));
+
+        foreach ([
+            $payment->activated_at,
+            $payment->completed_at,
+            $payment->confirmed_at,
+            $payment->initiated_at,
+            $payment->created_at,
+        ] as $baseTime) {
+            if ($baseTime instanceof Carbon) {
+                return $baseTime->copy()->addMinutes($durationMinutes);
+            }
+        }
+
+        return null;
+    }
+
     private function resolveConnectedSession(Payment $payment): ?UserSession
     {
         $activeSession = UserSession::query()
@@ -2988,8 +3073,12 @@ class CaptivePortalController extends Controller
     {
         $status = (string) $payment->status;
 
-        if (in_array($status, ['initiated', 'pending', 'confirmed', 'completed'], true)) {
+        if (in_array($status, ['initiated', 'pending'], true)) {
             return true;
+        }
+
+        if (in_array($status, ['confirmed', 'completed'], true)) {
+            return $this->paymentCanStillAuthorizeAccess($payment);
         }
 
         if ($status === 'failed' && $this->paymentNeedsVerification($payment)) {
