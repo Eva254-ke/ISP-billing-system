@@ -903,6 +903,7 @@ class CaptivePortalController extends Controller
     {
         $phone = $this->normalizePhoneForStorage((string) $phone) ?? (string) $phone;
         $tenantId = $this->resolveTenantId($request);
+        $clientContext = $this->resolveClientContext($request);
         $paymentQuery = $this->buildStatusPaymentQuery($phone, $tenantId);
         $requestedPayment = $this->resolveRequestedStatusPayment($request, $phone, $tenantId);
 
@@ -965,7 +966,11 @@ class CaptivePortalController extends Controller
             }
         }
 
-        $activeSession = $this->resolveConnectedSession($payment);
+        $activeSession = $this->resolveConnectedSession(
+            $payment,
+            $clientContext['mac'] ?? null,
+            $clientContext['ip'] ?? null
+        );
         $latestSession = $activeSession
             ?? UserSession::query()->where('payment_id', $payment->id)->latest('id')->first();
 

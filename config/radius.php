@@ -2,7 +2,10 @@
 
 return [
     'enabled' => env('RADIUS_ENABLED', false),
-    'access_mode' => strtolower((string) env('RADIUS_ACCESS_MODE', 'phone')),
+    'access_mode' => strtolower((string) env(
+        'RADIUS_ACCESS_MODE',
+        env('RADIUS_ENABLED', false) ? 'mac' : 'phone'
+    )),
     // When RADIUS is enabled, default to RADIUS-managed session lifecycle unless
     // a deployment explicitly opts back into RouterOS API activation.
     'pure_radius' => (bool) env('RADIUS_PURE_RADIUS', env('RADIUS_ENABLED', false)),

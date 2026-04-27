@@ -315,10 +315,11 @@ class MikroTikService
     {
         $result = $this->withRetry(function () use ($router, $identifier, $type) {
             $client = $this->getRequiredClient($router);
+            $field = $this->resolveHotspotActiveLookupField($type);
             
             // Find active session
             $query = (new Query('/ip/hotspot/active/print'))
-                ->where($type, $identifier);
+                ->where($field, $identifier);
             
             $sessions = $client->query($query)->read() ?? [];
             
@@ -327,6 +328,7 @@ class MikroTikService
                     'router' => $router->name,
                     'identifier' => $identifier,
                     'type' => $type,
+                    'field' => $field,
                 ]);
                 return false;
             }
@@ -353,6 +355,16 @@ class MikroTikService
         }, $router, 'disconnectSession');
 
         return $result === true;
+    }
+
+    private function resolveHotspotActiveLookupField(string $type): string
+    {
+        return match (strtolower(trim($type))) {
+            'user', 'username' => 'user',
+            'mac', 'mac-address', 'mac_address' => 'mac-address',
+            'ip', 'ip-address', 'ip_address', 'address' => 'address',
+            default => trim($type) !== '' ? $type : 'user',
+        };
     }
 
     /**
