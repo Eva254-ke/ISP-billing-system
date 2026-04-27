@@ -224,6 +224,59 @@ class CaptivePortalPaymentStatusTest extends TestCase
         $response->assertViewIs('captive.packages');
     }
 
+    public function test_packages_in_pure_radius_mode_do_not_fall_back_to_router_sync_for_phone_only_active_sessions(): void
+    {
+        config()->set('radius.enabled', true);
+        config()->set('radius.pure_radius', true);
+
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant);
+        $router = $this->createRouter($tenant, [
+            'status' => 'online',
+            'last_seen_at' => now(),
+        ]);
+        $payment = $this->createPayment($tenant, $package, [
+            'status' => 'completed',
+            'completed_at' => now()->subMinutes(15),
+            'confirmed_at' => now()->subMinutes(15),
+        ]);
+
+        $session = UserSession::query()->create([
+            'tenant_id' => $tenant->id,
+            'router_id' => $router->id,
+            'payment_id' => $payment->id,
+            'package_id' => $package->id,
+            'username' => $this->expectedPhoneRadiusUsername($payment),
+            'phone' => '0712345678',
+            'status' => 'active',
+            'started_at' => now()->subMinutes(20),
+            'expires_at' => now()->addHour(),
+            'last_synced_at' => now()->subMinutes(20),
+        ]);
+
+        $radiusAccountingService = Mockery::mock(RadiusAccountingService::class);
+        $radiusAccountingService->shouldReceive('syncActiveSession')
+            ->once()
+            ->withArgs(fn (UserSession $resolvedSession): bool => (int) $resolvedSession->id === (int) $session->id)
+            ->andReturnNull();
+        $this->app->instance(RadiusAccountingService::class, $radiusAccountingService);
+
+        $mikroTikService = Mockery::mock(MikroTikService::class);
+        $mikroTikService->shouldNotReceive('syncSessionUsage');
+        $this->app->instance(MikroTikService::class, $mikroTikService);
+
+        $response = $this->get(route('wifi.packages', [
+            'tenant_id' => $tenant->id,
+            'phone' => '0712345678',
+        ]));
+
+        $response->assertRedirect(route('wifi.status', [
+            'phone' => '0712345678',
+            'tenant_id' => $tenant->id,
+            'payment' => $payment->id,
+        ]));
+    }
+
     public function test_packages_resumes_radius_payment_waiting_for_hotspot_login_even_after_raw_idle_expiry(): void
     {
         config()->set('radius.enabled', true);
@@ -2672,6 +2725,70 @@ class CaptivePortalPaymentStatusTest extends TestCase
         $this->assertSame('active', $session->status);
         $this->assertSame($expectedGraceEndsAt->toDateTimeString(), $session->grace_period_ends_at?->toDateTimeString());
         $this->assertFalse($session->shouldDisconnect());
+    }
+
+    public function test_expired_radius_session_is_marked_expired_when_disconnect_ack_is_missing_after_revocation(): void
+    {
+        config()->set('radius.enabled', true);
+        config()->set('radius.pure_radius', true);
+
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant);
+        $router = $this->createRouter($tenant, [
+            'status' => 'online',
+            'last_seen_at' => now(),
+        ]);
+
+        $session = UserSession::query()->create([
+            'tenant_id' => $tenant->id,
+            'router_id' => $router->id,
+            'package_id' => $package->id,
+            'username' => 'cb-expired-radius',
+            'phone' => '0712345678',
+            'status' => 'active',
+            'started_at' => now()->subHour(),
+            'expires_at' => now()->subMinute(),
+            'metadata' => [
+                'radius' => [
+                    'provisioned' => true,
+                    'username' => 'cb-expired-radius',
+                ],
+            ],
+        ]);
+
+        $radiusDisconnectService = Mockery::mock(RadiusDisconnectService::class);
+        $radiusDisconnectService->shouldReceive('disconnect')
+            ->once()
+            ->withArgs(fn (UserSession $resolvedSession): bool => (int) $resolvedSession->id === (int) $session->id)
+            ->andReturn([
+                'success' => false,
+                'error' => 'No reply from NAS',
+                'nas_ip' => $router->ip_address,
+                'port' => 3799,
+                'used_accounting_record' => false,
+                'attributes' => [
+                    'User-Name' => 'cb-expired-radius',
+                ],
+            ]);
+
+        $radiusProvisioning = Mockery::mock(FreeRadiusProvisioningService::class);
+        $radiusProvisioning->shouldReceive('revokeUser')
+            ->once()
+            ->with('cb-expired-radius');
+
+        $mikroTikService = Mockery::mock(MikroTikService::class);
+
+        $manager = new SessionManager($mikroTikService, $radiusDisconnectService, $radiusProvisioning);
+
+        $result = $manager->terminateSession($session, 'expired');
+
+        $this->assertTrue($result);
+
+        $session->refresh();
+
+        $this->assertSame('expired', $session->status);
+        $this->assertSame('expired', $session->termination_reason);
+        $this->assertNotNull($session->terminated_at);
     }
 
     public function test_router_walled_garden_rules_include_portal_and_daraja_hosts_without_intasend(): void

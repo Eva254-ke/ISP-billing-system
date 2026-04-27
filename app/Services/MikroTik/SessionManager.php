@@ -361,7 +361,7 @@ class SessionManager
 
     private function terminateRadiusManagedSession(UserSession $session, string $reason): bool
     {
-        $this->revokeRadiusAuthorization($session, $reason);
+        $authorizationRevoked = $this->revokeRadiusAuthorization($session, $reason);
 
         $result = $this->resolveRadiusDisconnectService()->disconnect($session);
 
@@ -374,6 +374,20 @@ class SessionManager
                 'nas_ip' => $result['nas_ip'] ?? null,
                 'error' => $result['error'] ?? 'Unknown RADIUS disconnect failure.',
             ]);
+
+            if ($authorizationRevoked && $this->shouldFinalizeAfterRadiusDisconnectFailure($reason)) {
+                $this->finalizeAfterRadiusDisconnectFailure($session, $reason);
+
+                Log::channel('radius')->warning('Session marked closed after RADIUS disconnect failure because authorization was already revoked', [
+                    'session_id' => $session->id,
+                    'username' => $session->username,
+                    'reason' => $reason,
+                    'router_id' => $session->router_id,
+                    'nas_ip' => $result['nas_ip'] ?? null,
+                ]);
+
+                return true;
+            }
 
             return false;
         }
@@ -401,16 +415,17 @@ class SessionManager
         return $this->radiusProvisioningService ??= app(FreeRadiusProvisioningService::class);
     }
 
-    private function revokeRadiusAuthorization(UserSession $session, string $reason): void
+    private function revokeRadiusAuthorization(UserSession $session, string $reason): bool
     {
         $radiusUsername = $this->resolveRadiusUsername($session);
         if ($radiusUsername === '') {
-            return;
+            return false;
         }
 
         try {
             $this->resolveRadiusProvisioningService()->revokeUser($radiusUsername);
             $this->storeRadiusRevocationMetadata($session, $radiusUsername, $reason);
+            return true;
         } catch (\Throwable $e) {
             Log::channel('radius')->warning('Failed to revoke RADIUS user profile during session termination', [
                 'session_id' => $session->id,
@@ -418,7 +433,24 @@ class SessionManager
                 'reason' => $reason,
                 'error' => $e->getMessage(),
             ]);
+
+            return false;
         }
+    }
+
+    private function shouldFinalizeAfterRadiusDisconnectFailure(string $reason): bool
+    {
+        return in_array($reason, ['expired', 'data_limit_reached'], true);
+    }
+
+    private function finalizeAfterRadiusDisconnectFailure(UserSession $session, string $reason): void
+    {
+        if ($reason === 'expired') {
+            $session->markExpired($reason);
+            return;
+        }
+
+        $session->markTerminated($reason);
     }
 
     private function resolveRadiusUsername(UserSession $session): string

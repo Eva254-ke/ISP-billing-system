@@ -593,7 +593,7 @@ class CaptivePortalController extends Controller
             ->get();
 
         foreach ($candidates as $candidate) {
-            $verified = $this->resolveVerifiedActiveSession($candidate);
+            $verified = $this->resolveVerifiedActiveSession($candidate, allowRouterFallback: false);
             if ($verified) {
                 return $verified;
             }
@@ -740,7 +740,7 @@ class CaptivePortalController extends Controller
                 continue;
             }
 
-            if ($this->resolveVerifiedActiveSession($liveSession)) {
+            if ($this->resolveVerifiedActiveSession($liveSession, allowRouterFallback: false)) {
                 return true;
             }
         }
@@ -3077,7 +3077,7 @@ class CaptivePortalController extends Controller
                 ->first();
 
             if ($matchedSession) {
-                return $this->resolveVerifiedActiveSession($matchedSession);
+                return $this->resolveVerifiedActiveSession($matchedSession, allowRouterFallback: false);
             }
         }
 
@@ -3088,7 +3088,7 @@ class CaptivePortalController extends Controller
         $fallbackSession = (clone $baseQuery)->first();
 
         return $fallbackSession
-            ? $this->resolveVerifiedActiveSession($fallbackSession)
+            ? $this->resolveVerifiedActiveSession($fallbackSession, allowRouterFallback: false)
             : null;
     }
 
@@ -3178,7 +3178,11 @@ class CaptivePortalController extends Controller
             || ($clientIp !== null && $paymentIp !== null && $paymentIp === $clientIp);
     }
 
-    private function resolveVerifiedActiveSession(UserSession $session, ?Payment $payment = null): ?UserSession
+    private function resolveVerifiedActiveSession(
+        UserSession $session,
+        ?Payment $payment = null,
+        bool $allowRouterFallback = true
+    ): ?UserSession
     {
         $session = $session->fresh() ?? $session;
 
@@ -3215,17 +3219,19 @@ class CaptivePortalController extends Controller
             }
         }
 
-        try {
-            if (app(MikroTikService::class)->syncSessionUsage($session)) {
-                return $session->fresh() ?? $session;
+        if ($allowRouterFallback) {
+            try {
+                if (app(MikroTikService::class)->syncSessionUsage($session)) {
+                    return $session->fresh() ?? $session;
+                }
+            } catch (\Throwable $e) {
+                Log::warning('Router verification failed while checking active portal session', [
+                    'session_id' => $session->id,
+                    'payment_id' => $payment?->id,
+                    'username' => $session->username,
+                    'error' => $e->getMessage(),
+                ]);
             }
-        } catch (\Throwable $e) {
-            Log::warning('Router verification failed while checking active portal session', [
-                'session_id' => $session->id,
-                'payment_id' => $payment?->id,
-                'username' => $session->username,
-                'error' => $e->getMessage(),
-            ]);
         }
 
         return null;
@@ -3484,7 +3490,7 @@ class CaptivePortalController extends Controller
             ->first();
 
         if ($candidateSession) {
-            $verifiedSession = $this->resolveVerifiedActiveSession($candidateSession, $payment);
+            $verifiedSession = $this->resolveVerifiedActiveSession($candidateSession, $payment, allowRouterFallback: false);
             if ($verifiedSession) {
                 return $verifiedSession;
             }
