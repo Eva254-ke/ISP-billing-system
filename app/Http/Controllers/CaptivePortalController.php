@@ -9,6 +9,7 @@ use App\Models\Router;
 use App\Models\Tenant;
 use App\Models\UserSession;
 use App\Models\Voucher;
+use App\Services\MikroTik\MikroTikService;
 use App\Services\MikroTik\SessionManager;
 use App\Services\Mpesa\DarajaService;
 use App\Services\Radius\RadiusAccountingService;
@@ -18,6 +19,7 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Schema;
 
 class CaptivePortalController extends Controller
 {
@@ -28,6 +30,7 @@ class CaptivePortalController extends Controller
     private const VERIFICATION_QUERY_COOLDOWN_SECONDS = 5;
     private const DUPLICATE_PAYMENT_WINDOW_MINUTES = 20;
     private const PAYMENT_LOCK_SECONDS = 20;
+    private const ACTIVE_SESSION_TRUST_WINDOW_SECONDS = 120;
     private const HOTSPOT_CONTEXT_SESSION_KEY = 'captive_hotspot_context';
     private const HOTSPOT_CONTEXT_KEYS = [
         'link_login_only',
@@ -403,10 +406,10 @@ class CaptivePortalController extends Controller
             ->when($tenantId > 0, fn ($query) => $query->where('tenant_id', $tenantId));
     }
 
-    private function buildStatusRouteParameters(string $phone, Payment $payment, ?int $tenantId = null, array $extra = []): array
+    private function buildStatusRouteParameters(?string $phone, Payment $payment, ?int $tenantId = null, array $extra = []): array
     {
         return array_filter(array_merge([
-            'phone' => $phone,
+            'phone' => $this->resolveStatusRoutePhone($phone, $payment),
             'tenant_id' => ($tenantId ?? (int) $payment->tenant_id) > 0 ? ($tenantId ?? (int) $payment->tenant_id) : null,
             'payment' => $payment->id,
         ], $this->buildCaptiveRouteContext($payment), $extra), static fn ($value) => $value !== null && $value !== '');
@@ -450,12 +453,22 @@ class CaptivePortalController extends Controller
 
     private function resolveRequestedStatusPayment(Request $request, string $phone, int $tenantId): ?Payment
     {
-        $paymentQuery = $this->buildStatusPaymentQuery($phone, $tenantId);
-
         $requestedPaymentId = (int) $request->query('payment', 0);
         if ($requestedPaymentId > 0) {
-            return (clone $paymentQuery)
+            $normalizedPhone = $this->normalizePhoneForStorage($phone);
+
+            return Payment::query()
                 ->whereKey($requestedPaymentId)
+                ->whereIn('payment_channel', self::STATUS_CHANNELS)
+                ->when($tenantId > 0, fn ($query) => $query->where('tenant_id', $tenantId))
+                ->when(
+                    $normalizedPhone !== null,
+                    fn ($query) => $query->where(function ($inner) use ($normalizedPhone) {
+                        $inner->where('phone', $normalizedPhone)
+                            ->orWhereNull('phone')
+                            ->orWhere('phone', '');
+                    })
+                )
                 ->first();
         }
 
@@ -547,14 +560,15 @@ class CaptivePortalController extends Controller
     private function resolvePackagesActiveSession(int $tenantId, ?string $phone = null, ?string $clientMac = null, ?string $clientIp = null): ?UserSession
     {
         if ($phone) {
-            $activeSession = UserSession::query()
-                ->where('tenant_id', $tenantId)
-                ->where('phone', $phone)
-                ->active()
-                ->first();
+            $phoneSession = $this->resolveActiveSessionForPhone(
+                tenantId: $tenantId,
+                phone: $phone,
+                clientMac: $clientMac,
+                clientIp: $clientIp
+            );
 
-            if ($activeSession) {
-                return $activeSession;
+            if ($phoneSession) {
+                return $phoneSession;
             }
         }
 
@@ -562,7 +576,7 @@ class CaptivePortalController extends Controller
             return null;
         }
 
-        return UserSession::query()
+        $candidates = UserSession::query()
             ->where('tenant_id', $tenantId)
             ->active()
             ->where(function ($query) use ($clientMac, $clientIp) {
@@ -576,7 +590,16 @@ class CaptivePortalController extends Controller
             })
             ->orderByDesc('last_activity_at')
             ->orderByDesc('id')
-            ->first();
+            ->get();
+
+        foreach ($candidates as $candidate) {
+            $verified = $this->resolveVerifiedActiveSession($candidate);
+            if ($verified) {
+                return $verified;
+            }
+        }
+
+        return null;
     }
 
     private function resolvePackagesResumablePayment(int $tenantId, ?string $phone = null, ?string $clientMac = null, ?string $clientIp = null): ?Payment
@@ -603,7 +626,7 @@ class CaptivePortalController extends Controller
                 ->get();
 
             foreach ($candidates as $candidate) {
-                if ($this->shouldResumePackagesPayment($candidate)) {
+                if ($this->shouldResumePackagesPayment($candidate, null, $clientMac, $clientIp)) {
                     return $candidate;
                 }
             }
@@ -615,7 +638,7 @@ class CaptivePortalController extends Controller
                 ->get();
 
             foreach ($olderCandidates as $candidate) {
-                if ($this->shouldResumePackagesPayment($candidate)) {
+                if ($this->shouldResumePackagesPayment($candidate, null, $clientMac, $clientIp)) {
                     return $candidate;
                 }
             }
@@ -658,7 +681,7 @@ class CaptivePortalController extends Controller
                 ->whereIn('payment_channel', self::STATUS_CHANNELS)
                 ->first();
 
-            if ($payment && $this->shouldResumePackagesPayment($payment, $session)) {
+            if ($payment && $this->shouldResumePackagesPayment($payment, $session, $clientMac, $clientIp)) {
                 return $payment;
             }
         }
@@ -666,8 +689,19 @@ class CaptivePortalController extends Controller
         return null;
     }
 
-    private function shouldResumePackagesPayment(Payment $payment, ?UserSession $session = null): bool
+    private function shouldResumePackagesPayment(
+        Payment $payment,
+        ?UserSession $session = null,
+        ?string $clientMac = null,
+        ?string $clientIp = null
+    ): bool
     {
+        if ($this->hasClientContext($clientMac, $clientIp)
+            && !$this->paymentMatchesClientContext($payment, $clientMac, $clientIp, $session)
+        ) {
+            return false;
+        }
+
         if ($this->shouldReuseCaptivePaymentAttempt($payment)
             && ($payment->created_at?->gte(now()->subMinutes(self::DUPLICATE_PAYMENT_WINDOW_MINUTES)) ?? false)
         ) {
@@ -688,16 +722,39 @@ class CaptivePortalController extends Controller
         }
 
         if ($session && $this->sessionAwaitsRadiusLogin($session)) {
-            return true;
+            return !$this->hasClientContext($clientMac, $clientIp)
+                || $this->sessionMatchesClientContext($session, $clientMac, $clientIp);
         }
 
-        return UserSession::query()
+        $liveSessions = UserSession::query()
             ->where('payment_id', $payment->id)
             ->live()
-            ->exists();
+            ->orderByDesc('last_activity_at')
+            ->orderByDesc('id')
+            ->get();
+
+        foreach ($liveSessions as $liveSession) {
+            if ($this->hasClientContext($clientMac, $clientIp)
+                && !$this->sessionMatchesClientContext($liveSession, $clientMac, $clientIp)
+            ) {
+                continue;
+            }
+
+            if ($this->resolveVerifiedActiveSession($liveSession)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
-    private function findReconnectablePayment(string $mpesaCode, string $phone, int $tenantId): ?Payment
+    private function findReconnectablePayment(
+        string $mpesaCode,
+        ?string $phone,
+        int $tenantId,
+        ?string $clientMac = null,
+        ?string $clientIp = null
+    ): ?Payment
     {
         $payment = Payment::query()
             ->where(function ($query) use ($mpesaCode) {
@@ -706,23 +763,59 @@ class CaptivePortalController extends Controller
                     ->orWhere('mpesa_code', $mpesaCode);
             })
             ->when($tenantId > 0, fn ($query) => $query->where('tenant_id', $tenantId))
-            ->where('phone', $phone)
             ->whereIn('payment_channel', self::STATUS_CHANNELS)
+            ->orderByDesc('created_at')
+            ->orderByDesc('id')
             ->first();
 
         if ($payment) {
             return $payment;
         }
 
-        $candidates = Payment::query()
-            ->when($tenantId > 0, fn ($query) => $query->where('tenant_id', $tenantId))
-            ->where('phone', $phone)
-            ->whereIn('payment_channel', self::STATUS_CHANNELS)
-            ->whereIn('status', ['pending', 'failed', 'confirmed', 'completed'])
-            ->where('created_at', '>=', now()->subHours(6))
-            ->orderByDesc('created_at')
-            ->limit(6)
-            ->get();
+        $candidates = collect();
+
+        if ($phone) {
+            $candidates = Payment::query()
+                ->when($tenantId > 0, fn ($query) => $query->where('tenant_id', $tenantId))
+                ->where('phone', $phone)
+                ->whereIn('payment_channel', self::STATUS_CHANNELS)
+                ->whereIn('status', ['pending', 'failed', 'confirmed', 'completed'])
+                ->where('created_at', '>=', now()->subHours(6))
+                ->orderByDesc('created_at')
+                ->limit(6)
+                ->get();
+        } elseif ($this->hasClientContext($clientMac, $clientIp)) {
+            $candidateSessionIds = UserSession::query()
+                ->when($tenantId > 0, fn ($query) => $query->where('tenant_id', $tenantId))
+                ->whereNotNull('payment_id')
+                ->where(function ($query) use ($clientMac, $clientIp) {
+                    if ($clientMac !== null) {
+                        $query->orWhere('mac_address', $clientMac);
+                    }
+
+                    if ($clientIp !== null) {
+                        $query->orWhere('ip_address', $clientIp);
+                    }
+                })
+                ->orderByDesc('last_activity_at')
+                ->orderByDesc('id')
+                ->limit(8)
+                ->pluck('payment_id')
+                ->filter()
+                ->unique()
+                ->values()
+                ->all();
+
+            if ($candidateSessionIds !== []) {
+                $candidates = Payment::query()
+                    ->when($tenantId > 0, fn ($query) => $query->where('tenant_id', $tenantId))
+                    ->whereIn('id', $candidateSessionIds)
+                    ->whereIn('payment_channel', self::STATUS_CHANNELS)
+                    ->whereIn('status', ['pending', 'failed', 'confirmed', 'completed'])
+                    ->orderByDesc('created_at')
+                    ->get();
+            }
+        }
 
         foreach ($candidates as $candidate) {
             try {
@@ -828,10 +921,15 @@ class CaptivePortalController extends Controller
                 ->withErrors(['No payment found. Please start again.']);
         }
 
-        session([
-            'captive_phone' => $phone,
+        $sessionPayload = [
             'captive_payment_id' => $payment->id,
-        ]);
+        ];
+        $sessionPhone = $this->normalizePhoneForStorage((string) ($payment->phone ?? ''))
+            ?? $this->normalizePhoneForStorage($phone);
+        if ($sessionPhone !== null) {
+            $sessionPayload['captive_phone'] = $sessionPhone;
+        }
+        session($sessionPayload);
 
         try {
             $payment = $this->captureClientContextForPayment($request, $payment);
@@ -907,15 +1005,14 @@ class CaptivePortalController extends Controller
         if ($request->filled('voucher_code')) {
             $request->validate([
                 'voucher_code' => ['required', 'string', 'max:64'],
-                'phone' => ['required', 'regex:' . self::KENYA_PHONE_REGEX],
             ]);
 
-            $phone = $this->normalizePhoneForStorage((string) $request->phone);
-            if ($phone === null) {
-                return redirect()->back()
-                    ->withErrors(['Use a valid Safaricom number: 07XXXXXXXX, 01XXXXXXXX, +2547XXXXXXXX or +2541XXXXXXXX.'])
-                    ->withInput();
-            }
+            $phone = $this->resolveContextualPortalPhone(
+                tenantId: $tenantId,
+                requestedPhone: (string) $request->input('phone', ''),
+                clientMac: $clientContext['mac'] ?? null,
+                clientIp: $clientContext['ip'] ?? null
+            );
             $voucherInput = strtoupper(trim((string) $request->voucher_code));
             $codeCandidate = strtoupper(substr($voucherInput, strrpos('-' . $voucherInput, '-') + 1));
 
@@ -943,13 +1040,26 @@ class CaptivePortalController extends Controller
                     ->withInput();
             }
 
-            $activeSession = UserSession::where('phone', $phone)
-                ->when($tenantId > 0, fn ($query) => $query->where('tenant_id', $tenantId))
-                ->active()
-                ->first();
+            $activeSession = $this->resolvePackagesActiveSession(
+                tenantId: $tenantId,
+                phone: $phone,
+                clientMac: $clientContext['mac'] ?? null,
+                clientIp: $clientContext['ip'] ?? null
+            );
             if ($activeSession) {
-                return redirect()->route('wifi.status', ['phone' => $phone, 'tenant_id' => $voucher->tenant_id])
-                    ->with('success', 'Session already active. You are connected.');
+                $activePayment = $activeSession->payment()->first();
+                if ($activePayment) {
+                    return redirect()->route('wifi.status', $this->buildStatusRouteParameters(
+                        phone: $activeSession->phone,
+                        payment: $activePayment,
+                        tenantId: $voucher->tenant_id
+                    ))->with('success', 'Session already active on this device.');
+                }
+
+                return redirect()->route('wifi.packages', $this->buildPackagesRouteParameters(
+                    phone: $activeSession->phone,
+                    tenantId: $voucher->tenant_id
+                ))->with('success', 'Session already active on this device.');
             }
 
             $routerId = (int) (\App\Models\Router::query()
@@ -987,7 +1097,7 @@ class CaptivePortalController extends Controller
                         ],
                     ]);
 
-                    $voucher->update([
+                    $voucherUpdatePayload = $this->filterExistingTableColumns('vouchers', [
                         'status' => Voucher::STATUS_USED,
                         'used_at' => now(),
                         'used_by_phone' => $phone,
@@ -997,11 +1107,18 @@ class CaptivePortalController extends Controller
                         'redemption_count' => (int) ($voucher->redemption_count ?? 0) + 1,
                     ]);
 
+                    if ($voucherUpdatePayload !== []) {
+                        $voucher->update($voucherUpdatePayload);
+                    }
+
                     return $payment;
                 });
 
-                session(['captive_phone' => $phone]);
-                session(['captive_payment_id' => $payment->id]);
+                $sessionPayload = ['captive_payment_id' => $payment->id];
+                if ($phone !== null) {
+                    $sessionPayload['captive_phone'] = $phone;
+                }
+                session($sessionPayload);
 
                 $activationMessage = 'Voucher redeemed successfully! Activation is in progress.';
                 try {
@@ -1035,24 +1152,31 @@ class CaptivePortalController extends Controller
 
         $request->validate([
             'mpesa_code' => ['required', 'string', 'max:32'],
-            'phone' => ['required', 'regex:' . self::KENYA_PHONE_REGEX],
         ]);
         
         $mpesaCode = strtoupper(trim($request->mpesa_code));
-        $phone = $this->normalizePhoneForStorage((string) $request->phone);
-        if ($phone === null) {
-            return redirect()->back()
-                ->withErrors(['Use a valid Safaricom number: 07XXXXXXXX, 01XXXXXXXX, +2547XXXXXXXX or +2541XXXXXXXX.'])
-                ->withInput();
-        }
+        $phone = $this->resolveContextualPortalPhone(
+            tenantId: $tenantId,
+            requestedPhone: (string) $request->input('phone', ''),
+            clientMac: $clientContext['mac'] ?? null,
+            clientIp: $clientContext['ip'] ?? null
+        );
         
-        $payment = $this->findReconnectablePayment($mpesaCode, $phone, $tenantId);
+        $payment = $this->findReconnectablePayment(
+            mpesaCode: $mpesaCode,
+            phone: $phone,
+            tenantId: $tenantId,
+            clientMac: $clientContext['mac'] ?? null,
+            clientIp: $clientContext['ip'] ?? null
+        );
 
         if (!$payment) {
             return redirect()->back()
-                ->withErrors(['Invalid M-Pesa code or phone number. Please check and try again.'])
+                ->withErrors(['We could not match that M-Pesa code to a valid payment. Check the code and try again.'])
                 ->withInput();
         }
+
+        $phone = $phone ?? $this->normalizePhoneForStorage((string) ($payment->phone ?? ''));
 
         $this->reconcileDarajaPaymentIfNeeded($payment, true);
         $payment = $payment->fresh();
@@ -1063,20 +1187,27 @@ class CaptivePortalController extends Controller
                 ->withInput();
         }
         
-        $activeSession = UserSession::where('phone', $phone)
-            ->when($tenantId > 0, fn ($query) => $query->where('tenant_id', $tenantId))
-            ->active()
-            ->first();
+        $activeSession = $this->resolveConnectedSession($payment)
+            ?? $this->resolvePackagesActiveSession(
+                tenantId: $tenantId,
+                phone: $phone,
+                clientMac: $clientContext['mac'] ?? null,
+                clientIp: $clientContext['ip'] ?? null
+            );
         
         if ($activeSession) {
-            session(['captive_payment_id' => $payment->id]);
+            $sessionPayload = ['captive_payment_id' => $payment->id];
+            if ($phone !== null) {
+                $sessionPayload['captive_phone'] = $phone;
+            }
+            session($sessionPayload);
 
             return redirect()->route('wifi.status', $this->buildStatusRouteParameters(
                 phone: $phone,
                 payment: $payment,
                 tenantId: $payment->tenant_id
             ))
-                ->with('success', 'Session already active. You are connected.');
+                ->with('success', 'Session already active on this device.');
         }
         
         try {
@@ -1105,12 +1236,16 @@ class CaptivePortalController extends Controller
             $payment->increment('reconnect_count');
             
             Log::info('User reconnected via M-Pesa code', [
-                'phone' => $phone,
+                'phone' => $phone ?? $payment->phone,
                 'mpesa_code' => $mpesaCode,
                 'payment_id' => $payment->id
             ]);
             
-            session(['captive_payment_id' => $payment->id]);
+            $sessionPayload = ['captive_payment_id' => $payment->id];
+            if ($phone !== null) {
+                $sessionPayload['captive_phone'] = $phone;
+            }
+            session($sessionPayload);
 
             $successMessage = ($activatedSession && $activatedSession->status === 'active')
                 ? 'Reconnected successfully! You are now connected.'
@@ -1125,7 +1260,7 @@ class CaptivePortalController extends Controller
                 
         } catch (\Exception $e) {
             Log::error('Reconnection failed', [
-                'phone' => $phone,
+                'phone' => $phone ?? $payment->phone,
                 'error' => $e->getMessage()
             ]);
             
@@ -1271,10 +1406,15 @@ class CaptivePortalController extends Controller
             return response()->json(['status' => 'not_found']);
         }
 
-        session([
-            'captive_phone' => $phone,
+        $sessionPayload = [
             'captive_payment_id' => $payment->id,
-        ]);
+        ];
+        $sessionPhone = $this->normalizePhoneForStorage((string) ($payment->phone ?? ''))
+            ?? $this->normalizePhoneForStorage($phone);
+        if ($sessionPhone !== null) {
+            $sessionPayload['captive_phone'] = $sessionPhone;
+        }
+        session($sessionPayload);
 
         $payment = $this->captureClientContextForPayment($request, $payment);
         $this->reconcileDarajaPaymentIfNeeded($payment, $request->boolean('recheck'));
@@ -2869,6 +3009,238 @@ class CaptivePortalController extends Controller
         return $payment;
     }
 
+    private function resolveStatusRoutePhone(?string $phone, Payment $payment): string
+    {
+        $normalizedPhone = $this->normalizePhoneForStorage((string) $phone);
+        if ($normalizedPhone !== null) {
+            return $normalizedPhone;
+        }
+
+        $paymentPhone = $this->normalizePhoneForStorage((string) ($payment->phone ?? ''));
+        if ($paymentPhone !== null) {
+            return $paymentPhone;
+        }
+
+        return 'access-' . $payment->id;
+    }
+
+    private function hasClientContext(?string $clientMac = null, ?string $clientIp = null): bool
+    {
+        return $clientMac !== null || $clientIp !== null;
+    }
+
+    private function sessionMatchesClientContext(
+        UserSession $session,
+        ?string $clientMac = null,
+        ?string $clientIp = null
+    ): bool {
+        if (!$this->hasClientContext($clientMac, $clientIp)) {
+            return true;
+        }
+
+        $sessionMac = $this->normalizeMacAddress((string) ($session->mac_address ?? ''));
+        $sessionIp = $this->normalizeClientIpAddress((string) ($session->ip_address ?? ''));
+
+        return ($clientMac !== null && $sessionMac !== null && $sessionMac === $clientMac)
+            || ($clientIp !== null && $sessionIp !== null && $sessionIp === $clientIp);
+    }
+
+    private function resolveActiveSessionForPhone(
+        int $tenantId,
+        string $phone,
+        ?string $clientMac = null,
+        ?string $clientIp = null
+    ): ?UserSession {
+        $baseQuery = UserSession::query()
+            ->where('tenant_id', $tenantId)
+            ->where('phone', $phone)
+            ->active()
+            ->orderByDesc('last_activity_at')
+            ->orderByDesc('id');
+
+        if ($this->hasClientContext($clientMac, $clientIp)) {
+            $matchedSession = (clone $baseQuery)
+                ->where(function ($query) use ($clientMac, $clientIp) {
+                    if ($clientMac !== null) {
+                        $query->orWhere('mac_address', $clientMac);
+                    }
+
+                    if ($clientIp !== null) {
+                        $query->orWhere('ip_address', $clientIp);
+                    }
+                })
+                ->first();
+
+            if ($matchedSession) {
+                return $this->resolveVerifiedActiveSession($matchedSession);
+            }
+        }
+
+        if ($this->hasClientContext($clientMac, $clientIp)) {
+            return null;
+        }
+
+        $fallbackSession = (clone $baseQuery)->first();
+
+        return $fallbackSession
+            ? $this->resolveVerifiedActiveSession($fallbackSession)
+            : null;
+    }
+
+    private function resolveContextualPortalPhone(
+        int $tenantId,
+        ?string $requestedPhone = null,
+        ?string $clientMac = null,
+        ?string $clientIp = null
+    ): ?string {
+        foreach ([
+            $requestedPhone,
+            (string) session('captive_phone', ''),
+        ] as $candidate) {
+            $normalizedPhone = $this->normalizePhoneForStorage((string) $candidate);
+            if ($normalizedPhone !== null) {
+                return $normalizedPhone;
+            }
+        }
+
+        $sessionPaymentId = (int) session('captive_payment_id', 0);
+        if ($sessionPaymentId > 0) {
+            $paymentPhone = Payment::query()
+                ->when($tenantId > 0, fn ($query) => $query->where('tenant_id', $tenantId))
+                ->whereKey($sessionPaymentId)
+                ->value('phone');
+
+            $normalizedPhone = $this->normalizePhoneForStorage((string) $paymentPhone);
+            if ($normalizedPhone !== null) {
+                return $normalizedPhone;
+            }
+        }
+
+        if (!$this->hasClientContext($clientMac, $clientIp)) {
+            return null;
+        }
+
+        $sessionPhone = UserSession::query()
+            ->when($tenantId > 0, fn ($query) => $query->where('tenant_id', $tenantId))
+            ->whereNotNull('phone')
+            ->where(function ($query) use ($clientMac, $clientIp) {
+                if ($clientMac !== null) {
+                    $query->orWhere('mac_address', $clientMac);
+                }
+
+                if ($clientIp !== null) {
+                    $query->orWhere('ip_address', $clientIp);
+                }
+            })
+            ->orderByRaw(
+                "CASE WHEN status = ? THEN 0 WHEN status = ? THEN 1 WHEN status = ? THEN 2 ELSE 3 END",
+                ['active', 'idle', 'expired']
+            )
+            ->orderByDesc('last_activity_at')
+            ->orderByDesc('id')
+            ->value('phone');
+
+        return $this->normalizePhoneForStorage((string) $sessionPhone);
+    }
+
+    private function paymentMatchesClientContext(
+        Payment $payment,
+        ?string $clientMac = null,
+        ?string $clientIp = null,
+        ?UserSession $session = null
+    ): bool {
+        if (!$this->hasClientContext($clientMac, $clientIp)) {
+            return true;
+        }
+
+        $session = $session ?? UserSession::query()
+            ->where('payment_id', $payment->id)
+            ->latest('id')
+            ->first();
+
+        if ($session && $this->sessionMatchesClientContext($session, $clientMac, $clientIp)) {
+            return true;
+        }
+
+        $paymentMetadata = is_array($payment->metadata) ? $payment->metadata : [];
+        $paymentClientContext = is_array($paymentMetadata['client_context'] ?? null)
+            ? $paymentMetadata['client_context']
+            : [];
+        $paymentMac = $this->normalizeMacAddress((string) ($paymentClientContext['mac'] ?? ''));
+        $paymentIp = $this->normalizeClientIpAddress((string) ($paymentClientContext['ip'] ?? ''));
+
+        return ($clientMac !== null && $paymentMac !== null && $paymentMac === $clientMac)
+            || ($clientIp !== null && $paymentIp !== null && $paymentIp === $clientIp);
+    }
+
+    private function resolveVerifiedActiveSession(UserSession $session, ?Payment $payment = null): ?UserSession
+    {
+        $session = $session->fresh() ?? $session;
+
+        if ((string) $session->status !== 'active' || $session->is_expired) {
+            return null;
+        }
+
+        if (
+            $session->last_synced_at instanceof Carbon
+            && $session->last_synced_at->gte(now()->subSeconds(self::ACTIVE_SESSION_TRUST_WINDOW_SECONDS))
+        ) {
+            return $session;
+        }
+
+        if ((bool) config('radius.enabled', false)) {
+            try {
+                $record = app(RadiusAccountingService::class)->syncActiveSession($session);
+                if ($record !== null) {
+                    $session = $session->fresh() ?? $session;
+
+                    if ($payment) {
+                        $this->markPaymentActivatedFromRadius($payment, $session);
+                    }
+
+                    return $session;
+                }
+            } catch (\Throwable $e) {
+                Log::warning('RADIUS verification failed while checking active portal session', [
+                    'session_id' => $session->id,
+                    'payment_id' => $payment?->id,
+                    'username' => $session->username,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
+        try {
+            if (app(MikroTikService::class)->syncSessionUsage($session)) {
+                return $session->fresh() ?? $session;
+            }
+        } catch (\Throwable $e) {
+            Log::warning('Router verification failed while checking active portal session', [
+                'session_id' => $session->id,
+                'payment_id' => $payment?->id,
+                'username' => $session->username,
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        return null;
+    }
+
+    private function filterExistingTableColumns(string $table, array $values): array
+    {
+        try {
+            $columns = array_flip(Schema::getColumnListing($table));
+        } catch (\Throwable) {
+            return $values;
+        }
+
+        return array_filter(
+            $values,
+            static fn (mixed $value, string $column): bool => isset($columns[$column]),
+            ARRAY_FILTER_USE_BOTH
+        );
+    }
+
     private function normalizeMacAddress(string $mac): ?string
     {
         $normalized = strtoupper(preg_replace('/[^0-9A-Fa-f]/', '', $mac) ?? '');
@@ -3101,13 +3473,16 @@ class CaptivePortalController extends Controller
 
     private function resolveConnectedSession(Payment $payment): ?UserSession
     {
-        $activeSession = UserSession::query()
+        $candidateSession = UserSession::query()
             ->where('payment_id', $payment->id)
             ->active()
             ->first();
 
-        if ($activeSession) {
-            return $activeSession;
+        if ($candidateSession) {
+            $verifiedSession = $this->resolveVerifiedActiveSession($candidateSession, $payment);
+            if ($verifiedSession) {
+                return $verifiedSession;
+            }
         }
 
         if (!(bool) config('radius.enabled', false)) {

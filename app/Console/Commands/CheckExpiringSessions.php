@@ -4,6 +4,8 @@ namespace App\Console\Commands;
 
 use App\Models\UserSession;
 use App\Services\MikroTik\SessionManager;
+use App\Services\MikroTik\MikroTikService;
+use App\Services\Radius\RadiusAccountingService;
 use App\Jobs\SyncSessionUsage;
 use App\Jobs\DisconnectSession;
 use Illuminate\Console\Command;
@@ -22,7 +24,9 @@ class CheckExpiringSessions extends Command
     protected $description = 'Check and handle expiring user sessions (grace periods, warnings, disconnects)';
 
     public function __construct(
-        protected SessionManager $sessionManager
+        protected SessionManager $sessionManager,
+        protected MikroTikService $mikroTikService,
+        protected RadiusAccountingService $radiusAccountingService
     ) {
         parent::__construct();
     }
@@ -113,17 +117,52 @@ class CheckExpiringSessions extends Command
         // 3. CLEANUP: Mark orphaned sessions as terminated
         // ──────────────────────────────────────────────────────────────────
         $orphaned = UserSession::query()
-            ->where('status', 'active')
+            ->whereIn('status', ['active', 'idle'])
             ->where('expires_at', '<', now()->subHours(2))
-            ->where('grace_period_active', false)
+            ->where(function ($query) {
+                $query->where('grace_period_active', false)
+                    ->orWhereNull('grace_period_ends_at')
+                    ->orWhere('grace_period_ends_at', '<=', now());
+            })
             ->limit(50)
             ->get();
 
         foreach ($orphaned as $session) {
-            $session->update([
-                'status' => 'terminated',
-                'termination_reason' => 'orphaned_cleanup',
-            ]);
+            if (!$session->shouldDisconnect() || $session->awaitsRadiusReauthentication()) {
+                continue;
+            }
+
+            $stillConnected = false;
+
+            if ((bool) config('radius.enabled', false)) {
+                try {
+                    $stillConnected = $this->radiusAccountingService->syncActiveSession($session) !== null;
+                } catch (\Throwable $e) {
+                    Log::channel('radius')->warning('Skipping orphaned session cleanup after RADIUS verification failure', [
+                        'session_id' => $session->id,
+                        'username' => $session->username,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            }
+
+            if (!$stillConnected) {
+                try {
+                    $stillConnected = $this->mikroTikService->syncSessionUsage($session);
+                } catch (\Throwable $e) {
+                    Log::channel('mikrotik')->warning('Skipping orphaned session cleanup after router verification failure', [
+                        'session_id' => $session->id,
+                        'username' => $session->username,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            }
+
+            if ($stillConnected) {
+                continue;
+            }
+
+            $session->markExpired('orphaned_cleanup');
         }
 
         $this->info("🧹 Cleaned up {$orphaned->count()} orphaned sessions");

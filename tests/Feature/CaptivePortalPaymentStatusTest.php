@@ -7,6 +7,7 @@ use App\Models\Payment;
 use App\Models\Router;
 use App\Models\Tenant;
 use App\Models\UserSession;
+use App\Models\Voucher;
 use App\Jobs\ActivateSession;
 use App\Jobs\ProcessMpesaCallback;
 use App\Jobs\SyncSessionUsage;
@@ -130,6 +131,49 @@ class CaptivePortalPaymentStatusTest extends TestCase
             'payment' => $payment->id,
             'mac' => 'AA:BB:CC:DD:EE:FF',
         ]));
+    }
+
+    public function test_packages_does_not_resume_another_devices_active_session_from_phone_only(): void
+    {
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant);
+        $router = $this->createRouter($tenant, [
+            'status' => 'online',
+            'last_seen_at' => now(),
+        ]);
+        $payment = $this->createPayment($tenant, $package, [
+            'status' => 'completed',
+            'completed_at' => now()->subMinutes(5),
+            'confirmed_at' => now()->subMinutes(5),
+        ]);
+
+        UserSession::query()->create([
+            'tenant_id' => $tenant->id,
+            'router_id' => $router->id,
+            'payment_id' => $payment->id,
+            'package_id' => $package->id,
+            'username' => $this->expectedPhoneRadiusUsername($payment),
+            'phone' => '0712345678',
+            'mac_address' => 'AA:BB:CC:DD:EE:FF',
+            'ip_address' => '10.0.0.50',
+            'status' => 'active',
+            'started_at' => now()->subMinutes(5),
+            'expires_at' => now()->addHour(),
+            'last_synced_at' => now(),
+        ]);
+
+        $response = $this->withSession([
+            'captive_phone' => '0712345678',
+        ])->get(route('wifi.packages', [
+            'tenant_id' => $tenant->id,
+            'mac' => '11:22:33:44:55:66',
+            'ip' => '10.0.0.99',
+        ]));
+
+        $response->assertOk();
+        $response->assertViewIs('captive.packages');
+        $response->assertSeeText('Choose a package');
+        $response->assertDontSeeText('You are already connected');
     }
 
     public function test_packages_does_not_resume_expired_idle_radius_session_payment(): void
@@ -639,6 +683,186 @@ class CaptivePortalPaymentStatusTest extends TestCase
         $this->assertSame('confirmed', $payment->status);
         $this->assertSame('QKRECOVER001', $payment->mpesa_receipt_number);
         $this->assertSame(1, (int) $payment->reconnect_count);
+    }
+
+    public function test_reconnect_can_match_known_mpesa_code_without_phone_input(): void
+    {
+        config()->set('radius.enabled', true);
+        config()->set('radius.pure_radius', true);
+
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant);
+        $router = $this->createRouter($tenant, [
+            'status' => 'online',
+            'last_seen_at' => now(),
+        ]);
+
+        $payment = $this->createPayment($tenant, $package, [
+            'status' => 'confirmed',
+            'confirmed_at' => now()->subMinute(),
+            'mpesa_receipt_number' => 'QKNOPHONE001',
+            'metadata' => [
+                'gateway' => 'daraja',
+                'hotspot_context' => [
+                    'link_login_only' => 'http://' . $router->ip_address . '/login',
+                ],
+            ],
+        ]);
+
+        $sessionManager = Mockery::mock(SessionManager::class);
+        $sessionManager->shouldNotReceive('activateSession');
+        $this->app->instance(SessionManager::class, $sessionManager);
+
+        $radiusProvisioning = Mockery::mock(FreeRadiusProvisioningService::class);
+        $radiusProvisioning->shouldReceive('provisionUser')->once();
+        $this->app->instance(FreeRadiusProvisioningService::class, $radiusProvisioning);
+
+        $response = $this->post(route('wifi.reconnect', ['tenant_id' => $tenant->id]), [
+            'tenant_id' => $tenant->id,
+            'mpesa_code' => 'QKNOPHONE001',
+            'link-login-only' => 'http://' . $router->ip_address . '/login',
+        ]);
+
+        $payment->refresh();
+
+        $response->assertRedirect(route('wifi.status', [
+            'phone' => '0712345678',
+            'tenant_id' => $tenant->id,
+            'payment' => $payment->id,
+            'link-login-only' => 'http://' . $router->ip_address . '/login',
+            'link-login' => 'http://' . $router->ip_address . '/login',
+        ]));
+        $response->assertSessionHas('success');
+        $this->assertSame(1, (int) $payment->reconnect_count);
+    }
+
+    public function test_reconnect_can_recover_recent_payment_without_phone_input_when_phone_is_in_session(): void
+    {
+        config()->set('radius.enabled', true);
+        config()->set('radius.pure_radius', true);
+
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant);
+        $router = $this->createRouter($tenant, [
+            'status' => 'online',
+            'last_seen_at' => now(),
+        ]);
+
+        $payment = $this->createPayment($tenant, $package, [
+            'status' => 'pending',
+            'mpesa_checkout_request_id' => 'ws_CO_reconnect_recovery_002',
+            'metadata' => [
+                'gateway' => 'daraja',
+                'hotspot_context' => [
+                    'link_login_only' => 'http://' . $router->ip_address . '/login',
+                ],
+            ],
+        ]);
+
+        $daraja = Mockery::mock(DarajaService::class);
+        $daraja->shouldReceive('queryStkStatus')->once()->with('ws_CO_reconnect_recovery_002')->andReturn([
+            'success' => true,
+            'final' => true,
+            'is_pending' => false,
+            'is_success' => true,
+            'is_failed' => false,
+            'response_code' => '0',
+            'result_code' => 0,
+            'result_desc' => 'The service request is processed successfully.',
+            'merchant_request_id' => '29115-99992-1',
+            'checkout_request_id' => 'ws_CO_reconnect_recovery_002',
+            'receipt_number' => null,
+            'phone_number' => '254712345678',
+            'amount' => 50.0,
+            'raw' => [
+                'ResultCode' => 0,
+                'ResultDesc' => 'The service request is processed successfully.',
+                'CheckoutRequestID' => 'ws_CO_reconnect_recovery_002',
+                'PhoneNumber' => '254712345678',
+                'Amount' => 50,
+            ],
+            'error' => null,
+        ]);
+        $daraja->shouldReceive('isConfigured')->andReturn(true);
+        $this->app->instance(DarajaService::class, $daraja);
+
+        $sessionManager = Mockery::mock(SessionManager::class);
+        $sessionManager->shouldNotReceive('activateSession');
+        $this->app->instance(SessionManager::class, $sessionManager);
+
+        $radiusProvisioning = Mockery::mock(FreeRadiusProvisioningService::class);
+        $radiusProvisioning->shouldReceive('provisionUser')->once();
+        $this->app->instance(FreeRadiusProvisioningService::class, $radiusProvisioning);
+
+        $response = $this->withSession([
+            'captive_phone' => '0712345678',
+        ])->post(route('wifi.reconnect', ['tenant_id' => $tenant->id]), [
+            'tenant_id' => $tenant->id,
+            'mpesa_code' => 'QKRECOVER002',
+            'link-login-only' => 'http://' . $router->ip_address . '/login',
+        ]);
+
+        $payment->refresh();
+
+        $response->assertRedirect(route('wifi.status', [
+            'phone' => '0712345678',
+            'tenant_id' => $tenant->id,
+            'payment' => $payment->id,
+            'link-login-only' => 'http://' . $router->ip_address . '/login',
+            'link-login' => 'http://' . $router->ip_address . '/login',
+        ]));
+        $response->assertSessionHas('success');
+        $this->assertSame('confirmed', $payment->status);
+        $this->assertSame('QKRECOVER002', $payment->mpesa_receipt_number);
+        $this->assertSame(1, (int) $payment->reconnect_count);
+    }
+
+    public function test_voucher_redemption_works_without_phone_input(): void
+    {
+        config()->set('radius.enabled', true);
+        config()->set('radius.pure_radius', true);
+
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant);
+        $router = $this->createRouter($tenant, [
+            'status' => 'online',
+            'last_seen_at' => now(),
+        ]);
+        $voucher = $this->createVoucher($tenant, $package);
+
+        $sessionManager = Mockery::mock(SessionManager::class);
+        $sessionManager->shouldNotReceive('activateSession');
+        $this->app->instance(SessionManager::class, $sessionManager);
+
+        $radiusProvisioning = Mockery::mock(FreeRadiusProvisioningService::class);
+        $radiusProvisioning->shouldReceive('provisionUser')->once();
+        $this->app->instance(FreeRadiusProvisioningService::class, $radiusProvisioning);
+
+        $response = $this->post(route('wifi.reconnect', ['tenant_id' => $tenant->id]), [
+            'tenant_id' => $tenant->id,
+            'voucher_code' => $voucher->code_display,
+            'link-login-only' => 'http://' . $router->ip_address . '/login',
+        ]);
+
+        $payment = Payment::query()
+            ->where('payment_channel', Payment::CHANNEL_VOUCHER)
+            ->latest('id')
+            ->firstOrFail();
+
+        $voucher->refresh();
+
+        $response->assertRedirect(route('wifi.status', [
+            'phone' => 'access-' . $payment->id,
+            'tenant_id' => $tenant->id,
+            'payment' => $payment->id,
+            'link-login-only' => 'http://' . $router->ip_address . '/login',
+            'link-login' => 'http://' . $router->ip_address . '/login',
+        ]));
+        $response->assertSessionHas('success');
+
+        $this->assertNull($payment->phone);
+        $this->assertSame(Voucher::STATUS_USED, (string) $voucher->status);
+        $this->assertNull($voucher->used_by_phone);
     }
 
     public function test_status_shows_prompt_sent_after_successful_stk_acceptance(): void
@@ -2539,6 +2763,33 @@ class CaptivePortalPaymentStatusTest extends TestCase
                 'gateway' => 'daraja',
             ],
         ], $overrides));
+    }
+
+    private function createVoucher(Tenant $tenant, Package $package, array $overrides = []): \App\Models\Voucher
+    {
+        $columns = array_flip(Schema::getColumnListing('vouchers'));
+        $candidatePayload = array_merge([
+            'tenant_id' => $tenant->id,
+            'package_id' => $package->id,
+            'code' => 'VCH' . strtoupper(str()->random(8)),
+            'prefix' => 'CB',
+            'status' => \App\Models\Voucher::STATUS_UNUSED,
+            'valid_from' => now()->subMinute(),
+            'valid_until' => now()->addDay(),
+            'validity_hours' => 24,
+            'captive_portal_redeemable' => true,
+            'max_redemptions' => 1,
+            'redemption_count' => 0,
+        ], $overrides);
+
+        $payload = [];
+        foreach ($candidatePayload as $column => $value) {
+            if (isset($columns[$column])) {
+                $payload[$column] = $value;
+            }
+        }
+
+        return \App\Models\Voucher::query()->create($payload);
     }
 
     private function configureRadiusProvisioningConnection(): void

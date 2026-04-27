@@ -3,7 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <meta name="theme-color" content="#0e7490">
+    @php
+        $accentColor = trim((string) ($tenant?->brand_color_primary ?? ''));
+        if (preg_match('/^#(?:[0-9A-Fa-f]{3}){1,2}$/', $accentColor) !== 1) {
+            $accentColor = '#0f766e';
+        }
+    @endphp
+    <meta name="theme-color" content="{{ $accentColor }}">
     <title>{{ $tenant?->name ?: 'CloudBridge WiFi' }} - Reconnect</title>
     @php
         $captiveCssPath = public_path('css/captive-portal.css');
@@ -21,9 +27,12 @@
             'tenant_id' => old('tenant_id', $tenantId > 0 ? $tenantId : request()->query('tenant_id')),
         ], static fn ($value) => $value !== null && $value !== '');
         $tenantIdValue = (string) ($reconnectActionParams['tenant_id'] ?? '');
+        $routePhone = preg_match('/^(?:0[17]\d{8}|(?:\+?254)[17]\d{8})$/', (string) old('phone', $phone ?? '')) === 1
+            ? (string) old('phone', $phone ?? '')
+            : '';
         $packagesParams = array_filter([
             'tenant_id' => $tenantId > 0 ? $tenantId : request()->query('tenant_id'),
-            'phone' => old('phone', $phone ?? ''),
+            'phone' => $routePhone !== '' ? $routePhone : null,
         ], static fn ($value) => $value !== null && $value !== '');
         $clientMacValue = trim((string) old('mac', $clientMac ?? request()->query('mac', session('captive_client_mac', ''))));
         $clientIpValue = trim((string) old('ip', $clientIp ?? request()->query('ip', session('captive_client_ip', ''))));
@@ -38,11 +47,19 @@
             'link-orig' => trim((string) old('link-orig', $hotspotContext['link_orig'] ?? '')),
             'link-orig-esc' => trim((string) old('link-orig-esc', $hotspotContext['link_orig_esc'] ?? '')),
         ];
+        $allowMpesaReconnect = (bool) ($tenant?->captive_portal_allow_mpese_code_reconnect ?? true);
+        $allowVoucherRedemption = (bool) ($tenant?->captive_portal_allow_voucher_redemption ?? true);
     @endphp
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&family=Plus+Jakarta+Sans:wght@500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/css/captive-portal.css?v={{ $captiveCssVersion }}">
+    <style>
+        :root {
+            --cp-primary: {{ $accentColor }};
+            --cp-primary-strong: {{ $accentColor }};
+        }
+    </style>
 </head>
 <body>
     <main class="cp-page cp-page-narrow">
@@ -51,7 +68,7 @@
                 <div class="cp-brand-mark">CB</div>
                 <div class="cp-brand-text">
                     <h1>{{ $tenant?->name ?: 'CloudBridge WiFi' }}</h1>
-                    <p>Restore internet access</p>
+                    <p>Use a code to reconnect.</p>
                 </div>
             </div>
             <div class="cp-support"><a class="cp-link-support" href="{{ $supportTelHref }}">Call support</a></div>
@@ -69,63 +86,68 @@
 
         <article class="cp-card">
             <div class="cp-flow">
-                <div class="cp-flow-step">1. Enter payment proof</div>
-                <div class="cp-flow-step is-current">2. Verify details</div>
-                <div class="cp-flow-step">3. Connect internet</div>
+                <div class="cp-flow-step">1. Enter code</div>
+                <div class="cp-flow-step is-current">2. Verify</div>
+                <div class="cp-flow-step">3. Connect</div>
             </div>
 
             <h2 class="cp-section-title">Reconnect internet</h2>
-            <p class="cp-card-subtitle">Use one option only: M-Pesa transaction code or voucher code.</p>
+            <p class="cp-card-subtitle">Use one option only. You do not need to enter the phone number again on this screen.</p>
 
-            <div class="cp-form-stack">
-                <section class="cp-form-card">
-                    <h3 class="cp-form-title">Reconnect with M-Pesa code</h3>
-                    <form method="POST" action="{{ route('wifi.reconnect', $reconnectActionParams) }}">
-                        @csrf
-                        <input type="hidden" name="tenant_id" value="{{ $tenantIdValue }}">
-                        <input type="hidden" name="mac" value="{{ $clientMacValue }}">
-                        <input type="hidden" name="ip" value="{{ $clientIpValue }}">
-                        @foreach($hotspotFieldValues as $fieldName => $fieldValue)
-                            <input type="hidden" name="{{ $fieldName }}" value="{{ $fieldValue }}">
-                        @endforeach
-                        <div class="cp-field">
-                            <label for="reconnectPhone">Phone Number</label>
-                            <input id="reconnectPhone" type="tel" name="phone" placeholder="0712345678 or 0112345678" value="{{ old('phone', $phone ?? '') }}" required pattern="(?:0[17]\d{8}|(?:\+?254)[17]\d{8})" autocomplete="tel" inputmode="tel">
-                        </div>
-                        <div class="cp-field">
-                            <label for="mpesaCode">M-Pesa Transaction Code</label>
-                            <input id="mpesaCode" type="text" name="mpesa_code" placeholder="QGH45XYZ" value="{{ old('mpesa_code', '') }}" required maxlength="32" autocomplete="off">
-                        </div>
-                        <button type="submit" class="cp-btn cp-btn-primary cp-btn-block">Verify and Connect</button>
-                    </form>
-                </section>
+            @if(!$allowMpesaReconnect && !$allowVoucherRedemption)
+                <div class="cp-panel">
+                    <h3>Reconnect is not available</h3>
+                    <p>This hotspot is not accepting reconnect codes right now. Choose a package instead.</p>
+                </div>
+            @else
+                <div class="cp-form-stack">
+                    @if($allowMpesaReconnect)
+                        <section class="cp-form-card">
+                            <h3 class="cp-form-title">Reconnect with M-Pesa code</h3>
+                            <form method="POST" action="{{ route('wifi.reconnect', $reconnectActionParams) }}">
+                                @csrf
+                                <input type="hidden" name="tenant_id" value="{{ $tenantIdValue }}">
+                                <input type="hidden" name="phone" value="{{ $routePhone }}">
+                                <input type="hidden" name="mac" value="{{ $clientMacValue }}">
+                                <input type="hidden" name="ip" value="{{ $clientIpValue }}">
+                                @foreach($hotspotFieldValues as $fieldName => $fieldValue)
+                                    <input type="hidden" name="{{ $fieldName }}" value="{{ $fieldValue }}">
+                                @endforeach
+                                <div class="cp-field">
+                                    <label for="mpesaCode">M-Pesa Transaction Code</label>
+                                    <input id="mpesaCode" type="text" name="mpesa_code" placeholder="QGH45XYZ" value="{{ old('mpesa_code', '') }}" required maxlength="32" autocomplete="off">
+                                </div>
+                                <button type="submit" class="cp-btn cp-btn-primary cp-btn-block">Verify and Connect</button>
+                            </form>
+                        </section>
+                    @endif
 
-                <section class="cp-form-card">
-                    <h3 class="cp-form-title">Redeem voucher</h3>
-                    <form method="POST" action="{{ route('wifi.reconnect', $reconnectActionParams) }}">
-                        @csrf
-                        <input type="hidden" name="tenant_id" value="{{ $tenantIdValue }}">
-                        <input type="hidden" name="mac" value="{{ $clientMacValue }}">
-                        <input type="hidden" name="ip" value="{{ $clientIpValue }}">
-                        @foreach($hotspotFieldValues as $fieldName => $fieldValue)
-                            <input type="hidden" name="{{ $fieldName }}" value="{{ $fieldValue }}">
-                        @endforeach
-                        <div class="cp-field">
-                            <label for="voucherPhone">Phone Number</label>
-                            <input id="voucherPhone" type="tel" name="phone" placeholder="0712345678 or 0112345678" value="{{ old('phone', $phone ?? '') }}" required pattern="(?:0[17]\d{8}|(?:\+?254)[17]\d{8})" autocomplete="tel" inputmode="tel">
-                        </div>
-                        <div class="cp-field">
-                            <label for="voucherCode">Voucher Code</label>
-                            <input id="voucherCode" type="text" name="voucher_code" placeholder="CB-WIFI-1234" value="{{ old('voucher_code', '') }}" required maxlength="64" autocomplete="off">
-                        </div>
-                        <button type="submit" class="cp-btn cp-btn-soft cp-btn-block">Redeem Voucher</button>
-                    </form>
-                </section>
-            </div>
+                    @if($allowVoucherRedemption)
+                        <section class="cp-form-card">
+                            <h3 class="cp-form-title">Redeem voucher</h3>
+                            <form method="POST" action="{{ route('wifi.reconnect', $reconnectActionParams) }}">
+                                @csrf
+                                <input type="hidden" name="tenant_id" value="{{ $tenantIdValue }}">
+                                <input type="hidden" name="phone" value="{{ $routePhone }}">
+                                <input type="hidden" name="mac" value="{{ $clientMacValue }}">
+                                <input type="hidden" name="ip" value="{{ $clientIpValue }}">
+                                @foreach($hotspotFieldValues as $fieldName => $fieldValue)
+                                    <input type="hidden" name="{{ $fieldName }}" value="{{ $fieldValue }}">
+                                @endforeach
+                                <div class="cp-field">
+                                    <label for="voucherCode">Voucher Code</label>
+                                    <input id="voucherCode" type="text" name="voucher_code" placeholder="CB-WIFI-1234" value="{{ old('voucher_code', '') }}" required maxlength="64" autocomplete="off">
+                                </div>
+                                <button type="submit" class="cp-btn cp-btn-soft cp-btn-block">Redeem Voucher</button>
+                            </form>
+                        </section>
+                    @endif
+                </div>
+            @endif
         </article>
 
         <article class="cp-card cp-card-compact">
-            <h3 class="cp-section-subtitle">Need to buy a package instead?</h3>
+            <h3 class="cp-section-subtitle">Need a package instead?</h3>
             <a href="{{ route('wifi.packages', $packagesParams) }}" class="cp-btn cp-btn-outline cp-btn-block">Go to Packages</a>
         </article>
 

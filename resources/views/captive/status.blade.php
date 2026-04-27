@@ -3,7 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <meta name="theme-color" content="#0e7490">
+    @php
+        $accentColor = trim((string) ($payment->tenant?->brand_color_primary ?? ''));
+        if (preg_match('/^#(?:[0-9A-Fa-f]{3}){1,2}$/', $accentColor) !== 1) {
+            $accentColor = '#0f766e';
+        }
+    @endphp
+    <meta name="theme-color" content="{{ $accentColor }}">
     @if(in_array($statusView, ['pending', 'paid', 'verifying']))
         <meta http-equiv="refresh" content="10">
     @endif
@@ -38,6 +44,9 @@
         $supportTelHref = (is_string($supportDigits) && $supportDigits !== '')
             ? 'tel:+' . ltrim($supportDigits, '+')
             : 'tel:+254742939094';
+        $displayPhone = preg_match('/^(?:0[17]\d{8}|(?:\+?254)[17]\d{8})$/', (string) ($payment->phone ?? '')) === 1
+            ? (string) $payment->phone
+            : (preg_match('/^(?:0[17]\d{8}|(?:\+?254)[17]\d{8})$/', (string) $phone) === 1 ? (string) $phone : null);
         $statusRoute = route('wifi.status', array_filter(array_merge([
             'phone' => $phone,
             'tenant_id' => $tenantId > 0 ? $tenantId : null,
@@ -52,7 +61,7 @@
         $radiusPendingReauth = (bool) ($radiusPendingReauth ?? false);
         $shouldAutoPoll = in_array($statusView, ['pending', 'paid', 'verifying'], true);
         $packagesParams = array_filter(array_merge([
-            'phone' => $phone,
+            'phone' => $displayPhone,
             'tenant_id' => $tenantId > 0 ? $tenantId : null,
         ], $routeContext), static fn ($value) => $value !== null && $value !== '');
         $expiredPackagesUrl = route('wifi.packages', array_merge($packagesParams, ['expired' => 1]));
@@ -95,11 +104,21 @@
             'failed' => 'Failed',
             default => 'Pending',
         };
+        $continueBrowsingUrl = trim((string) ($payment->tenant?->captive_portal_redirect_url ?? ''));
+        if ($continueBrowsingUrl === '' || filter_var($continueBrowsingUrl, FILTER_VALIDATE_URL) === false) {
+            $continueBrowsingUrl = 'https://www.google.com';
+        }
     @endphp
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&family=Plus+Jakarta+Sans:wght@500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/css/captive-portal.css?v={{ $captiveCssVersion }}">
+    <style>
+        :root {
+            --cp-primary: {{ $accentColor }};
+            --cp-primary-strong: {{ $accentColor }};
+        }
+    </style>
 </head>
 <body>
     <main class="cp-page cp-page-narrow">
@@ -136,7 +155,11 @@
                             @elseif($gatewayStatus === 'pending_customer_confirmation')
                                 If you already entered your PIN or money is deducted, do not pay again. Keep this page open while we verify and connect you.
                             @else
-                                Use phone <strong>{{ $phone }}</strong> and enter your PIN to continue.
+                                @if($displayPhone)
+                                    Use phone <strong>{{ $displayPhone }}</strong> and enter your PIN to continue.
+                                @else
+                                    Complete the M-Pesa prompt on the number you used to pay.
+                                @endif
                             @endif
                         </p>
                     </div>
@@ -164,7 +187,7 @@
 
                 <div class="cp-actions">
                     <a href="{{ $statusRoute }}" class="cp-btn cp-btn-primary">Refresh Status</a>
-                    <a href="{{ route('wifi.reconnect.form', $packagesParams) }}" class="cp-btn cp-btn-soft">Use M-Pesa Code</a>
+                    <a href="{{ route('wifi.reconnect.form', $packagesParams) }}" class="cp-btn cp-btn-soft">Reconnect Options</a>
                 </div>
 
             @elseif($statusView === 'paid')
@@ -246,18 +269,18 @@
 
                 <div class="cp-actions">
                     <a href="{{ route('wifi.status', array_filter(['phone' => $phone, 'tenant_id' => $tenantId > 0 ? $tenantId : null, 'payment' => $payment->id, 'recheck' => 1], static fn ($value) => $value !== null && $value !== '')) }}" class="cp-btn cp-btn-primary">Recheck Payment</a>
-                    <a href="{{ route('wifi.reconnect.form', $packagesParams) }}" class="cp-btn cp-btn-soft">Use M-Pesa Code</a>
+                    <a href="{{ route('wifi.reconnect.form', $packagesParams) }}" class="cp-btn cp-btn-soft">Reconnect Options</a>
                 </div>
 
             @elseif($statusView === 'activated')
                 <span class="cp-status-pill success">Connected</span>
                 <h2 class="cp-section-title">You are connected to the internet</h2>
-                <p class="cp-card-subtitle">Your package is active. Enjoy browsing.</p>
+                <p class="cp-card-subtitle">Your package is active.</p>
 
                 <div class="cp-facts">
                     <div class="cp-fact">
                         <span>Phone</span>
-                        <span>{{ $payment->phone ?: $phone }}</span>
+                        <span>{{ $displayPhone ?: 'Not captured' }}</span>
                     </div>
                     <div class="cp-fact">
                         <span>Package</span>
@@ -281,7 +304,7 @@
 
                 <div class="cp-countdown" id="countdown">--:--:--</div>
 
-                <a href="https://www.google.com" target="_blank" rel="noopener" class="cp-btn cp-btn-primary cp-btn-block">Continue Browsing</a>
+                <a href="{{ $continueBrowsingUrl }}" target="_blank" rel="noopener" class="cp-btn cp-btn-primary cp-btn-block">Continue Browsing</a>
 
             @elseif($statusView === 'failed')
                 <span class="cp-status-pill error">Payment not completed</span>
@@ -296,7 +319,7 @@
                 <div class="cp-actions">
                     <a href="{{ route('wifi.status', array_filter(['phone' => $phone, 'tenant_id' => $tenantId > 0 ? $tenantId : null, 'payment' => $payment->id, 'recheck' => 1], static fn ($value) => $value !== null && $value !== '')) }}" class="cp-btn cp-btn-outline">I Was Charged, Recheck</a>
                     <a href="{{ route('wifi.packages', $packagesParams) }}" class="cp-btn cp-btn-primary">Try Payment Again</a>
-                    <a href="{{ route('wifi.reconnect.form', $packagesParams) }}" class="cp-btn cp-btn-soft">Reconnect with Code</a>
+                    <a href="{{ route('wifi.reconnect.form', $packagesParams) }}" class="cp-btn cp-btn-soft">Reconnect Options</a>
                 </div>
 
             @else
@@ -315,7 +338,7 @@
                     </div>
                     <div class="cp-fact">
                         <span>Phone</span>
-                        <span>{{ $payment->phone ?: $phone }}</span>
+                        <span>{{ $displayPhone ?: 'Not captured' }}</span>
                     </div>
                     <div class="cp-fact">
                         <span>Package</span>
