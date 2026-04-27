@@ -147,6 +147,11 @@ jobs:
               "$SHARED/storage/logs" \
               "$SHARED/bootstrap/cache"
 
+            if id -u www-data >/dev/null 2>&1; then
+              chown -R www-data:www-data "$SHARED/storage" "$SHARED/bootstrap/cache"
+            fi
+            chmod -R 775 "$SHARED/storage" "$SHARED/bootstrap/cache"
+
             mkdir -p "$RELEASE"
             if [ ! -f "$ARCHIVE" ]; then
               echo "Archive not found at $ARCHIVE" >&2
@@ -173,11 +178,6 @@ jobs:
             php artisan route:cache
             php artisan view:cache
             php artisan event:cache
-
-            if id -u www-data >/dev/null 2>&1; then
-              chown -R www-data:www-data storage bootstrap/cache
-            fi
-            chmod -R 775 storage bootstrap/cache
 
             ln -sfn "$RELEASE" "$CURRENT"
             ln -sfn "$RELEASE/public" "$APP_ROOT/public"

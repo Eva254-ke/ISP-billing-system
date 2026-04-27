@@ -503,6 +503,9 @@ class MikroTikService
         $apiPortReachable = (bool) ($metadata['api_port_reachable'] ?? false);
         $rawError = (string) ($metadata['last_connectivity_error'] ?? '');
         $message = $this->buildConnectivityMessage($errorType, $apiPortReachable, $rawError);
+        $service = (bool) ($router->api_ssl ?? false) ? 'api-ssl' : 'api';
+        $port = (int) ($router->api_port ?: 8728);
+        $host = trim((string) ($router->ip_address ?? ''));
 
         return [
             'status' => (string) ($router->status ?? Router::STATUS_OFFLINE),
@@ -513,6 +516,13 @@ class MikroTikService
             'tcp_probe_message' => $metadata['tcp_probe_message'] ?? null,
             'checked_at' => $metadata['last_connectivity_check_at'] ?? null,
             'message' => $message,
+            'endpoint' => [
+                'host' => $host,
+                'port' => $port,
+                'service' => $service,
+                'ssl' => (bool) ($router->api_ssl ?? false),
+            ],
+            'hints' => $this->buildConnectivityHints($router, $errorType, $apiPortReachable, $rawError),
         ];
     }
 
@@ -877,6 +887,86 @@ class MikroTikService
         }
 
         return "Router is reachable, but MikroTik API query failed: {$error}";
+    }
+
+    private function buildConnectivityHints(Router $router, ?string $errorType, bool $apiPortReachable, string $rawError): array
+    {
+        $host = trim((string) ($router->ip_address ?? ''));
+        $port = (int) ($router->api_port ?: 8728);
+        $usesSsl = (bool) ($router->api_ssl ?? false);
+        $service = $usesSsl ? 'api-ssl' : 'api';
+        $mode = $usesSsl ? 'API-SSL' : 'plain API';
+        $hints = [];
+
+        if ($host !== '' && $port > 0) {
+            $hints[] = "CloudBridge is trying {$host}:{$port} using RouterOS {$mode}. Make sure /ip service {$service} is enabled on that exact port. Firewall allow rules do not change the RouterOS service port.";
+        }
+
+        if ($host !== '' && $this->isPrivateOrReservedIpAddress($host)) {
+            $hints[] = "Saved router IP {$host} is a private or reserved address. This only works if CloudBridge can reach that LAN directly, such as from the same site or through VPN. A public server on DigitalOcean cannot reach {$host} over the open internet.";
+        }
+
+        if ($this->shouldWarnAboutLoopbackRadiusTarget($host)) {
+            $radiusHost = trim((string) config('radius.server_ip', '127.0.0.1'));
+            $hints[] = "RADIUS_SERVER_IP is set to {$radiusHost}. That only works when FreeRADIUS runs on the same host the router can reach directly. For a remote MikroTik, use the reachable public or VPN IP of the RADIUS server instead of loopback.";
+        }
+
+        if ($errorType === 'auth_error') {
+            $username = trim((string) ($router->api_username ?? ''));
+            if ($username !== '') {
+                $hints[] = "CloudBridge is logging in as RouterOS user {$username}. Verify that account exists, the saved password matches, and its group includes the api permission.";
+            }
+        }
+
+        if (in_array($errorType, ['api_timeout', 'tls_error'], true)) {
+            if ($usesSsl) {
+                $hints[] = "CloudBridge is expecting API-SSL on this router. Verify that /ip service api-ssl is enabled on port {$port} and that SSL/TLS is actually configured for RouterOS API access.";
+            } else {
+                $hints[] = "CloudBridge is expecting plain API on this router. If RouterOS is only exposing api-ssl or listening on another port, either enable /ip service api on port {$port} or update the saved router settings.";
+            }
+        }
+
+        if ($errorType === 'network_error' && !$apiPortReachable && $host !== '' && !$this->isPrivateOrReservedIpAddress($host)) {
+            $hints[] = "If this router sits behind NAT, forward TCP {$port} to the RouterOS API service or connect the site to CloudBridge over VPN before testing again.";
+        }
+
+        if ($errorType === 'api_error' && trim($rawError) !== '') {
+            $hints[] = 'The router accepted the TCP connection but rejected the API request. Check the saved username, password, API mode, and any RouterOS address restrictions on the service or user account.';
+        }
+
+        return array_values(array_unique(array_filter($hints, static fn ($hint) => trim((string) $hint) !== '')));
+    }
+
+    private function isPrivateOrReservedIpAddress(string $host): bool
+    {
+        if (!filter_var($host, FILTER_VALIDATE_IP)) {
+            return false;
+        }
+
+        return filter_var(
+            $host,
+            FILTER_VALIDATE_IP,
+            FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE
+        ) === false;
+    }
+
+    private function shouldWarnAboutLoopbackRadiusTarget(string $routerHost): bool
+    {
+        if (!(bool) config('radius.enabled', false)) {
+            return false;
+        }
+
+        $radiusHost = trim((string) config('radius.server_ip', ''));
+        if (!$this->isLoopbackHost($radiusHost)) {
+            return false;
+        }
+
+        return !$this->isLoopbackHost($routerHost);
+    }
+
+    private function isLoopbackHost(string $host): bool
+    {
+        return in_array(strtolower(trim($host)), ['127.0.0.1', 'localhost', '::1'], true);
     }
 
     /**

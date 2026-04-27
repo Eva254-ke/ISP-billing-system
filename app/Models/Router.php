@@ -15,6 +15,7 @@ use Illuminate\Contracts\Encryption\DecryptException;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Collection;
 
 class Router extends Model
 {
@@ -155,6 +156,11 @@ class Router extends Model
         return $query->where('status', self::STATUS_WARNING);
     }
 
+    public function scopeOperational($query)
+    {
+        return $query->whereIn('status', [self::STATUS_ONLINE, self::STATUS_WARNING]);
+    }
+
     public function scopeHealthy($query)
     {
         return $query->where('status', self::STATUS_ONLINE)
@@ -190,6 +196,77 @@ class Router extends Model
         
         return $query->whereBetween('latitude', [$latitude - $latRange, $latitude + $latRange])
             ->whereBetween('longitude', [$longitude - $lngRange, $longitude + $lngRange]);
+    }
+
+    /**
+     * Resolve de-duplicated, ranked router candidates for a tenant.
+     *
+     * Newer records win inside obvious duplicate groups so stale rows do not
+     * keep being auto-selected after credentials, ports, or public IP routing
+     * have been corrected.
+     *
+     * @return Collection<int, self>
+     */
+    public static function selectionCandidatesForTenant(?int $tenantId): Collection
+    {
+        $tenantId = (int) $tenantId;
+        if ($tenantId <= 0) {
+            return collect();
+        }
+
+        $routers = static::query()
+            ->where('tenant_id', $tenantId)
+            ->orderByDesc('created_at')
+            ->orderByDesc('id')
+            ->get();
+
+        return static::rankRoutersForSelection(
+            static::collapseStaleDuplicateRouters($routers)
+        );
+    }
+
+    public static function resolvePreferredForTenant(?int $tenantId, bool $preferOperational = true): ?self
+    {
+        $candidates = static::selectionCandidatesForTenant($tenantId);
+        if ($candidates->isEmpty()) {
+            return null;
+        }
+
+        if ($preferOperational) {
+            $operational = $candidates->filter(fn (self $router): bool => $router->hasOperationalStatus())->values();
+            if ($operational->isNotEmpty()) {
+                return $operational->first();
+            }
+        }
+
+        return $candidates->first();
+    }
+
+    public static function resolvePreferredIdForTenant(?int $tenantId, bool $preferOperational = true): ?int
+    {
+        return static::resolvePreferredForTenant($tenantId, $preferOperational)?->id;
+    }
+
+    public static function resolveCanonicalRecord(?self $router): ?self
+    {
+        if (!$router instanceof self) {
+            return null;
+        }
+
+        $tenantId = (int) ($router->tenant_id ?? 0);
+        if ($tenantId <= 0) {
+            return $router;
+        }
+
+        $targetFingerprint = $router->duplicateSelectionFingerprint();
+
+        foreach (static::selectionCandidatesForTenant($tenantId) as $candidate) {
+            if ($candidate->duplicateSelectionFingerprint() === $targetFingerprint) {
+                return $candidate;
+            }
+        }
+
+        return $router;
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -257,6 +334,119 @@ class Router extends Model
         }
         
         return 'healthy';
+    }
+
+    public function hasOperationalStatus(): bool
+    {
+        return in_array((string) $this->status, [self::STATUS_ONLINE, self::STATUS_WARNING], true);
+    }
+
+    private static function collapseStaleDuplicateRouters(Collection $routers): Collection
+    {
+        $canonical = [];
+
+        foreach (static::sortRoutersByFreshness($routers) as $router) {
+            $key = $router->duplicateSelectionFingerprint();
+
+            if (!array_key_exists($key, $canonical)) {
+                $canonical[$key] = $router;
+            }
+        }
+
+        return collect(array_values($canonical));
+    }
+
+    private static function rankRoutersForSelection(Collection $routers): Collection
+    {
+        return $routers
+            ->sort(fn (self $left, self $right): int => static::compareSelectionPriority($left, $right))
+            ->values();
+    }
+
+    private static function sortRoutersByFreshness(Collection $routers): Collection
+    {
+        return $routers
+            ->sort(fn (self $left, self $right): int => static::compareFreshness($left, $right))
+            ->values();
+    }
+
+    private static function compareSelectionPriority(self $left, self $right): int
+    {
+        $status = static::selectionStatusRank($left) <=> static::selectionStatusRank($right);
+        if ($status !== 0) {
+            return $status;
+        }
+
+        $lastSeen = static::compareNullableTimestamps($left->last_seen_at?->getTimestamp(), $right->last_seen_at?->getTimestamp());
+        if ($lastSeen !== 0) {
+            return $lastSeen;
+        }
+
+        return static::compareFreshness($left, $right);
+    }
+
+    private static function compareFreshness(self $left, self $right): int
+    {
+        $created = static::compareNullableTimestamps($left->created_at?->getTimestamp(), $right->created_at?->getTimestamp());
+        if ($created !== 0) {
+            return $created;
+        }
+
+        return (int) $right->id <=> (int) $left->id;
+    }
+
+    private static function compareNullableTimestamps(?int $left, ?int $right): int
+    {
+        return ($right ?? 0) <=> ($left ?? 0);
+    }
+
+    private static function selectionStatusRank(self $router): int
+    {
+        return match ((string) $router->status) {
+            self::STATUS_ONLINE => 0,
+            self::STATUS_WARNING => 1,
+            self::STATUS_OFFLINE => 2,
+            self::STATUS_ERROR => 3,
+            default => 4,
+        };
+    }
+
+    private function duplicateSelectionFingerprint(): string
+    {
+        $serial = trim((string) ($this->serial_number ?? ''));
+        if ($serial !== '') {
+            return 'serial:' . strtolower($serial);
+        }
+
+        $nasId = trim((string) ($this->radius_nas_id ?? ''));
+        if ($nasId !== '') {
+            return 'nas:' . strtolower($nasId);
+        }
+
+        $ipAddress = strtolower(trim((string) ($this->ip_address ?? '')));
+        if ($ipAddress !== '' && $this->isPublicIpAddress($ipAddress)) {
+            return 'public-ip:' . $ipAddress;
+        }
+
+        return sprintf(
+            'endpoint:%s:%d:%d',
+            $ipAddress,
+            (int) ($this->api_port ?? 8728),
+            (bool) ($this->api_ssl ?? false) ? 1 : 0
+        );
+    }
+
+    private function isPublicIpAddress(string $value): bool
+    {
+        if (filter_var($value, FILTER_VALIDATE_IP) === false) {
+            return false;
+        }
+
+        return filter_var(
+            $value,
+            FILTER_VALIDATE_IP,
+            FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE
+        ) !== false;
     }
 
     public function getCaptivePortalUrlAttribute(): string

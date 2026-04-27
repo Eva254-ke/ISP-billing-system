@@ -655,9 +655,11 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
                 return null;
             }
 
-            return Router::query()
+            return Router::resolveCanonicalRecord(
+                Router::query()
                 ->where('tenant_id', $tenant->id)
-                ->find($routerId);
+                ->find($routerId)
+            );
         };
 
         $collectRouterProfiles = function (Router $router, MikroTikService $mikroTikService): array {
@@ -766,15 +768,7 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
                 return $tenantScopeError();
             }
 
-            $routers = Router::query()
-                ->where('tenant_id', $tenant->id)
-                ->orderByRaw(
-                    "CASE WHEN status = ? THEN 0 WHEN status = ? THEN 1 ELSE 2 END",
-                    [Router::STATUS_ONLINE, Router::STATUS_WARNING]
-                )
-                ->orderBy('name')
-                ->orderBy('id')
-                ->get();
+            $routers = Router::selectionCandidatesForTenant($tenant->id);
 
             $routerRows = $routers->map(fn (Router $router) => [
                 'id' => $router->id,

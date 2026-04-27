@@ -2319,15 +2319,7 @@ class CaptivePortalController extends Controller
 
     private function resolveRouterIdForPayment(Payment $payment): ?int
     {
-        return (int) (\App\Models\Router::query()
-            ->where('tenant_id', $payment->tenant_id)
-            ->orderByRaw(
-                "CASE WHEN status = ? THEN 0 WHEN status = ? THEN 1 ELSE 2 END",
-                [\App\Models\Router::STATUS_ONLINE, \App\Models\Router::STATUS_WARNING]
-            )
-            ->orderByDesc('last_seen_at')
-            ->orderBy('id')
-            ->value('id') ?? 0) ?: null;
+        return \App\Models\Router::resolvePreferredIdForTenant((int) $payment->tenant_id);
     }
 
     private function generateUsername(string $phone): string
@@ -2772,30 +2764,7 @@ class CaptivePortalController extends Controller
 
     private function resolvePreferredHotspotRouter(?int $tenantId = null): ?Router
     {
-        if (($tenantId ?? 0) <= 0) {
-            return null;
-        }
-
-        $router = Router::query()
-            ->where('tenant_id', $tenantId)
-            ->whereIn('status', [Router::STATUS_ONLINE, Router::STATUS_WARNING])
-            ->orderByRaw(
-                "CASE WHEN status = ? THEN 0 WHEN status = ? THEN 1 ELSE 2 END",
-                [Router::STATUS_ONLINE, Router::STATUS_WARNING]
-            )
-            ->orderByDesc('last_seen_at')
-            ->orderBy('id')
-            ->first();
-
-        if ($router) {
-            return $router;
-        }
-
-        return Router::query()
-            ->where('tenant_id', $tenantId)
-            ->orderByDesc('last_seen_at')
-            ->orderBy('id')
-            ->first();
+        return Router::resolvePreferredForTenant($tenantId);
     }
 
     /**

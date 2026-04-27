@@ -1176,10 +1176,24 @@ async function testMikrotikConnection() {
             `,
         });
     } catch (error) {
+        const diagnostics = error?.payload?.diagnostics || null;
+        const detailLines = [
+            diagnostics?.message || error.message || 'Unable to reach tenant router',
+            diagnostics?.endpoint?.host && diagnostics?.endpoint?.port
+                ? `Configured Endpoint: ${diagnostics.endpoint.host}:${diagnostics.endpoint.port} (${diagnostics.endpoint.service || 'api'})`
+                : null,
+            ...(Array.isArray(diagnostics?.hints)
+                ? diagnostics.hints.map((hint) => `Hint: ${hint}`)
+                : []),
+            diagnostics?.error ? `Raw Error: ${diagnostics.error}` : null,
+            diagnostics?.error_type ? `Type: ${diagnostics.error_type}` : null,
+            diagnostics?.tcp_probe_message ? `TCP Probe: ${diagnostics.tcp_probe_message}` : null,
+        ].filter(Boolean);
+
         Swal.fire({
             icon: 'error',
             title: 'Connection Failed',
-            text: error.message || 'Unable to reach tenant router',
+            text: detailLines.join('\n') || 'Unable to reach tenant router',
         });
     }
 }

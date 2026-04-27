@@ -305,35 +305,26 @@ class SessionManager
 
     private function resolveActivationRouter(UserSession $session): ?Router
     {
-        $router = $session->router;
-        if ($router) {
-            return $router;
+        $originalRouterId = (int) ($session->router_id ?? 0);
+        $boundRouter = Router::resolveCanonicalRecord($session->router);
+
+        if ($boundRouter && $boundRouter->hasOperationalStatus()) {
+            if ($originalRouterId !== (int) $boundRouter->id) {
+                $session->update(['router_id' => $boundRouter->id]);
+                $session->refresh();
+            }
+
+            return $boundRouter;
         }
 
-        $fallback = Router::query()
-            ->where('tenant_id', $session->tenant_id)
-            ->whereIn('status', [Router::STATUS_ONLINE, Router::STATUS_WARNING])
-            ->orderByRaw(
-                "CASE WHEN status = ? THEN 0 WHEN status = ? THEN 1 ELSE 2 END",
-                [Router::STATUS_ONLINE, Router::STATUS_WARNING]
-            )
-            ->orderByDesc('last_seen_at')
-            ->orderBy('id')
-            ->first();
-
+        $fallback = Router::resolvePreferredForTenant((int) $session->tenant_id);
         if (!$fallback) {
-            $fallback = Router::query()
-                ->where('tenant_id', $session->tenant_id)
-                ->orderByDesc('last_seen_at')
-                ->orderBy('id')
-                ->first();
+            $fallback = $boundRouter;
         }
 
         if (!$fallback) {
             return null;
         }
-
-        $originalRouterId = (int) ($session->router_id ?? 0);
 
         if ($originalRouterId !== (int) $fallback->id) {
             $session->update(['router_id' => $fallback->id]);
@@ -343,6 +334,7 @@ class SessionManager
         Log::channel('mikrotik')->warning('Resolved fallback router for session activation', [
             'session_id' => $session->id,
             'original_router_id' => $originalRouterId,
+            'bound_router_id' => $boundRouter?->id,
             'resolved_router_id' => $fallback->id,
             'resolved_router_status' => $fallback->status,
         ]);

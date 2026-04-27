@@ -418,7 +418,14 @@ document.addEventListener('DOMContentLoaded', function () {
         } catch (error) {
             const diagnostics = error?.payload?.diagnostics || null;
             const detailLines = [
-                diagnostics?.error ? `Error: ${diagnostics.error}` : null,
+                diagnostics?.message || error?.message || null,
+                diagnostics?.endpoint?.host && diagnostics?.endpoint?.port
+                    ? `Configured Endpoint: ${diagnostics.endpoint.host}:${diagnostics.endpoint.port} (${diagnostics.endpoint.service || 'api'})`
+                    : null,
+                ...(Array.isArray(diagnostics?.hints)
+                    ? diagnostics.hints.map((hint) => `Hint: ${hint}`)
+                    : []),
+                diagnostics?.error ? `Raw Error: ${diagnostics.error}` : null,
                 diagnostics?.error_type ? `Type: ${diagnostics.error_type}` : null,
                 diagnostics?.tcp_probe_message ? `TCP Probe: ${diagnostics.tcp_probe_message}` : null,
             ].filter(Boolean);
