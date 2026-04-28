@@ -221,7 +221,7 @@
                                 type="tel"
                                 name="phone"
                                 placeholder="0712345678 or 0112345678"
-                                value="{{ old('phone', $phone ?? '') }}"
+                                value="{{ old('phone', $routePhone ?? '') }}"
                                 required
                                 pattern="(?:0[17]\d{8}|(?:\+?254)[17]\d{8})"
                                 autocomplete="tel"

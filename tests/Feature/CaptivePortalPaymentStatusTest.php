@@ -71,6 +71,21 @@ class CaptivePortalPaymentStatusTest extends TestCase
         $response->assertSee('value="' . $tenant->id . '"', false);
     }
 
+    public function test_packages_phone_input_does_not_prefill_with_non_phone_session_value(): void
+    {
+        $tenant = $this->createTenant();
+        $this->createPackage($tenant);
+
+        $response = $this->withSession([
+            'captive_phone' => 'QGH45XYZ',
+        ])->get(route('wifi.packages', ['tenant_id' => $tenant->id]));
+
+        $response->assertOk();
+        $response->assertSee('placeholder="0712345678 or 0112345678"', false);
+        $response->assertSee('name="phone"', false);
+        $response->assertDontSee('value="QGH45XYZ"', false);
+    }
+
     public function test_packages_redirects_to_status_for_recent_captive_payment_in_session(): void
     {
         $tenant = $this->createTenant();
