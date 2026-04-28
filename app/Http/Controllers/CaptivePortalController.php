@@ -1019,9 +1019,11 @@ class CaptivePortalController extends Controller
 
         $payment = $payment->fresh() ?? $payment;
 
+        $forceRadiusReauthorization = $this->requestHasHotspotLoginChallenge($request, (int) $payment->tenant_id);
+
         if (in_array($payment->status, ['completed', 'confirmed'], true)) {
             try {
-                $this->activatePaidAccess($payment);
+                $this->activatePaidAccess($payment, $forceRadiusReauthorization);
                 
             } catch (\Exception $e) {
                 Log::error('MikroTik activation failed', [
@@ -1449,6 +1451,7 @@ class CaptivePortalController extends Controller
     {
         $phone = $this->normalizePhoneForStorage((string) $phone) ?? (string) $phone;
         $tenantId = $this->resolveTenantId($request);
+        $clientContext = $this->resolveClientContext($request);
         $paymentQuery = $this->buildStatusPaymentQuery($phone, $tenantId);
         $requestedPayment = $this->resolveRequestedStatusPayment($request, $phone, $tenantId);
 
@@ -1482,9 +1485,11 @@ class CaptivePortalController extends Controller
         $this->reconcileDarajaPaymentIfNeeded($payment, $request->boolean('recheck'));
         $payment = $payment->fresh();
 
+        $forceRadiusReauthorization = $this->requestHasHotspotLoginChallenge($request, (int) $payment->tenant_id);
+
         if (in_array($payment->status, ['completed', 'confirmed'], true)) {
             try {
-                $this->activatePaidAccess($payment);
+                $this->activatePaidAccess($payment, $forceRadiusReauthorization);
             } catch (\Throwable $e) {
                 Log::error('Automatic activation failed during status poll', [
                     'payment_id' => $payment->id,
@@ -1493,7 +1498,11 @@ class CaptivePortalController extends Controller
             }
         }
 
-        $session = $this->resolveConnectedSession($payment);
+        $session = $this->resolveConnectedSession(
+            $payment,
+            $clientContext['mac'] ?? null,
+            $clientContext['ip'] ?? null
+        );
         $latestSession = $session
             ?? UserSession::query()->where('payment_id', $payment->id)->latest('id')->first();
 
@@ -2040,17 +2049,9 @@ class CaptivePortalController extends Controller
         return in_array($resultCode, [1, 2002], true);
     }
 
-    private function activatePaidAccess(Payment $payment): ?UserSession
+    private function activatePaidAccess(Payment $payment, bool $forceRadiusReauthorization = false): ?UserSession
     {
         $reusedExtensionSession = $this->resolveReusableExtensionSession($payment);
-        $activeSession = UserSession::where('payment_id', $payment->id)
-            ->active()
-            ->first();
-
-        if ($activeSession) {
-            return $activeSession;
-        }
-
         $routerId = $this->resolveRouterIdForPayment($payment);
         if (!$routerId) {
             Log::warning('Access activation skipped: no router found for tenant', [
@@ -2086,6 +2087,39 @@ class CaptivePortalController extends Controller
         $radiusPureFlow = $identityResolver->shouldUsePureRadiusFlow($identity);
         $username = (string) $identity['username'];
         $password = (string) $identity['password'];
+        $activeSession = UserSession::query()
+            ->where('payment_id', $payment->id)
+            ->active()
+            ->orderByDesc('last_activity_at')
+            ->orderByDesc('id')
+            ->first();
+        $shouldForceRadiusReauthorization = $forceRadiusReauthorization
+            && $radiusEnabled
+            && ($radiusPureFlow || $identityResolver->shouldBypassRouterActivation($identity));
+
+        if ($activeSession && !$shouldForceRadiusReauthorization) {
+            $storedActiveUsername = $this->resolveStoredRadiusUsername($activeSession);
+            $activeIdentityMatches = $storedActiveUsername === '' || $storedActiveUsername === $username;
+            $activeContextMatches = !$this->hasClientContext($clientMac, $clientIp)
+                || $this->sessionMatchesClientContext($activeSession, $clientMac, $clientIp);
+
+            if ($activeIdentityMatches && $activeContextMatches) {
+                $verifiedActiveSession = $this->resolveVerifiedActiveSession(
+                    $activeSession,
+                    $payment,
+                    allowRouterFallback: false
+                );
+
+                if ($verifiedActiveSession) {
+                    return $verifiedActiveSession;
+                }
+            }
+        }
+
+        if ($reusedExtensionSession === null && $activeSession !== null) {
+            $existingSession = $activeSession;
+        }
+
         $authorizationWindowSession = $reusedExtensionSession ?? $existingSession;
         $defaultExpiresAt = $this->resolvePaymentAccessExpiresAt($payment, $authorizationWindowSession)
             ?? now()->copy()->addMinutes($durationMinutes);
@@ -2289,7 +2323,7 @@ class CaptivePortalController extends Controller
         if ((int) ($session->grace_period_seconds ?? -1) !== $gracePeriodSeconds) {
             $sessionUpdates['grace_period_seconds'] = $gracePeriodSeconds;
         }
-        if ($session->status !== 'active') {
+        if ($session->status !== 'active' || $shouldForceRadiusReauthorization) {
             // Keep session credentials aligned with RADIUS provisioning username.
             if ((string) ($session->username ?? '') !== $username) {
                 $sessionUpdates['username'] = $username;
@@ -2595,11 +2629,17 @@ class CaptivePortalController extends Controller
         $macInput = '';
         foreach ([
             (string) $request->input('mac', ''),
+            (string) $request->input('client-mac', ''),
             (string) $request->input('mac-address', ''),
+            (string) $request->input('mac_address', ''),
+            (string) $request->input('macAddress', ''),
             (string) $request->input('client_mac', ''),
             (string) $request->input('clientMac', ''),
             (string) $request->query('mac', ''),
+            (string) $request->query('client-mac', ''),
             (string) $request->query('mac-address', ''),
+            (string) $request->query('mac_address', ''),
+            (string) $request->query('macAddress', ''),
             (string) $request->query('client_mac', ''),
             (string) $request->query('clientMac', ''),
             (string) session('captive_client_mac', ''),
@@ -2613,11 +2653,17 @@ class CaptivePortalController extends Controller
         $ipInput = '';
         foreach ([
             (string) $request->input('ip', ''),
+            (string) $request->input('client-ip', ''),
             (string) $request->input('ip-address', ''),
+            (string) $request->input('ip_address', ''),
+            (string) $request->input('ipAddress', ''),
             (string) $request->input('client_ip', ''),
             (string) $request->input('clientIp', ''),
             (string) $request->query('ip', ''),
+            (string) $request->query('client-ip', ''),
             (string) $request->query('ip-address', ''),
+            (string) $request->query('ip_address', ''),
+            (string) $request->query('ipAddress', ''),
             (string) $request->query('client_ip', ''),
             (string) $request->query('clientIp', ''),
             (string) session('captive_client_ip', ''),
@@ -2769,6 +2815,26 @@ class CaptivePortalController extends Controller
         return array_intersect_key($context !== [] ? $context : $stored, array_flip(self::HOTSPOT_CONTEXT_KEYS));
     }
 
+    private function requestHasHotspotLoginChallenge(Request $request, ?int $tenantId = null): bool
+    {
+        $router = $this->resolvePreferredHotspotRouter($tenantId);
+
+        if ($this->resolveHotspotLoginUrl([
+            (string) $request->input('link-login-only', ''),
+            (string) $request->input('link_login_only', ''),
+            (string) $request->query('link-login-only', ''),
+            (string) $request->query('link_login_only', ''),
+            (string) $request->input('link-login', ''),
+            (string) $request->input('link_login', ''),
+            (string) $request->query('link-login', ''),
+            (string) $request->query('link_login', ''),
+        ], $router) !== null) {
+            return true;
+        }
+
+        return $this->resolveHotspotLoginUrlFromReferer($request, $router) !== null;
+    }
+
     /**
      * @param  array<string, mixed>  $hotspotContext
      * @return array<string, string>
@@ -2831,17 +2897,19 @@ class CaptivePortalController extends Controller
         $paymentHotspot = is_array($paymentMetadata['hotspot_context'] ?? null) ? $paymentMetadata['hotspot_context'] : [];
         $router = $this->resolvePreferredHotspotRouter((int) $payment->tenant_id);
 
-        $context = array_merge($stored, $paymentHotspot);
+        $context = array_merge($paymentHotspot, $stored);
         $context['link_login_only'] = $this->resolveHotspotLoginUrl([
-            (string) ($paymentHotspot['link_login_only'] ?? ''),
             (string) ($stored['link_login_only'] ?? ''),
-            (string) ($paymentHotspot['link_login'] ?? ''),
             (string) ($stored['link_login'] ?? ''),
+            (string) ($paymentHotspot['link_login_only'] ?? ''),
+            (string) ($paymentHotspot['link_login'] ?? ''),
         ], $router) ?? $this->resolveRouterLoginFallbackUrl($router);
 
         $context['link_login'] = $this->resolveHotspotLoginUrl([
-            (string) ($paymentHotspot['link_login'] ?? ''),
             (string) ($stored['link_login'] ?? ''),
+            (string) ($stored['link_login_only'] ?? ''),
+            (string) ($paymentHotspot['link_login'] ?? ''),
+            (string) ($paymentHotspot['link_login_only'] ?? ''),
         ], $router) ?? ($context['link_login_only'] ?? null);
 
         $context = $this->buildHotspotContextMeta($context);
@@ -3651,14 +3719,26 @@ class CaptivePortalController extends Controller
         return $session->fresh() ?? $session;
     }
 
-    private function resolveConnectedSession(Payment $payment): ?UserSession
+    private function resolveConnectedSession(
+        Payment $payment,
+        ?string $clientMac = null,
+        ?string $clientIp = null
+    ): ?UserSession
     {
-        $candidateSession = UserSession::query()
+        $candidateSessions = UserSession::query()
             ->where('payment_id', $payment->id)
             ->active()
-            ->first();
+            ->orderByDesc('last_activity_at')
+            ->orderByDesc('id')
+            ->get();
 
-        if ($candidateSession) {
+        foreach ($candidateSessions as $candidateSession) {
+            if ($this->hasClientContext($clientMac, $clientIp)
+                && !$this->sessionMatchesClientContext($candidateSession, $clientMac, $clientIp)
+            ) {
+                continue;
+            }
+
             $verifiedSession = $this->resolveVerifiedActiveSession($candidateSession, $payment, allowRouterFallback: false);
             if ($verifiedSession) {
                 return $verifiedSession;
@@ -3669,10 +3749,21 @@ class CaptivePortalController extends Controller
             return null;
         }
 
-        $session = UserSession::query()
+        $sessionCandidates = UserSession::query()
             ->where('payment_id', $payment->id)
-            ->latest('id')
-            ->first();
+            ->orderByDesc('last_activity_at')
+            ->orderByDesc('id')
+            ->get();
+
+        $session = $this->hasClientContext($clientMac, $clientIp)
+            ? $sessionCandidates->first(
+                fn (UserSession $candidate): bool => $this->sessionMatchesClientContext($candidate, $clientMac, $clientIp)
+            )
+            : null;
+
+        if (!$session instanceof UserSession) {
+            $session = $sessionCandidates->first();
+        }
 
         if (!$session) {
             return null;

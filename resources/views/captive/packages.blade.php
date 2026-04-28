@@ -220,7 +220,7 @@
                                 id="cpPhone"
                                 type="tel"
                                 name="phone"
-                                placeholder="0712345678 or 0112345678"
+                                placeholder="Safaricom number"
                                 value="{{ old('phone', $routePhone ?? '') }}"
                                 required
                                 pattern="(?:0[17]\d{8}|(?:\+?254)[17]\d{8})"
