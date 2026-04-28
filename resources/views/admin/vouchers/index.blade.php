@@ -353,7 +353,7 @@
                     </div>
                     <div class="alert alert-info">
                         <i class="fas fa-info-circle me-2"></i>
-                        <strong>Preview:</strong> Codes will look like: <code>CB-WIFI-A7K2P9</code>
+                        <strong>Preview:</strong> Codes will look like: <code>CB-WIFI-123456</code>
                     </div>
                 </form>
             </div>

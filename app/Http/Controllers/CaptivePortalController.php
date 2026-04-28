@@ -69,6 +69,7 @@ class CaptivePortalController extends Controller
                 'activeSession' => null,
                 'phone' => $phone,
                 'tenant' => null,
+                'voucherPrefix' => 'CB-WIFI',
                 'clientMac' => $clientMac,
                 'clientIp' => $clientIp,
                 'hotspotContext' => $hotspotContext,
@@ -79,7 +80,9 @@ class CaptivePortalController extends Controller
         session(['captive_tenant_id' => $tenant->id]);
 
         if ($showReconnectScreen) {
-            return view('captive.reconnect', compact('phone', 'tenant', 'clientMac', 'clientIp', 'hotspotContext'));
+            $voucherPrefix = $this->resolveReconnectVoucherPrefix($tenant);
+
+            return view('captive.reconnect', compact('phone', 'tenant', 'voucherPrefix', 'clientMac', 'clientIp', 'hotspotContext'));
         }
         
         $activeSession = $this->resolvePackagesActiveSession(
@@ -1024,6 +1027,7 @@ class CaptivePortalController extends Controller
         if ($request->filled('voucher_code')) {
             $request->validate([
                 'voucher_code' => ['required', 'string', 'max:64'],
+                'voucher_prefix' => ['nullable', 'string', 'max:32'],
             ]);
 
             $phone = $this->resolveContextualPortalPhone(
@@ -1032,29 +1036,13 @@ class CaptivePortalController extends Controller
                 clientMac: $clientContext['mac'] ?? null,
                 clientIp: $clientContext['ip'] ?? null
             );
-            $voucherInput = strtoupper(trim((string) $request->voucher_code));
-            $codeCandidate = str_contains($voucherInput, '-')
-                ? strtoupper((string) strrchr($voucherInput, '-'))
-                : $voucherInput;
-            $codeCandidate = ltrim($codeCandidate, '-');
-
-            $voucher = Voucher::query()
-                ->when($tenantId > 0, fn ($query) => $query->where('tenant_id', $tenantId))
-                ->where('status', Voucher::STATUS_UNUSED)
-                ->where(function ($query) {
-                    $query->whereNull('valid_from')
-                        ->orWhere('valid_from', '<=', now());
-                })
-                ->where(function ($query) {
-                    $query->whereNull('valid_until')
-                        ->orWhere('valid_until', '>', now());
-                })
-                ->where(function ($query) use ($voucherInput, $codeCandidate) {
-                    $query->whereRaw('UPPER(code) = ?', [$voucherInput])
-                        ->orWhereRaw('UPPER(code) = ?', [$codeCandidate]);
-                })
-                ->with('package')
-                ->first();
+            $voucherInput = strtoupper(preg_replace('/\s+/', '', trim((string) $request->voucher_code)) ?? '');
+            $voucherPrefix = Voucher::normalizePrefix((string) $request->input('voucher_prefix', ''));
+            $voucher = $this->findRedeemableVoucher(
+                voucherInput: $voucherInput,
+                tenantId: $tenantId,
+                expectedPrefix: $voucherPrefix
+            );
 
             if (!$voucher || !$voucher->package || !$voucher->package->is_active) {
                 return redirect()->back()
@@ -1097,7 +1085,7 @@ class CaptivePortalController extends Controller
 
             try {
                 $payment = DB::transaction(function () use ($voucher, $phone, $routerId, $clientContextMeta, $hotspotContextMeta) {
-                    $paymentPhone = $phone ?? ('access-voucher-' . strtoupper(uniqid()));
+                    $paymentPhone = $phone ?? $this->buildAnonymousVoucherPhone();
 
                     $payment = Payment::create([
                         'tenant_id' => $voucher->tenant_id,
@@ -3048,6 +3036,113 @@ class CaptivePortalController extends Controller
         }
 
         return 'access-' . $payment->id;
+    }
+
+    private function resolveReconnectVoucherPrefix(?Tenant $tenant): string
+    {
+        if (!$tenant) {
+            return 'CB-WIFI';
+        }
+
+        $prefix = Voucher::query()
+            ->where('tenant_id', $tenant->id)
+            ->where('status', Voucher::STATUS_UNUSED)
+            ->where(function ($query) {
+                $query->whereNull('valid_from')
+                    ->orWhere('valid_from', '<=', now());
+            })
+            ->where(function ($query) {
+                $query->whereNull('valid_until')
+                    ->orWhere('valid_until', '>', now());
+            })
+            ->whereNotNull('prefix')
+            ->orderByDesc('updated_at')
+            ->orderByDesc('id')
+            ->value('prefix');
+
+        return Voucher::normalizePrefix((string) $prefix) ?? 'CB-WIFI';
+    }
+
+    private function findRedeemableVoucher(string $voucherInput, int $tenantId, ?string $expectedPrefix = null): ?Voucher
+    {
+        if ($voucherInput === '') {
+            return null;
+        }
+
+        $codeCandidate = ltrim($voucherInput, '-');
+        $resolvedPrefix = $expectedPrefix;
+        $delimiterPosition = strrpos($voucherInput, '-');
+
+        if ($delimiterPosition !== false) {
+            $resolvedPrefix = Voucher::normalizePrefix(substr($voucherInput, 0, $delimiterPosition));
+            $codeCandidate = ltrim(substr($voucherInput, $delimiterPosition + 1), '-');
+        }
+
+        return $this->runRedeemableVoucherLookup(
+            tenantId: $tenantId,
+            voucherInput: $voucherInput,
+            codeCandidate: $codeCandidate,
+            prefix: $resolvedPrefix
+        );
+    }
+
+    private function runRedeemableVoucherLookup(int $tenantId, string $voucherInput, string $codeCandidate, ?string $prefix = null): ?Voucher
+    {
+        $voucherInput = strtoupper(trim($voucherInput));
+        $codeCandidate = strtoupper(trim($codeCandidate));
+        $fullCandidate = ($prefix !== null && $codeCandidate !== '') ? ($prefix . '-' . $codeCandidate) : null;
+        $codeCandidates = array_values(array_unique(array_filter([
+            $voucherInput,
+            $codeCandidate,
+            $fullCandidate,
+        ], static fn ($value) => is_string($value) && trim($value) !== '')));
+
+        if ($codeCandidates === []) {
+            return null;
+        }
+
+        $vouchers = Voucher::query()
+            ->when($tenantId > 0, fn ($query) => $query->where('tenant_id', $tenantId))
+            ->where('status', Voucher::STATUS_UNUSED)
+            ->where(function ($query) {
+                $query->whereNull('valid_from')
+                    ->orWhere('valid_from', '<=', now());
+            })
+            ->where(function ($query) {
+                $query->whereNull('valid_until')
+                    ->orWhere('valid_until', '>', now());
+            })
+            ->whereIn(DB::raw('UPPER(code)'), $codeCandidates)
+            ->with('package')
+            ->get()
+            ->filter(fn (Voucher $voucher) => (bool) ($voucher->package?->is_active))
+            ->sortBy(function (Voucher $voucher) use ($voucherInput, $codeCandidate, $fullCandidate, $prefix) {
+                $storedCode = strtoupper(trim((string) $voucher->code));
+                $storedPrefix = Voucher::normalizePrefix((string) $voucher->prefix);
+
+                return match (true) {
+                    $storedCode === $voucherInput => 0,
+                    $fullCandidate !== null && $storedCode === $fullCandidate => 1,
+                    $prefix !== null && $storedPrefix === $prefix && $storedCode === $codeCandidate => 2,
+                    $storedCode === $codeCandidate => 3,
+                    default => 10,
+                };
+            })
+            ->first();
+
+        return $vouchers instanceof Voucher ? $vouchers : null;
+    }
+
+    private function buildAnonymousVoucherPhone(): string
+    {
+        $alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+        $token = 'VCH';
+
+        for ($i = 0; $i < 8; $i++) {
+            $token .= $alphabet[random_int(0, strlen($alphabet) - 1)];
+        }
+
+        return $token;
     }
 
     private function hasClientContext(?string $clientMac = null, ?string $clientIp = null): bool

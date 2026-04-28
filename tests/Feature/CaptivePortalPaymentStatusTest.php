@@ -983,9 +983,111 @@ class CaptivePortalPaymentStatusTest extends TestCase
         ]));
         $response->assertSessionHas('success');
 
-        $this->assertStringStartsWith('access-voucher-', (string) $payment->phone);
+        $this->assertMatchesRegularExpression('/^VCH[A-Z]{8}$/', (string) $payment->phone);
+        $this->assertLessThanOrEqual(15, strlen((string) $payment->phone));
         $this->assertSame(Voucher::STATUS_USED, (string) $voucher->status);
         $this->assertNull($voucher->used_by_phone);
+    }
+
+    public function test_voucher_redemption_accepts_suffix_only_when_prefix_is_supplied(): void
+    {
+        config()->set('radius.enabled', true);
+        config()->set('radius.pure_radius', true);
+
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant);
+        $router = $this->createRouter($tenant, [
+            'status' => 'online',
+            'last_seen_at' => now(),
+        ]);
+        $voucher = $this->createVoucher($tenant, $package, [
+            'code' => '123456',
+            'prefix' => 'CB-WIFI',
+        ]);
+
+        $sessionManager = Mockery::mock(SessionManager::class);
+        $sessionManager->shouldNotReceive('activateSession');
+        $this->app->instance(SessionManager::class, $sessionManager);
+
+        $radiusProvisioning = Mockery::mock(FreeRadiusProvisioningService::class);
+        $radiusProvisioning->shouldReceive('provisionUser')->once();
+        $this->app->instance(FreeRadiusProvisioningService::class, $radiusProvisioning);
+
+        $response = $this->post(route('wifi.reconnect', ['tenant_id' => $tenant->id]), [
+            'tenant_id' => $tenant->id,
+            'voucher_prefix' => 'CB-WIFI',
+            'voucher_code' => '123456',
+            'link-login-only' => 'http://' . $router->ip_address . '/login',
+        ]);
+
+        $payment = Payment::query()
+            ->where('payment_channel', Payment::CHANNEL_VOUCHER)
+            ->latest('id')
+            ->firstOrFail();
+
+        $voucher->refresh();
+
+        $response->assertRedirect(route('wifi.status', [
+            'phone' => 'access-' . $payment->id,
+            'tenant_id' => $tenant->id,
+            'payment' => $payment->id,
+            'link-login-only' => 'http://' . $router->ip_address . '/login',
+            'link-login' => 'http://' . $router->ip_address . '/login',
+        ]));
+        $response->assertSessionHas('success');
+        $this->assertSame(Voucher::STATUS_USED, (string) $voucher->status);
+        $this->assertSame('CB-WIFI-123456', (string) data_get($payment->metadata, 'voucher_code'));
+    }
+
+    public function test_voucher_redemption_accepts_suffix_only_for_legacy_prefixed_code_storage(): void
+    {
+        config()->set('radius.enabled', true);
+        config()->set('radius.pure_radius', true);
+
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant);
+        $router = $this->createRouter($tenant, [
+            'status' => 'online',
+            'last_seen_at' => now(),
+        ]);
+        $voucher = $this->createVoucher($tenant, $package, [
+            'code' => 'CB-WIFI-RJWQHM',
+            'prefix' => 'CB-WIFI-',
+        ]);
+
+        $sessionManager = Mockery::mock(SessionManager::class);
+        $sessionManager->shouldNotReceive('activateSession');
+        $this->app->instance(SessionManager::class, $sessionManager);
+
+        $radiusProvisioning = Mockery::mock(FreeRadiusProvisioningService::class);
+        $radiusProvisioning->shouldReceive('provisionUser')->once();
+        $this->app->instance(FreeRadiusProvisioningService::class, $radiusProvisioning);
+
+        $response = $this->post(route('wifi.reconnect', ['tenant_id' => $tenant->id]), [
+            'tenant_id' => $tenant->id,
+            'voucher_prefix' => 'CB-WIFI',
+            'voucher_code' => 'RJWQHM',
+            'link-login-only' => 'http://' . $router->ip_address . '/login',
+        ]);
+
+        $payment = Payment::query()
+            ->where('payment_channel', Payment::CHANNEL_VOUCHER)
+            ->latest('id')
+            ->firstOrFail();
+
+        $voucher->refresh();
+
+        $response->assertRedirect(route('wifi.status', [
+            'phone' => 'access-' . $payment->id,
+            'tenant_id' => $tenant->id,
+            'payment' => $payment->id,
+            'link-login-only' => 'http://' . $router->ip_address . '/login',
+            'link-login' => 'http://' . $router->ip_address . '/login',
+        ]));
+        $response->assertSessionHas('success');
+        $this->assertSame(Voucher::STATUS_USED, (string) $voucher->status);
+        $this->assertSame('CB-WIFI-RJWQHM', (string) $voucher->code_display);
+        $this->assertSame('CB-WIFI-RJWQHM', (string) data_get($payment->metadata, 'voucher_code'));
     }
 
     public function test_voucher_redemption_is_not_blocked_by_another_devices_phone_only_session(): void

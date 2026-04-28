@@ -66,8 +66,28 @@ class VoucherPresentationTest extends TestCase
     {
         $code = Voucher::generateCode(6);
 
-        $this->assertMatchesRegularExpression('/^[A-HJ-NP-Z2-9]{6}$/', $code);
+        $this->assertMatchesRegularExpression('/^\d{6}$/', $code);
         $this->assertStringNotContainsString('-', $code);
+    }
+
+    public function test_reconnect_view_shows_prefix_and_short_suffix_entry_for_vouchers(): void
+    {
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant);
+        $this->createVoucher($tenant, $package, [
+            'code' => '123456',
+            'prefix' => 'CB-WIFI',
+        ]);
+
+        $response = $this->get(route('wifi.packages', [
+            'tenant_id' => $tenant->id,
+            'mode' => 'reconnect',
+        ]));
+
+        $response->assertOk();
+        $response->assertSee('CB-WIFI-', false);
+        $response->assertSee('name="voucher_prefix" value="CB-WIFI"', false);
+        $response->assertSee('placeholder="123456"', false);
     }
 
     private function createTenant(array $overrides = []): Tenant

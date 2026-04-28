@@ -533,7 +533,7 @@ class Voucher extends Model
 
     public static function generateCode(int $length = 8, string $prefix = null): string
     {
-        $characters = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+        $characters = '0123456789';
         $code = '';
         
         for ($i = 0; $i < $length; $i++) {

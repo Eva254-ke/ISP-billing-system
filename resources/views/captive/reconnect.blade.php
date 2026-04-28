@@ -49,6 +49,7 @@
         ];
         $allowMpesaReconnect = (bool) ($tenant?->captive_portal_allow_mpese_code_reconnect ?? true);
         $allowVoucherRedemption = (bool) ($tenant?->captive_portal_allow_voucher_redemption ?? true);
+        $voucherPrefixValue = \App\Models\Voucher::normalizePrefix($voucherPrefix ?? 'CB-WIFI') ?? 'CB-WIFI';
     @endphp
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -58,6 +59,39 @@
         :root {
             --cp-primary: {{ $accentColor }};
             --cp-primary-strong: {{ $accentColor }};
+        }
+
+        .cp-code-input {
+            display: flex;
+            align-items: center;
+            gap: 0;
+            border: 1px solid rgba(15, 23, 42, 0.12);
+            border-radius: 16px;
+            overflow: hidden;
+            background: #fff;
+        }
+
+        .cp-code-prefix {
+            padding: 0.95rem 0.9rem;
+            background: rgba(15, 118, 110, 0.08);
+            color: #0f172a;
+            font-weight: 700;
+            white-space: nowrap;
+            border-right: 1px solid rgba(15, 23, 42, 0.08);
+        }
+
+        .cp-code-input input {
+            border: 0;
+            border-radius: 0;
+            box-shadow: none;
+            flex: 1 1 auto;
+        }
+
+        .cp-field-hint {
+            display: block;
+            margin-top: 0.45rem;
+            color: #64748b;
+            font-size: 0.88rem;
         }
     </style>
 </head>
@@ -129,6 +163,7 @@
                                 @csrf
                                 <input type="hidden" name="tenant_id" value="{{ $tenantIdValue }}">
                                 <input type="hidden" name="phone" value="{{ $routePhone }}">
+                                <input type="hidden" name="voucher_prefix" value="{{ $voucherPrefixValue }}">
                                 <input type="hidden" name="mac" value="{{ $clientMacValue }}">
                                 <input type="hidden" name="ip" value="{{ $clientIpValue }}">
                                 @foreach($hotspotFieldValues as $fieldName => $fieldValue)
@@ -136,7 +171,11 @@
                                 @endforeach
                                 <div class="cp-field">
                                     <label for="voucherCode">Voucher Code</label>
-                                    <input id="voucherCode" type="text" name="voucher_code" placeholder="CB-WIFI-A7K2P9" value="{{ old('voucher_code', '') }}" required maxlength="64" autocomplete="off">
+                                    <div class="cp-code-input">
+                                        <span class="cp-code-prefix">{{ $voucherPrefixValue }}-</span>
+                                        <input id="voucherCode" type="text" name="voucher_code" placeholder="123456" value="{{ old('voucher_code', '') }}" required maxlength="64" autocomplete="off" inputmode="numeric" data-voucher-prefix="{{ $voucherPrefixValue }}">
+                                    </div>
+                                    <small class="cp-field-hint">Enter the 6 digits after the prefix. Full voucher codes still work too.</small>
                                 </div>
                                 <button type="submit" class="cp-btn cp-btn-soft cp-btn-block">Redeem Voucher</button>
                             </form>
@@ -158,11 +197,28 @@
     </main>
 
     <script>
-        const codeInputs = [document.getElementById('mpesaCode'), document.getElementById('voucherCode')];
-        codeInputs.forEach((input) => {
-            input?.addEventListener('input', function () {
-                this.value = this.value.toUpperCase().trimStart();
-            });
+        document.getElementById('mpesaCode')?.addEventListener('input', function () {
+            this.value = this.value.toUpperCase().trimStart();
+        });
+
+        const voucherCodeInput = document.getElementById('voucherCode');
+        const voucherPrefix = String(voucherCodeInput?.dataset.voucherPrefix || '').toUpperCase();
+        voucherCodeInput?.addEventListener('input', function () {
+            let value = this.value.toUpperCase().trim().replace(/\s+/g, '');
+
+            if (voucherPrefix !== '' && value.startsWith(voucherPrefix + '-')) {
+                value = value.slice(voucherPrefix.length + 1);
+            } else if (voucherPrefix !== '' && value.startsWith(voucherPrefix)) {
+                value = value.slice(voucherPrefix.length);
+            }
+
+            value = value.replace(/^-+/, '');
+
+            if (/^\d+$/.test(value)) {
+                value = value.slice(0, 6);
+            }
+
+            this.value = value;
         });
     </script>
 </body>
