@@ -175,8 +175,22 @@ class Voucher extends Model
 
     public function getCodeDisplayAttribute(): string
     {
-        $prefix = $this->prefix ? strtoupper($this->prefix) . '-' : '';
-        return $prefix . strtoupper($this->code);
+        $code = strtoupper(trim((string) $this->code));
+        $prefix = static::normalizePrefix($this->prefix);
+
+        if ($code === '') {
+            return $prefix ?? '';
+        }
+
+        if ($prefix === null) {
+            return $code;
+        }
+
+        if (str_starts_with($code, $prefix . '-')) {
+            return $code;
+        }
+
+        return $prefix . '-' . $code;
     }
 
     public function getIsExpiredAttribute(): bool
@@ -525,8 +539,8 @@ class Voucher extends Model
         for ($i = 0; $i < $length; $i++) {
             $code .= $characters[random_int(0, strlen($characters) - 1)];
         }
-        
-        return $prefix ? strtoupper($prefix) . '-' . $code : $code;
+
+        return $code;
     }
 
     public static function findValidByCode(string $code): ?self
@@ -562,13 +576,14 @@ class Voucher extends Model
         $validUntil = $options['valid_until'] ?? ($options['validity_hours'] ? now()->addHours($options['validity_hours']) : null);
         $captiveRedeemable = $options['captive_portal_redeemable'] ?? true;
         $maxRedemptions = $options['max_redemptions'] ?? null;
+        $prefix = static::normalizePrefix($options['prefix'] ?? null);
 
         for ($i = 0; $i < $count; $i++) {
             $vouchers[] = static::create([
                 'tenant_id' => $options['tenant_id'] ?? null,
                 'package_id' => $packageId,
-                'code' => static::generateCode($options['code_length'] ?? 8, $options['prefix']),
-                'prefix' => $options['prefix'],
+                'code' => static::generateCode($options['code_length'] ?? 8, $prefix),
+                'prefix' => $prefix,
                 'status' => self::STATUS_UNUSED,
                 'valid_from' => $validFrom,
                 'valid_until' => $validUntil,
@@ -583,6 +598,15 @@ class Voucher extends Model
         }
 
         return $vouchers;
+    }
+
+    public static function normalizePrefix(?string $prefix): ?string
+    {
+        $normalized = strtoupper(trim((string) $prefix));
+        $normalized = preg_replace('/[^A-Z0-9-]/', '', $normalized);
+        $normalized = trim((string) $normalized, '-');
+
+        return $normalized !== '' ? $normalized : null;
     }
 
     public static function findActiveForPhone(string $phone, int $limit = 5)

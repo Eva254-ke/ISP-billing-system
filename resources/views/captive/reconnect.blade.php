@@ -136,7 +136,7 @@
                                 @endforeach
                                 <div class="cp-field">
                                     <label for="voucherCode">Voucher Code</label>
-                                    <input id="voucherCode" type="text" name="voucher_code" placeholder="CB-WIFI-1234" value="{{ old('voucher_code', '') }}" required maxlength="64" autocomplete="off">
+                                    <input id="voucherCode" type="text" name="voucher_code" placeholder="CB-WIFI-A7K2P9" value="{{ old('voucher_code', '') }}" required maxlength="64" autocomplete="off">
                                 </div>
                                 <button type="submit" class="cp-btn cp-btn-soft cp-btn-block">Redeem Voucher</button>
                             </form>

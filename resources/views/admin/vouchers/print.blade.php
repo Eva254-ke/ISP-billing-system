@@ -22,7 +22,7 @@
             <tbody>
                 @forelse($latestVouchers as $voucher)
                     <tr>
-                        <td><code>{{ $voucher->code }}</code></td>
+                        <td><code>{{ $voucher->code_display ?? $voucher->code }}</code></td>
                         <td>{{ $voucher->package?->name ?? '-' }}</td>
                         <td>{{ ucfirst($voucher->status) }}</td>
                         <td>{{ $voucher->created_at?->format('Y-m-d H:i') }}</td>

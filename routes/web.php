@@ -1451,12 +1451,7 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
                 ], 422);
             }
 
-            $prefix = strtoupper(trim((string) ($validated['prefix'] ?? 'CB-WIFI')));
-            $prefix = preg_replace('/[^A-Z0-9-]/', '', $prefix);
-            $prefix = trim((string) $prefix, '-');
-            if ($prefix === '') {
-                $prefix = 'CB-WIFI';
-            }
+            $prefix = \App\Models\Voucher::normalizePrefix($validated['prefix'] ?? 'CB-WIFI') ?? 'CB-WIFI';
 
             $batchId = (string) Str::uuid();
             $batchName = trim((string) ($validated['batch_label'] ?? ''));
@@ -1472,7 +1467,7 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
 
                 for ($i = 0; $i < $quantity; $i++) {
                     do {
-                        $code = strtoupper(Str::random(6));
+                        $code = \App\Models\Voucher::generateCode(6);
                         $exists = \App\Models\Voucher::query()
                             ->where('tenant_id', $tenant->id)
                             ->where('prefix', $prefix)

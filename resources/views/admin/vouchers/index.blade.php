@@ -120,7 +120,7 @@
                         <td><input type="checkbox" class="voucher-checkbox" value="{{ $voucher->id }}"></td>
                         <td>
                             <code class="bg-light px-2 py-1 rounded">{{ $voucher->code_display ?? $voucher->code }}</code>
-                            <button class="btn btn-sm btn-outline-secondary ms-1" onclick="copyCode('{{ $voucher->code ?? '' }}')" title="Copy">
+                            <button class="btn btn-sm btn-outline-secondary ms-1" onclick="copyCode('{{ $voucher->code_display ?? $voucher->code ?? '' }}')" title="Copy">
                                 <i class="fas fa-copy"></i>
                             </button>
                         </td>
@@ -325,8 +325,8 @@
                         </div>
                         <div class="col-md-6 mb-3">
                             <label class="form-label">Code Prefix (Optional)</label>
-                            <input type="text" class="form-control" name="prefix" value="CB-WIFI-" placeholder="e.g., CB-WIFI-">
-                            <small class="text-muted">Max 10 characters, alphanumeric + hyphen</small>
+                            <input type="text" class="form-control" name="prefix" value="CB-WIFI" placeholder="e.g., CB-WIFI">
+                            <small class="text-muted">Max 20 characters, alphanumeric + hyphen. We add the separator automatically.</small>
                         </div>
                     </div>
                     <div class="row">
@@ -353,7 +353,7 @@
                     </div>
                     <div class="alert alert-info">
                         <i class="fas fa-info-circle me-2"></i>
-                        <strong>Preview:</strong> Codes will look like: <code>CB-WIFI-A1B2C3</code>
+                        <strong>Preview:</strong> Codes will look like: <code>CB-WIFI-A7K2P9</code>
                     </div>
                 </form>
             </div>
@@ -431,11 +431,17 @@
 <script>
 // Copy voucher code to clipboard
 function copyCode(code) {
-    navigator.clipboard.writeText(code.trim()).then(() => {
+    const trimmedCode = String(code || '').trim();
+    if (!trimmedCode) {
+        Swal.fire('Error', 'No voucher code available to copy.', 'error');
+        return;
+    }
+
+    navigator.clipboard.writeText(trimmedCode).then(() => {
         Swal.fire({
             icon: 'success',
             title: 'Copied!',
-            text: `Code ${code.trim()} copied to clipboard`,
+            text: `Code ${trimmedCode} copied to clipboard`,
             timer: 1500,
             showConfirmButton: false
         });
@@ -840,12 +846,14 @@ document.addEventListener('DOMContentLoaded', function() {
             const created = row.created_at ? new Date(row.created_at).toLocaleString('en-KE') : '-';
             const usedAt = row.used_at ? new Date(row.used_at).toLocaleString('en-KE') : '—';
             const expiry = row.valid_until ? new Date(row.valid_until).toLocaleString('en-KE') : '-';
+            const displayCode = row.code_display || row.code || '-';
+            const safeDisplayCode = displayCode.replace(/'/g, "\\'");
 
             return `
                 <tr>
                     <td><input type="checkbox" class="voucher-checkbox" value="${row.id || index + 1}"></td>
-                    <td><code class="bg-light px-2 py-1 rounded">${row.code_display || row.code || '-'}</code>
-                        <button class="btn btn-sm btn-outline-secondary ms-1" onclick="copyCode('${(row.code || '').replace(/'/g, "\\'")}')" title="Copy"><i class="fas fa-copy"></i></button>
+                    <td><code class="bg-light px-2 py-1 rounded">${displayCode}</code>
+                        <button class="btn btn-sm btn-outline-secondary ms-1" onclick="copyCode('${safeDisplayCode}')" title="Copy"><i class="fas fa-copy"></i></button>
                     </td>
                     <td><span class="badge bg-secondary">${row.package_name || '-'}</span></td>
                     <td>${created}</td>
@@ -855,8 +863,8 @@ document.addEventListener('DOMContentLoaded', function() {
                     <td>${statusBadge(row.status)}</td>
                     <td class="action-col">
                         <div class="btn-group">
-                            <button type="button" class="btn btn-sm btn-outline-primary" onclick="viewVoucherDetails(${row.id || 0}, '${(row.code_display || row.code || '').replace(/'/g, "\\'")}')"><i class="fas fa-eye"></i></button>
-                            <button type="button" class="btn btn-sm btn-outline-danger" onclick="confirmDelete(${row.id || 0}, '${(row.code_display || row.code || '').replace(/'/g, "\\'")}')"><i class="fas fa-trash"></i></button>
+                            <button type="button" class="btn btn-sm btn-outline-primary" onclick="viewVoucherDetails(${row.id || 0}, '${safeDisplayCode}')"><i class="fas fa-eye"></i></button>
+                            <button type="button" class="btn btn-sm btn-outline-danger" onclick="confirmDelete(${row.id || 0}, '${safeDisplayCode}')"><i class="fas fa-trash"></i></button>
                         </div>
                     </td>
                 </tr>
