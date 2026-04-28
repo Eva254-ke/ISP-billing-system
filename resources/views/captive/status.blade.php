@@ -576,6 +576,35 @@
             }
         }
 
+        function buildRadiusAutoLoginNavigationUrl(loginPayload) {
+            if (
+                !loginPayload
+                || !loginPayload.action
+                || loginPayload.chap_id
+                || loginPayload.chap_challenge
+            ) {
+                return null;
+            }
+
+            try {
+                const loginUrl = new URL(loginPayload.action, window.location.href);
+                loginUrl.searchParams.set('username', String(loginPayload.username || ''));
+                loginUrl.searchParams.set('password', String(loginPayload.password || ''));
+
+                if (loginPayload.dst) {
+                    loginUrl.searchParams.set('dst', String(loginPayload.dst));
+                }
+
+                if (loginPayload.popup) {
+                    loginUrl.searchParams.set('popup', String(loginPayload.popup));
+                }
+
+                return loginUrl.toString();
+            } catch (urlError) {
+                return null;
+            }
+        }
+
         function setHiddenField(form, name, value) {
             const existing = Array.from(form.querySelectorAll('input')).find((input) => input.name === name);
 
@@ -613,8 +642,27 @@
                 radiusAutoLogin = loginPayload;
             }
 
+            if (!radiusAutoLogin || !radiusAutoLogin.action) {
+                return false;
+            }
+
+            const navigationUrl = shouldUseTopLevelRadiusAutoLogin(radiusAutoLogin)
+                ? buildRadiusAutoLoginNavigationUrl(radiusAutoLogin)
+                : null;
+
+            try {
+                sessionStorage.setItem(radiusAutoLoginKey, String(Date.now()));
+            } catch (storageError) {
+                // Ignore storage failures.
+            }
+
+            if (navigationUrl) {
+                window.location.replace(navigationUrl);
+                return true;
+            }
+
             const form = document.getElementById('cpRadiusAutoLoginForm');
-            if (!form || !radiusAutoLogin || !radiusAutoLogin.action) {
+            if (!form) {
                 return false;
             }
 
@@ -632,12 +680,6 @@
                     radiusAutoLogin.chap_challenge,
                     String(radiusAutoLogin.password || '')
                 );
-            }
-
-            try {
-                sessionStorage.setItem(radiusAutoLoginKey, String(Date.now()));
-            } catch (storageError) {
-                // Ignore storage failures.
             }
 
             form.submit();

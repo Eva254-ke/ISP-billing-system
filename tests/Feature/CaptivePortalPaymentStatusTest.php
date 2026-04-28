@@ -2338,6 +2338,9 @@ class CaptivePortalPaymentStatusTest extends TestCase
         $response->assertSee('value="https://example.com/after-login"', false);
         $response->assertSee('Connecting you to WiFi', false);
         $response->assertSee('shouldUseTopLevelRadiusAutoLogin', false);
+        $response->assertSee('buildRadiusAutoLoginNavigationUrl', false);
+        $response->assertSee("loginUrl.searchParams.set('username', String(loginPayload.username || ''));", false);
+        $response->assertSee('window.location.replace(navigationUrl);', false);
         $response->assertSee("form.target = shouldUseTopLevelRadiusAutoLogin(loginPayload) ? '_top' : 'cpRadiusAutoLoginFrame';", false);
         $response->assertSee("return actionUrl.origin !== window.location.origin;", false);
         $response->assertSee('If internet opens immediately, you can start browsing right away', false);
