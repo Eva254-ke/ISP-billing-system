@@ -104,10 +104,9 @@
             'failed' => 'Failed',
             default => 'Pending',
         };
-        $continueBrowsingUrl = trim((string) ($payment->tenant?->captive_portal_redirect_url ?? ''));
-        if ($continueBrowsingUrl === '' || filter_var($continueBrowsingUrl, FILTER_VALIDATE_URL) === false) {
-            $continueBrowsingUrl = 'https://www.google.com';
-        }
+        $continueBrowsingUrl = trim((string) ($continueBrowsingUrl ?? 'https://www.google.com'));
+        $continueBrowsingAutoLogin = is_array($continueBrowsingAutoLogin ?? null) ? $continueBrowsingAutoLogin : null;
+        $formRadiusAutoLogin = $radiusAutoLogin ?: $continueBrowsingAutoLogin;
     @endphp
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -304,7 +303,11 @@
 
                 <div class="cp-countdown" id="countdown">--:--:--</div>
 
-                <a href="{{ $continueBrowsingUrl }}" target="_blank" rel="noopener" class="cp-btn cp-btn-primary cp-btn-block">Continue Browsing</a>
+                @if($continueBrowsingAutoLogin)
+                    <button type="button" id="cpContinueBrowsingButton" class="cp-btn cp-btn-primary cp-btn-block">Continue Browsing</button>
+                @else
+                    <a href="{{ $continueBrowsingUrl }}" class="cp-btn cp-btn-primary cp-btn-block">Continue Browsing</a>
+                @endif
 
             @elseif($statusView === 'failed')
                 <span class="cp-status-pill error">Payment not completed</span>
@@ -362,16 +365,16 @@
             @endif
         </article>
 
-        @if($shouldAutoPoll || $radiusAutoLogin)
-            <form id="cpRadiusAutoLoginForm" method="POST" @if($radiusAutoLogin) action="{{ $radiusAutoLogin['action'] }}" @endif target="cpRadiusAutoLoginFrame" hidden>
-                @if($radiusAutoLogin)
-                    <input type="hidden" name="username" value="{{ $radiusAutoLogin['username'] }}">
-                    <input type="hidden" name="password" value="{{ $radiusAutoLogin['password'] }}">
-                    @if(!empty($radiusAutoLogin['dst']))
-                        <input type="hidden" name="dst" value="{{ $radiusAutoLogin['dst'] }}">
+        @if($shouldAutoPoll || $radiusAutoLogin || $continueBrowsingAutoLogin)
+            <form id="cpRadiusAutoLoginForm" method="POST" @if($formRadiusAutoLogin) action="{{ $formRadiusAutoLogin['action'] }}" @endif target="cpRadiusAutoLoginFrame" hidden>
+                @if($formRadiusAutoLogin)
+                    <input type="hidden" name="username" value="{{ $formRadiusAutoLogin['username'] }}">
+                    <input type="hidden" name="password" value="{{ $formRadiusAutoLogin['password'] }}">
+                    @if(!empty($formRadiusAutoLogin['dst']))
+                        <input type="hidden" name="dst" value="{{ $formRadiusAutoLogin['dst'] }}">
                     @endif
-                    @if(!empty($radiusAutoLogin['popup']))
-                        <input type="hidden" name="popup" value="{{ $radiusAutoLogin['popup'] }}">
+                    @if(!empty($formRadiusAutoLogin['popup']))
+                        <input type="hidden" name="popup" value="{{ $formRadiusAutoLogin['popup'] }}">
                     @endif
                 @endif
             </form>
@@ -385,8 +388,10 @@
     </main>
 
     <script>
-        @if($shouldAutoPoll || $radiusAutoLogin)
+        @if($shouldAutoPoll || $radiusAutoLogin || $continueBrowsingAutoLogin)
         let radiusAutoLogin = @json($radiusAutoLogin);
+        let continueBrowsingAutoLogin = @json($continueBrowsingAutoLogin);
+        const continueBrowsingUrl = @json($continueBrowsingUrl);
         const radiusAutoLoginKey = `cp-radius-autologin:${@json((int) $payment->id)}`;
         const expiredPackagesUrl = @json($expiredPackagesUrl);
 
@@ -644,7 +649,13 @@
             submitRadiusAutoLogin();
         });
 
-        if (radiusAutoLogin && !hasRecentRadiusAutoLoginAttempt()) {
+        document.getElementById('cpContinueBrowsingButton')?.addEventListener('click', () => {
+            if (!submitRadiusAutoLogin(continueBrowsingAutoLogin)) {
+                window.location.href = continueBrowsingUrl;
+            }
+        });
+
+        if (@json($shouldAutoPoll) && radiusAutoLogin && !hasRecentRadiusAutoLoginAttempt()) {
             setTimeout(() => {
                 submitRadiusAutoLogin();
             }, 150);

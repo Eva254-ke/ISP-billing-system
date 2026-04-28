@@ -2599,6 +2599,118 @@ class CaptivePortalPaymentStatusTest extends TestCase
         $response->assertDontSee('action="http://' . $router->ip_address . '/login"', false);
     }
 
+    public function test_activated_status_falls_back_to_google_when_hotspot_destination_points_back_to_the_portal(): void
+    {
+        config()->set('app.url', 'https://app.cloubridge.com');
+
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant);
+        $router = $this->createRouter($tenant, [
+            'status' => 'online',
+            'last_seen_at' => now(),
+        ]);
+
+        $payment = $this->createPayment($tenant, $package, [
+            'status' => 'completed',
+            'confirmed_at' => now()->subMinute(),
+            'completed_at' => now()->subMinute(),
+            'activated_at' => now()->subMinute(),
+            'mpesa_checkout_request_id' => 'ws_CO_continue_browsing_portal_loop_001',
+        ]);
+
+        UserSession::query()->create([
+            'tenant_id' => $tenant->id,
+            'router_id' => $router->id,
+            'payment_id' => $payment->id,
+            'package_id' => $package->id,
+            'username' => $this->expectedPhoneRadiusUsername($payment),
+            'phone' => '0712345678',
+            'mac_address' => 'AA:BB:CC:DD:EE:FF',
+            'ip_address' => '10.0.0.25',
+            'status' => 'active',
+            'started_at' => now()->subMinute(),
+            'last_activity_at' => now(),
+            'last_synced_at' => now(),
+            'expires_at' => now()->addHour(),
+        ]);
+
+        $response = $this->get(route('wifi.status', [
+            'phone' => '0712345678',
+            'tenant_id' => $tenant->id,
+            'payment' => $payment->id,
+            'mac' => 'AA-BB-CC-DD-EE-FF',
+            'ip' => '10.0.0.25',
+            'dst' => 'https://wifi.cloubridge.com/portal',
+        ]));
+
+        $response->assertOk();
+        $response->assertSee('href="https://www.google.com"', false);
+        $response->assertDontSee('href="https://wifi.cloubridge.com/portal"', false);
+    }
+
+    public function test_activated_status_can_finish_hotspot_login_when_continue_browsing_is_tapped(): void
+    {
+        config()->set('radius.enabled', true);
+        config()->set('radius.pure_radius', false);
+
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant);
+        $router = $this->createRouter($tenant, [
+            'status' => 'online',
+            'last_seen_at' => now(),
+        ]);
+
+        $payment = $this->createPayment($tenant, $package, [
+            'status' => 'completed',
+            'confirmed_at' => now()->subMinute(),
+            'completed_at' => now()->subMinute(),
+            'activated_at' => now()->subMinute(),
+            'mpesa_checkout_request_id' => 'ws_CO_continue_browsing_hotspot_finish_001',
+        ]);
+
+        $expectedUsername = $this->expectedPhoneRadiusUsername($payment);
+        UserSession::query()->create([
+            'tenant_id' => $tenant->id,
+            'router_id' => $router->id,
+            'payment_id' => $payment->id,
+            'package_id' => $package->id,
+            'username' => $expectedUsername,
+            'phone' => '0712345678',
+            'mac_address' => 'AA:BB:CC:DD:EE:FF',
+            'ip_address' => '10.0.0.25',
+            'status' => 'active',
+            'started_at' => now()->subMinute(),
+            'last_activity_at' => now(),
+            'last_synced_at' => now(),
+            'expires_at' => now()->addHour(),
+            'metadata' => [
+                'radius' => [
+                    'provisioned' => true,
+                    'username' => $expectedUsername,
+                    'expires_at' => now()->addHour()->toIso8601String(),
+                ],
+            ],
+        ]);
+
+        $response = $this->get(route('wifi.status', [
+            'phone' => '0712345678',
+            'tenant_id' => $tenant->id,
+            'payment' => $payment->id,
+            'mac' => 'AA-BB-CC-DD-EE-FF',
+            'ip' => '10.0.0.25',
+            'link-login-only' => 'http://' . $router->ip_address . '/login',
+            'dst' => 'https://example.com/welcome',
+        ]));
+
+        $response->assertOk();
+        $response->assertSee('id="cpContinueBrowsingButton"', false);
+        $response->assertSee('id="cpRadiusAutoLoginForm"', false);
+        $response->assertSee('action="http://' . $router->ip_address . '/login"', false);
+        $response->assertSee('value="' . $expectedUsername . '"', false);
+        $response->assertSee('value="https://example.com/welcome"', false);
+        $response->assertSee('window.location.href = continueBrowsingUrl;', false);
+    }
+
     public function test_session_manager_uses_radius_disconnect_for_expired_pure_radius_sessions(): void
     {
         config()->set('radius.enabled', true);
@@ -3347,7 +3459,7 @@ class CaptivePortalPaymentStatusTest extends TestCase
 
     private function createTenant(array $overrides = []): Tenant
     {
-        return Tenant::query()->create(array_merge([
+        $payload = array_merge([
             'name' => 'Test Tenant',
             'subdomain' => 'tenant-' . str()->random(6),
             'contact_email' => 'tenant@example.com',
@@ -3361,7 +3473,15 @@ class CaptivePortalPaymentStatusTest extends TestCase
             'next_billing_date' => now()->addMonth()->toDateString(),
             'max_routers' => 1,
             'max_users' => 100,
-        ], $overrides));
+        ], $overrides);
+
+        $columns = array_flip(Schema::getColumnListing('tenants'));
+
+        return Tenant::query()->create(array_filter(
+            $payload,
+            static fn (mixed $value, string $column): bool => isset($columns[$column]),
+            ARRAY_FILTER_USE_BOTH
+        ));
     }
 
     private function createRouter(Tenant $tenant, array $overrides = []): Router

@@ -1055,8 +1055,25 @@ class CaptivePortalController extends Controller
         $radiusPendingReauth = (bool) $radiusPortalState['pending_reauth'];
         $radiusAutoLogin = $radiusPortalState['auto_login'];
         $radiusFallback = $radiusPortalState['fallback'];
+        $continueBrowsingUrl = $this->resolveContinueBrowsingUrl($payment, $request);
+        $continueBrowsingAutoLogin = $this->buildContinueBrowsingAutoLoginPayload(
+            payment: $payment,
+            activeSession: $activeSession,
+            request: $request,
+            continueBrowsingUrl: $continueBrowsingUrl
+        );
         
-        return view('captive.status', compact('payment', 'phone', 'activeSession', 'statusView', 'radiusFallback', 'radiusPendingReauth', 'radiusAutoLogin'));
+        return view('captive.status', compact(
+            'payment',
+            'phone',
+            'activeSession',
+            'statusView',
+            'radiusFallback',
+            'radiusPendingReauth',
+            'radiusAutoLogin',
+            'continueBrowsingUrl',
+            'continueBrowsingAutoLogin'
+        ));
     }
     
     /**
@@ -2884,6 +2901,169 @@ class CaptivePortalController extends Controller
             'chap_id' => trim((string) ($hotspotContext['chap_id'] ?? '')),
             'chap_challenge' => trim((string) ($hotspotContext['chap_challenge'] ?? '')),
         ], static fn ($value) => is_string($value) && $value !== '');
+    }
+
+    private function buildContinueBrowsingAutoLoginPayload(
+        Payment $payment,
+        ?UserSession $activeSession,
+        Request $request,
+        string $continueBrowsingUrl
+    ): ?array {
+        if (!(bool) config('radius.enabled', false)) {
+            return null;
+        }
+
+        if (!$this->requestHasHotspotLoginChallenge($request, (int) $payment->tenant_id)) {
+            return null;
+        }
+
+        $identity = $this->resolveRadiusIdentityForPayment($payment);
+        if (!$this->hasProvisionedRadiusAccess($payment, $activeSession, $identity)) {
+            return null;
+        }
+
+        $payload = $this->buildHotspotAutoLoginPayload($payment, $identity);
+        if ($payload === null) {
+            return null;
+        }
+
+        if (
+            $continueBrowsingUrl !== ''
+            && (
+                empty($payload['dst'])
+                || $this->normalizeContinueBrowsingCandidate((string) $payload['dst'], $payment, $request) === null
+            )
+        ) {
+            $payload['dst'] = $continueBrowsingUrl;
+        }
+
+        return $payload;
+    }
+
+    private function resolveContinueBrowsingUrl(Payment $payment, Request $request): string
+    {
+        $hotspotContext = $this->resolveHotspotContextForPayment($payment);
+
+        foreach ([
+            (string) $request->query('dst', ''),
+            (string) $request->query('link-orig-esc', ''),
+            (string) $request->query('link-orig', ''),
+            (string) ($hotspotContext['dst'] ?? ''),
+            (string) ($hotspotContext['link_orig_esc'] ?? ''),
+            (string) ($hotspotContext['link_orig'] ?? ''),
+            (string) ($payment->tenant?->captive_portal_redirect_url ?? ''),
+            'https://www.google.com',
+        ] as $candidate) {
+            $resolved = $this->normalizeContinueBrowsingCandidate($candidate, $payment, $request);
+            if ($resolved !== null) {
+                return $resolved;
+            }
+        }
+
+        return 'https://www.google.com';
+    }
+
+    private function normalizeContinueBrowsingCandidate(string $candidate, Payment $payment, Request $request): ?string
+    {
+        $candidate = trim($candidate);
+        if ($candidate === '' || !filter_var($candidate, FILTER_VALIDATE_URL)) {
+            return null;
+        }
+
+        $scheme = strtolower((string) parse_url($candidate, PHP_URL_SCHEME));
+        $host = strtolower((string) parse_url($candidate, PHP_URL_HOST));
+        if (!in_array($scheme, ['http', 'https'], true) || $host === '') {
+            return null;
+        }
+
+        if ($this->isPortalApplicationHost($host, $payment, $request)) {
+            return null;
+        }
+
+        return $candidate;
+    }
+
+    private function isPortalApplicationHost(string $host, Payment $payment, Request $request): bool
+    {
+        $host = strtolower(trim($host));
+        if ($host === '') {
+            return true;
+        }
+
+        $router = $this->resolvePreferredHotspotRouter((int) $payment->tenant_id);
+        if ($this->isTrustedHotspotHost($host, $router)) {
+            return true;
+        }
+
+        foreach ([
+            $request->getHost(),
+            parse_url((string) config('app.url', ''), PHP_URL_HOST),
+            parse_url((string) ($payment->tenant?->captive_portal_url ?? ''), PHP_URL_HOST),
+        ] as $blockedHost) {
+            $blockedHost = strtolower(trim((string) $blockedHost));
+            if ($blockedHost !== '' && $host === $blockedHost) {
+                return true;
+            }
+        }
+
+        return $this->isPortalSiblingHost($host, [
+            $request->getHost(),
+            parse_url((string) config('app.url', ''), PHP_URL_HOST),
+        ]);
+    }
+
+    /**
+     * @param  array<int, mixed>  $portalHosts
+     */
+    private function isPortalSiblingHost(string $candidateHost, array $portalHosts): bool
+    {
+        $candidateBaseDomain = $this->extractRegistrableDomain($candidateHost);
+        if ($candidateBaseDomain === null || !$this->isPotentialPortalSubdomain($candidateHost)) {
+            return false;
+        }
+
+        foreach ($portalHosts as $portalHost) {
+            $portalBaseDomain = $this->extractRegistrableDomain((string) $portalHost);
+            if ($portalBaseDomain !== null && $portalBaseDomain === $candidateBaseDomain) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function isPotentialPortalSubdomain(string $host): bool
+    {
+        $labels = array_values(array_filter(explode('.', strtolower(trim($host)))));
+        if (count($labels) < 3) {
+            return false;
+        }
+
+        return in_array($labels[0], ['app', 'wifi', 'portal', 'login', 'hotspot', 'captive'], true);
+    }
+
+    private function extractRegistrableDomain(string $host): ?string
+    {
+        $host = strtolower(trim($host, ". \t\n\r\0\x0B"));
+        if ($host === '') {
+            return null;
+        }
+
+        if (filter_var($host, FILTER_VALIDATE_IP)) {
+            return $host;
+        }
+
+        $labels = array_values(array_filter(explode('.', $host), static fn ($label) => $label !== ''));
+        $labelCount = count($labels);
+        if ($labelCount < 2) {
+            return $host;
+        }
+
+        $tldLength = strlen($labels[$labelCount - 1]);
+        $secondLevelLength = strlen($labels[$labelCount - 2]);
+        $segments = ($labelCount >= 3 && $tldLength === 2 && $secondLevelLength <= 3) ? 3 : 2;
+
+        return implode('.', array_slice($labels, -$segments));
     }
 
     /**
