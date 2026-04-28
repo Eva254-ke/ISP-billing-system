@@ -8,6 +8,8 @@ use Illuminate\Support\Facades\DB;
 
 class RadiusAccountingService
 {
+    private const PENDING_AUTHORIZATION_RECORD_MAX_SKEW_SECONDS = 300;
+
     public function __construct(
         private readonly RadiusIdentityResolver $identityResolver
     ) {}
@@ -65,6 +67,18 @@ class RadiusAccountingService
         $radiusMetadata = $this->sessionRadiusMetadata($session);
         $activationMetadata = $this->sessionActivationMetadata($sessionMetadata);
         $accountingStartedAt = $this->parseDateTimeValue($record['acctstarttime'] ?? null);
+        $accountingSeenAt = $accountingStartedAt
+            ?? $this->parseDateTimeValue($record['acctupdatetime'] ?? null);
+
+        if ($this->shouldIgnoreStalePendingAuthorizationRecord(
+            $session,
+            $radiusMetadata,
+            $activationMetadata,
+            $accountingSeenAt
+        )) {
+            return null;
+        }
+
         $shouldRealignTiming = $this->shouldRealignSessionTiming($session, $radiusMetadata, $activationMetadata);
         $startedAt = $shouldRealignTiming
             ? ($accountingStartedAt ?? $session->started_at ?? now())
@@ -344,6 +358,51 @@ class RadiusAccountingService
             || (bool) ($radiusMetadata['waiting_for_reauth'] ?? false)
             || (bool) ($activationMetadata['waiting_for_hotspot_login'] ?? false)
             || (bool) ($activationMetadata['waiting_for_reauth'] ?? false);
+    }
+
+    /**
+     * @param  array<string, mixed>  $radiusMetadata
+     * @param  array<string, mixed>  $activationMetadata
+     */
+    private function shouldIgnoreStalePendingAuthorizationRecord(
+        UserSession $session,
+        array $radiusMetadata,
+        array $activationMetadata,
+        ?Carbon $accountingSeenAt
+    ): bool {
+        if (!$this->shouldRealignSessionTiming($session, $radiusMetadata, $activationMetadata)) {
+            return false;
+        }
+
+        $authorizationStartedAt = $this->resolvePendingAuthorizationStartedAt($radiusMetadata, $activationMetadata);
+        if (!$authorizationStartedAt instanceof Carbon || !$accountingSeenAt instanceof Carbon) {
+            return false;
+        }
+
+        return $accountingSeenAt->lt(
+            $authorizationStartedAt->copy()->subSeconds(self::PENDING_AUTHORIZATION_RECORD_MAX_SKEW_SECONDS)
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>  $radiusMetadata
+     * @param  array<string, mixed>  $activationMetadata
+     */
+    private function resolvePendingAuthorizationStartedAt(array $radiusMetadata, array $activationMetadata): ?Carbon
+    {
+        foreach ([
+            $activationMetadata['authorization_started_at'] ?? null,
+            $activationMetadata['last_attempt_at'] ?? null,
+            $radiusMetadata['authorization_started_at'] ?? null,
+            $radiusMetadata['last_attempt_at'] ?? null,
+        ] as $candidate) {
+            $parsed = $this->parseDateTimeValue($candidate);
+            if ($parsed instanceof Carbon) {
+                return $parsed;
+            }
+        }
+
+        return null;
     }
 
     /**

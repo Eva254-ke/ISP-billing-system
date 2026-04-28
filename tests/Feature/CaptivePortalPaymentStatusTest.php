@@ -3191,6 +3191,101 @@ class CaptivePortalPaymentStatusTest extends TestCase
         $this->assertFalse((bool) data_get($session->metadata, 'activation.waiting_for_hotspot_login'));
     }
 
+    public function test_check_status_ignores_stale_open_radius_accounting_record_from_before_current_authorization(): void
+    {
+        config()->set('radius.enabled', true);
+        config()->set('radius.pure_radius', true);
+        config()->set('radius.access_mode', 'mac');
+        $this->configureRadiusAccountingConnection();
+
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant);
+        $router = $this->createRouter($tenant, [
+            'status' => 'online',
+            'last_seen_at' => now(),
+        ]);
+
+        $payment = $this->createPayment($tenant, $package, [
+            'phone' => '0712345678',
+            'status' => 'confirmed',
+            'confirmed_at' => now()->startOfSecond(),
+            'mpesa_checkout_request_id' => 'ws_CO_radacct_stale_open_session_001',
+            'metadata' => [
+                'gateway' => 'daraja',
+                'client_context' => [
+                    'mac' => 'AA:BB:CC:DD:EE:FF',
+                    'ip' => '10.0.0.25',
+                ],
+            ],
+        ]);
+
+        $authorizationStartedAt = now()->startOfSecond();
+        $oldSessionStart = $authorizationStartedAt->copy()->subHours(6);
+
+        $session = UserSession::query()->create([
+            'tenant_id' => $tenant->id,
+            'router_id' => $router->id,
+            'package_id' => $package->id,
+            'username' => 'AA:BB:CC:DD:EE:FF',
+            'phone' => '0712345678',
+            'mac_address' => 'AA:BB:CC:DD:EE:FF',
+            'ip_address' => '10.0.0.25',
+            'status' => 'idle',
+            'started_at' => $oldSessionStart,
+            'expires_at' => $oldSessionStart->copy()->addMinutes((int) $package->duration_in_minutes),
+            'payment_id' => $payment->id,
+            'metadata' => [
+                'activation' => [
+                    'method' => 'radius_mac_auth',
+                    'waiting_for_hotspot_login' => true,
+                    'waiting_for_reauth' => true,
+                    'authorization_started_at' => $authorizationStartedAt->toIso8601String(),
+                    'last_attempt_at' => $authorizationStartedAt->toIso8601String(),
+                ],
+            ],
+        ]);
+
+        $this->seedRadiusAccountingRecord([
+            'username' => 'AA:BB:CC:DD:EE:FF',
+            'callingstationid' => 'AA:BB:CC:DD:EE:FF',
+            'framedipaddress' => '10.0.0.25',
+            'acctstarttime' => $oldSessionStart->toDateTimeString(),
+            'acctupdatetime' => $authorizationStartedAt->copy()->addMinute()->toDateTimeString(),
+        ]);
+
+        $sessionManager = Mockery::mock(SessionManager::class);
+        $sessionManager->shouldNotReceive('activateSession');
+        $this->app->instance(SessionManager::class, $sessionManager);
+
+        $radiusProvisioning = Mockery::mock(FreeRadiusProvisioningService::class);
+        $radiusProvisioning->shouldReceive('provisionUser')->once();
+        $this->app->instance(FreeRadiusProvisioningService::class, $radiusProvisioning);
+
+        $response = $this->getJson(route('wifi.status.check', [
+            'phone' => '0712345678',
+            'tenant_id' => $tenant->id,
+            'payment' => $payment->id,
+            'mac' => 'AA-BB-CC-DD-EE-FF',
+            'ip' => '10.0.0.25',
+        ]));
+
+        $response->assertOk();
+        $response->assertJson([
+            'status' => 'paid',
+            'payment_id' => $payment->id,
+            'session_active' => false,
+        ]);
+
+        $payment->refresh();
+        $session->refresh();
+
+        $this->assertSame('idle', $session->status);
+        $this->assertSame($oldSessionStart->toDateTimeString(), $session->started_at?->toDateTimeString());
+        $this->assertSame('confirmed', $payment->status);
+        $this->assertNull($payment->activated_at);
+        $this->assertTrue((bool) data_get($session->metadata, 'activation.waiting_for_hotspot_login'));
+    }
+
     public function test_expire_stale_sessions_marks_overdue_active_and_idle_sessions_expired(): void
     {
         $tenant = $this->createTenant();
