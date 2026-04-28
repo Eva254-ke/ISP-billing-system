@@ -623,8 +623,14 @@
             }
         }
 
+        function shouldUseGetRadiusAutoLogin(loginPayload) {
+            return shouldUseTopLevelRadiusAutoLogin(loginPayload)
+                && !loginPayload?.chap_id
+                && !loginPayload?.chap_challenge;
+        }
+
         function hydrateRadiusAutoLoginForm(form, loginPayload) {
-            form.method = 'POST';
+            form.method = shouldUseGetRadiusAutoLogin(loginPayload) ? 'GET' : 'POST';
             form.action = loginPayload.action || '';
             form.target = shouldUseTopLevelRadiusAutoLogin(loginPayload) ? '_top' : 'cpRadiusAutoLoginFrame';
 
@@ -646,45 +652,45 @@
                 return false;
             }
 
-            const navigationUrl = shouldUseTopLevelRadiusAutoLogin(radiusAutoLogin)
-                ? buildRadiusAutoLoginNavigationUrl(radiusAutoLogin)
-                : null;
-
             try {
                 sessionStorage.setItem(radiusAutoLoginKey, String(Date.now()));
             } catch (storageError) {
                 // Ignore storage failures.
             }
 
+            const form = document.getElementById('cpRadiusAutoLoginForm');
+            if (form) {
+                hydrateRadiusAutoLoginForm(form, radiusAutoLogin);
+
+                const passwordInput = form.querySelector('input[name="password"]');
+
+                if (
+                    passwordInput
+                    && radiusAutoLogin.chap_id
+                    && radiusAutoLogin.chap_challenge
+                ) {
+                    passwordInput.value = buildChapResponse(
+                        radiusAutoLogin.chap_id,
+                        radiusAutoLogin.chap_challenge,
+                        String(radiusAutoLogin.password || '')
+                    );
+                }
+
+                form.submit();
+
+                return true;
+            }
+
+            const navigationUrl = shouldUseTopLevelRadiusAutoLogin(radiusAutoLogin)
+                ? buildRadiusAutoLoginNavigationUrl(radiusAutoLogin)
+                : null;
+
             if (navigationUrl) {
                 window.location.replace(navigationUrl);
                 return true;
             }
 
-            const form = document.getElementById('cpRadiusAutoLoginForm');
-            if (!form) {
-                return false;
-            }
-
-            hydrateRadiusAutoLoginForm(form, radiusAutoLogin);
-
-            const passwordInput = form.querySelector('input[name="password"]');
-
-            if (
-                passwordInput
-                && radiusAutoLogin.chap_id
-                && radiusAutoLogin.chap_challenge
-            ) {
-                passwordInput.value = buildChapResponse(
-                    radiusAutoLogin.chap_id,
-                    radiusAutoLogin.chap_challenge,
-                    String(radiusAutoLogin.password || '')
-                );
-            }
-
-            form.submit();
-
-            return true;
+            return false;
         }
 
         document.getElementById('cpRadiusConnectButton')?.addEventListener('click', () => {
@@ -715,7 +721,7 @@
 
             statusPollInFlight = true;
             try {
-                const response = await fetch('{{ $statusCheckRoute }}', {
+                const response = await fetch(@json($statusCheckRoute), {
                     headers: { 'Accept': 'application/json' },
                     cache: 'no-store'
                 });

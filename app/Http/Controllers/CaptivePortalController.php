@@ -716,7 +716,7 @@ class CaptivePortalController extends Controller
         $candidateSessions = UserSession::query()
             ->where('tenant_id', $tenantId)
             ->whereNotNull('payment_id')
-            ->whereIn('status', ['active', 'idle', 'expired'])
+            ->whereIn('status', ['active', 'idle', 'expired', 'terminated'])
             ->where(function ($query) use ($clientMac, $clientIp) {
                 if ($clientMac !== null) {
                     $query->orWhere('mac_address', $clientMac);
@@ -789,6 +789,15 @@ class CaptivePortalController extends Controller
         if ($session && $this->sessionAwaitsRadiusLogin($session)) {
             return !$this->hasClientContext($clientMac, $clientIp)
                 || $this->sessionMatchesClientContext($session, $clientMac, $clientIp);
+        }
+
+        if (
+            (bool) config('radius.enabled', false)
+            && (bool) config('radius.pure_radius', false)
+            && $this->hasClientContext($clientMac, $clientIp)
+            && $this->paymentMatchesClientContext($payment, $clientMac, $clientIp, $session)
+        ) {
+            return true;
         }
 
         $liveSessions = UserSession::query()

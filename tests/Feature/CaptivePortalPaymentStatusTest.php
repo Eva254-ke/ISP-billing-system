@@ -342,6 +342,75 @@ class CaptivePortalPaymentStatusTest extends TestCase
         ]));
     }
 
+    public function test_packages_resumes_valid_pure_radius_payment_for_same_device_even_if_previous_session_is_not_live(): void
+    {
+        config()->set('radius.enabled', true);
+        config()->set('radius.pure_radius', true);
+        config()->set('radius.access_mode', 'mac');
+
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant, [
+            'duration_value' => 24,
+            'duration_unit' => 'hours',
+        ]);
+        $router = $this->createRouter($tenant, [
+            'status' => 'online',
+            'last_seen_at' => now(),
+        ]);
+        $payment = $this->createPayment($tenant, $package, [
+            'status' => 'completed',
+            'completed_at' => now()->subMinutes(30),
+            'confirmed_at' => now()->subMinutes(30),
+            'metadata' => [
+                'gateway' => 'daraja',
+                'client_context' => [
+                    'mac' => 'AA:BB:CC:DD:EE:FF',
+                    'ip' => '10.0.0.50',
+                ],
+            ],
+        ]);
+
+        UserSession::query()->create([
+            'tenant_id' => $tenant->id,
+            'router_id' => $router->id,
+            'payment_id' => $payment->id,
+            'package_id' => $package->id,
+            'username' => 'AA:BB:CC:DD:EE:FF',
+            'phone' => '0712345678',
+            'mac_address' => 'AA:BB:CC:DD:EE:FF',
+            'ip_address' => '10.0.0.50',
+            'status' => 'terminated',
+            'started_at' => now()->subMinutes(35),
+            'terminated_at' => now()->subMinutes(5),
+            'termination_reason' => 'left_network',
+            'expires_at' => now()->addHours(23),
+            'metadata' => [
+                'radius' => [
+                    'provisioned' => true,
+                    'username' => 'AA:BB:CC:DD:EE:FF',
+                    'expires_at' => now()->addHours(23)->toIso8601String(),
+                ],
+            ],
+        ]);
+
+        $response = $this->get(route('wifi.packages', [
+            'tenant_id' => $tenant->id,
+            'mac' => 'AA-BB-CC-DD-EE-FF',
+            'ip' => '10.0.0.50',
+            'link-login-only' => 'http://login.wifi/login',
+        ]));
+
+        $response->assertRedirect(route('wifi.status', [
+            'phone' => '0712345678',
+            'tenant_id' => $tenant->id,
+            'payment' => $payment->id,
+            'mac' => 'AA:BB:CC:DD:EE:FF',
+            'ip' => '10.0.0.50',
+            'link-login-only' => 'http://login.wifi/login',
+            'link-login' => 'http://login.wifi/login',
+        ]));
+    }
+
     public function test_status_route_uses_explicit_payment_query_parameter(): void
     {
         $tenant = $this->createTenant();
@@ -2339,12 +2408,29 @@ class CaptivePortalPaymentStatusTest extends TestCase
         $response->assertSee('Connecting you to WiFi', false);
         $response->assertSee('shouldUseTopLevelRadiusAutoLogin', false);
         $response->assertSee('buildRadiusAutoLoginNavigationUrl', false);
-        $response->assertSee("loginUrl.searchParams.set('username', String(loginPayload.username || ''));", false);
-        $response->assertSee('window.location.replace(navigationUrl);', false);
+        $response->assertSee('shouldUseGetRadiusAutoLogin', false);
+        $response->assertSee("form.method = shouldUseGetRadiusAutoLogin(loginPayload) ? 'GET' : 'POST';", false);
         $response->assertSee("form.target = shouldUseTopLevelRadiusAutoLogin(loginPayload) ? '_top' : 'cpRadiusAutoLoginFrame';", false);
         $response->assertSee("return actionUrl.origin !== window.location.origin;", false);
         $response->assertSee('If internet opens immediately, you can start browsing right away', false);
         $response->assertDontSee('radiusLoginSubmittedUrl', false);
+
+        $expectedStatusCheckRoute = route('wifi.status.check', [
+            'phone' => '0712345678',
+            'tenant_id' => $tenant->id,
+            'payment' => $payment->id,
+            'link-login-only' => 'http://' . $router->ip_address . '/login',
+            'link-login' => 'http://' . $router->ip_address . '/login',
+            'dst' => 'https://example.com/after-login',
+            'popup' => 'true',
+        ]);
+
+        $content = str_replace(["\r\n", "\r"], "\n", (string) $response->getContent());
+        $this->assertStringContainsString(
+            'fetch(' . json_encode($expectedStatusCheckRoute, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT) . ', {',
+            $content
+        );
+        $this->assertStringNotContainsString('fetch(\'' . str_replace('&', '&amp;', $expectedStatusCheckRoute) . '\'', $content);
     }
 
     public function test_status_reauthorizes_current_hotspot_request_when_paid_session_is_stale_on_return(): void
@@ -2522,7 +2608,9 @@ class CaptivePortalPaymentStatusTest extends TestCase
         $response->assertDontSee('name="response" value=""', false);
 
         $content = str_replace(["\r\n", "\r"], "\n", (string) $response->getContent());
-        $this->assertStringContainsString("if (\n                passwordInput\n                && radiusAutoLogin.chap_id\n                && radiusAutoLogin.chap_challenge\n            ) {", $content);
+        $this->assertStringContainsString('passwordInput', $content);
+        $this->assertStringContainsString('&& radiusAutoLogin.chap_id', $content);
+        $this->assertStringContainsString('&& radiusAutoLogin.chap_challenge', $content);
         $this->assertStringNotContainsString("if (\n                && passwordInput", $content);
     }
 
