@@ -79,12 +79,6 @@ class CaptivePortalController extends Controller
 
         session(['captive_tenant_id' => $tenant->id]);
 
-        if ($showReconnectScreen) {
-            $voucherPrefix = $this->resolveReconnectVoucherPrefix($tenant);
-
-            return view('captive.reconnect', compact('phone', 'tenant', 'voucherPrefix', 'clientMac', 'clientIp', 'hotspotContext'));
-        }
-        
         $activeSession = $this->resolvePackagesActiveSession(
             tenantId: (int) $tenant->id,
             phone: $phone,
@@ -96,6 +90,60 @@ class CaptivePortalController extends Controller
         if ($activeSession && !$phone && !empty($activeSession->phone)) {
             $phone = (string) $activeSession->phone;
             session(['captive_phone' => $phone]);
+        }
+
+        if ($showReconnectScreen) {
+            if ($activeSession) {
+                $activePayment = $activeSession->payment()->first();
+                if ($activePayment) {
+                    session([
+                        'captive_tenant_id' => $tenant->id,
+                        'captive_payment_id' => $activePayment->id,
+                    ]);
+
+                    if (!empty($activeSession->phone)) {
+                        session(['captive_phone' => (string) $activeSession->phone]);
+                    }
+
+                    return redirect()->route('wifi.status', $this->buildStatusRouteParameters(
+                        phone: (string) ($activeSession->phone ?? $phone),
+                        payment: $activePayment,
+                        tenantId: (int) $tenant->id
+                    ))->with('message', 'We found your paid session. Reconnecting now.');
+                }
+            }
+
+            $resumablePayment = $this->resolvePackagesResumablePayment(
+                tenantId: (int) $tenant->id,
+                phone: $phone,
+                clientMac: $clientMac,
+                clientIp: $clientIp,
+                allowPhoneOnlyFallback: false
+            );
+
+            if ($resumablePayment) {
+                $resumePhone = $this->normalizePhoneForStorage((string) $resumablePayment->phone)
+                    ?? trim((string) $resumablePayment->phone);
+
+                session([
+                    'captive_tenant_id' => $tenant->id,
+                    'captive_payment_id' => $resumablePayment->id,
+                ]);
+
+                if ($resumePhone !== '') {
+                    session(['captive_phone' => $resumePhone]);
+                }
+
+                return redirect()->route('wifi.status', $this->buildStatusRouteParameters(
+                    phone: $resumePhone !== '' ? $resumePhone : (string) $resumablePayment->phone,
+                    payment: $resumablePayment,
+                    tenantId: (int) $tenant->id
+                ))->with('message', 'We found your recent payment. Reconnecting now.');
+            }
+
+            $voucherPrefix = $this->resolveReconnectVoucherPrefix($tenant);
+
+            return view('captive.reconnect', compact('phone', 'tenant', 'voucherPrefix', 'clientMac', 'clientIp', 'hotspotContext'));
         }
 
         if (!$activeSession) {

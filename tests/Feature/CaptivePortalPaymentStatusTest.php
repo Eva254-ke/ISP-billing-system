@@ -865,6 +865,52 @@ class CaptivePortalPaymentStatusTest extends TestCase
         $this->assertSame(1, (int) $payment->reconnect_count);
     }
 
+    public function test_reconnect_screen_auto_redirects_for_valid_paid_payment_in_session(): void
+    {
+        config()->set('radius.enabled', true);
+        config()->set('radius.pure_radius', true);
+
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant);
+        $router = $this->createRouter($tenant, [
+            'status' => 'online',
+            'last_seen_at' => now(),
+        ]);
+
+        $payment = $this->createPayment($tenant, $package, [
+            'status' => 'completed',
+            'confirmed_at' => now()->subMinute(),
+            'completed_at' => now()->subMinute(),
+            'activated_at' => now()->subMinute(),
+            'mpesa_receipt_number' => 'QKAUTO001',
+            'metadata' => [
+                'gateway' => 'daraja',
+                'hotspot_context' => [
+                    'link_login_only' => 'http://' . $router->ip_address . '/login',
+                    'link_login' => 'http://' . $router->ip_address . '/login',
+                ],
+            ],
+        ]);
+
+        $response = $this->withSession([
+            'captive_phone' => '0712345678',
+            'captive_payment_id' => $payment->id,
+            'captive_tenant_id' => $tenant->id,
+        ])->get(route('wifi.packages', [
+            'tenant_id' => $tenant->id,
+            'mode' => 'reconnect',
+        ]));
+
+        $response->assertRedirect(route('wifi.status', [
+            'phone' => '0712345678',
+            'tenant_id' => $tenant->id,
+            'payment' => $payment->id,
+            'link-login-only' => 'http://' . $router->ip_address . '/login',
+            'link-login' => 'http://' . $router->ip_address . '/login',
+        ]));
+        $response->assertSessionHas('message', 'We found your recent payment. Reconnecting now.');
+    }
+
     public function test_reconnect_does_not_treat_another_devices_phone_only_session_as_current_device(): void
     {
         config()->set('radius.enabled', true);
@@ -938,6 +984,102 @@ class CaptivePortalPaymentStatusTest extends TestCase
         $response->assertSessionHas('success');
         $this->assertSame(1, (int) $payment->reconnect_count);
         $this->assertNotNull(UserSession::query()->where('payment_id', $payment->id)->first());
+    }
+
+    public function test_packages_show_active_voucher_session_without_requiring_sign_in_again(): void
+    {
+        config()->set('radius.enabled', true);
+        config()->set('radius.pure_radius', true);
+
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant);
+        $router = $this->createRouter($tenant, [
+            'status' => 'online',
+            'last_seen_at' => now(),
+        ]);
+        $payment = $this->createPayment($tenant, $package, [
+            'phone' => 'VCHABCD1234',
+            'status' => 'completed',
+            'payment_channel' => Payment::CHANNEL_VOUCHER,
+            'confirmed_at' => now()->subMinute(),
+            'completed_at' => now()->subMinute(),
+            'activated_at' => now()->subMinute(),
+        ]);
+
+        UserSession::query()->create([
+            'tenant_id' => $tenant->id,
+            'router_id' => $router->id,
+            'payment_id' => $payment->id,
+            'package_id' => $package->id,
+            'username' => $this->expectedPhoneRadiusUsername($payment),
+            'phone' => 'VCHABCD1234',
+            'mac_address' => 'AA:BB:CC:DD:EE:11',
+            'ip_address' => '10.0.0.51',
+            'status' => 'active',
+            'started_at' => now()->subMinutes(5),
+            'expires_at' => now()->addHour(),
+            'last_synced_at' => now(),
+        ]);
+
+        $response = $this->get(route('wifi.packages', [
+            'tenant_id' => $tenant->id,
+            'mac' => 'AA-BB-CC-DD-EE-11',
+        ]));
+
+        $response->assertOk();
+        $response->assertViewIs('captive.packages');
+        $response->assertSeeText('You are already connected');
+        $response->assertDontSeeText('Select a package, then enter the Safaricom number you want to pay with.');
+    }
+
+    public function test_reconnect_screen_auto_redirects_for_active_voucher_session_on_same_device(): void
+    {
+        config()->set('radius.enabled', true);
+        config()->set('radius.pure_radius', true);
+
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant);
+        $router = $this->createRouter($tenant, [
+            'status' => 'online',
+            'last_seen_at' => now(),
+        ]);
+        $payment = $this->createPayment($tenant, $package, [
+            'phone' => 'VCHZXCV5678',
+            'status' => 'completed',
+            'payment_channel' => Payment::CHANNEL_VOUCHER,
+            'confirmed_at' => now()->subMinute(),
+            'completed_at' => now()->subMinute(),
+            'activated_at' => now()->subMinute(),
+        ]);
+
+        UserSession::query()->create([
+            'tenant_id' => $tenant->id,
+            'router_id' => $router->id,
+            'payment_id' => $payment->id,
+            'package_id' => $package->id,
+            'username' => $this->expectedPhoneRadiusUsername($payment),
+            'phone' => 'VCHZXCV5678',
+            'mac_address' => 'AA:BB:CC:DD:EE:22',
+            'ip_address' => '10.0.0.52',
+            'status' => 'active',
+            'started_at' => now()->subMinutes(5),
+            'expires_at' => now()->addHour(),
+            'last_synced_at' => now(),
+        ]);
+
+        $response = $this->get(route('wifi.packages', [
+            'tenant_id' => $tenant->id,
+            'mode' => 'reconnect',
+            'mac' => 'AA-BB-CC-DD-EE-22',
+        ]));
+
+        $response->assertRedirect(route('wifi.status', [
+            'phone' => 'access-' . $payment->id,
+            'tenant_id' => $tenant->id,
+            'payment' => $payment->id,
+            'mac' => 'AA:BB:CC:DD:EE:22',
+        ]));
+        $response->assertSessionHas('message', 'We found your paid session. Reconnecting now.');
     }
 
     public function test_voucher_redemption_works_without_phone_input(): void
