@@ -86,7 +86,8 @@ class CaptivePortalController extends Controller
             tenantId: (int) $tenant->id,
             phone: $phone,
             clientMac: $clientMac,
-            clientIp: $clientIp
+            clientIp: $clientIp,
+            allowPhoneOnlyFallback: false
         );
 
         if ($activeSession && !$phone && !empty($activeSession->phone)) {
@@ -99,7 +100,8 @@ class CaptivePortalController extends Controller
                 tenantId: (int) $tenant->id,
                 phone: $phone,
                 clientMac: $clientMac,
-                clientIp: $clientIp
+                clientIp: $clientIp,
+                allowPhoneOnlyFallback: false
             );
 
             if ($resumablePayment) {
@@ -557,14 +559,20 @@ class CaptivePortalController extends Controller
         return $statusView;
     }
 
-    private function resolvePackagesActiveSession(int $tenantId, ?string $phone = null, ?string $clientMac = null, ?string $clientIp = null): ?UserSession
-    {
+    private function resolvePackagesActiveSession(
+        int $tenantId,
+        ?string $phone = null,
+        ?string $clientMac = null,
+        ?string $clientIp = null,
+        bool $allowPhoneOnlyFallback = true
+    ): ?UserSession {
         if ($phone) {
             $phoneSession = $this->resolveActiveSessionForPhone(
                 tenantId: $tenantId,
                 phone: $phone,
                 clientMac: $clientMac,
-                clientIp: $clientIp
+                clientIp: $clientIp,
+                allowPhoneOnlyFallback: $allowPhoneOnlyFallback
             );
 
             if ($phoneSession) {
@@ -602,7 +610,13 @@ class CaptivePortalController extends Controller
         return null;
     }
 
-    private function resolvePackagesResumablePayment(int $tenantId, ?string $phone = null, ?string $clientMac = null, ?string $clientIp = null): ?Payment
+    private function resolvePackagesResumablePayment(
+        int $tenantId,
+        ?string $phone = null,
+        ?string $clientMac = null,
+        ?string $clientIp = null,
+        bool $allowPhoneOnlyFallback = true
+    ): ?Payment
     {
         $sessionPaymentId = (int) session('captive_payment_id', 0);
         if ($sessionPaymentId > 0) {
@@ -617,7 +631,7 @@ class CaptivePortalController extends Controller
             }
         }
 
-        if ($phone) {
+        if ($phone && $allowPhoneOnlyFallback) {
             $candidates = $this->buildStatusPaymentQuery($phone, $tenantId)
                 ->where('created_at', '>=', now()->subMinutes(self::DUPLICATE_PAYMENT_WINDOW_MINUTES))
                 ->orderByDesc('created_at')
@@ -1019,7 +1033,10 @@ class CaptivePortalController extends Controller
                 clientIp: $clientContext['ip'] ?? null
             );
             $voucherInput = strtoupper(trim((string) $request->voucher_code));
-            $codeCandidate = strtoupper(substr($voucherInput, strrpos('-' . $voucherInput, '-') + 1));
+            $codeCandidate = str_contains($voucherInput, '-')
+                ? strtoupper((string) strrchr($voucherInput, '-'))
+                : $voucherInput;
+            $codeCandidate = ltrim($codeCandidate, '-');
 
             $voucher = Voucher::query()
                 ->when($tenantId > 0, fn ($query) => $query->where('tenant_id', $tenantId))
@@ -1049,7 +1066,8 @@ class CaptivePortalController extends Controller
                 tenantId: $tenantId,
                 phone: $phone,
                 clientMac: $clientContext['mac'] ?? null,
-                clientIp: $clientContext['ip'] ?? null
+                clientIp: $clientContext['ip'] ?? null,
+                allowPhoneOnlyFallback: false
             );
             if ($activeSession) {
                 $activePayment = $activeSession->payment()->first();
@@ -1079,9 +1097,11 @@ class CaptivePortalController extends Controller
 
             try {
                 $payment = DB::transaction(function () use ($voucher, $phone, $routerId, $clientContextMeta, $hotspotContextMeta) {
+                    $paymentPhone = $phone ?? ('access-voucher-' . strtoupper(uniqid()));
+
                     $payment = Payment::create([
                         'tenant_id' => $voucher->tenant_id,
-                        'phone' => $phone,
+                        'phone' => $paymentPhone,
                         'package_id' => $voucher->package_id,
                         'package_name' => $voucher->package?->name,
                         'amount' => 0,
@@ -1197,7 +1217,8 @@ class CaptivePortalController extends Controller
                 tenantId: $tenantId,
                 phone: $phone,
                 clientMac: $clientContext['mac'] ?? null,
-                clientIp: $clientContext['ip'] ?? null
+                clientIp: $clientContext['ip'] ?? null,
+                allowPhoneOnlyFallback: false
             );
         
         if ($activeSession) {
@@ -3054,7 +3075,8 @@ class CaptivePortalController extends Controller
         int $tenantId,
         string $phone,
         ?string $clientMac = null,
-        ?string $clientIp = null
+        ?string $clientIp = null,
+        bool $allowPhoneOnlyFallback = true
     ): ?UserSession {
         $baseQuery = UserSession::query()
             ->where('tenant_id', $tenantId)
@@ -3082,6 +3104,10 @@ class CaptivePortalController extends Controller
         }
 
         if ($this->hasClientContext($clientMac, $clientIp)) {
+            return null;
+        }
+
+        if (!$allowPhoneOnlyFallback) {
             return null;
         }
 

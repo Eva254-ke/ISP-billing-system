@@ -255,10 +255,7 @@ class CaptivePortalPaymentStatusTest extends TestCase
         ]);
 
         $radiusAccountingService = Mockery::mock(RadiusAccountingService::class);
-        $radiusAccountingService->shouldReceive('syncActiveSession')
-            ->once()
-            ->withArgs(fn (UserSession $resolvedSession): bool => (int) $resolvedSession->id === (int) $session->id)
-            ->andReturnNull();
+        $radiusAccountingService->shouldNotReceive('syncActiveSession');
         $this->app->instance(RadiusAccountingService::class, $radiusAccountingService);
 
         $mikroTikService = Mockery::mock(MikroTikService::class);
@@ -270,11 +267,9 @@ class CaptivePortalPaymentStatusTest extends TestCase
             'phone' => '0712345678',
         ]));
 
-        $response->assertRedirect(route('wifi.status', [
-            'phone' => '0712345678',
-            'tenant_id' => $tenant->id,
-            'payment' => $payment->id,
-        ]));
+        $response->assertOk();
+        $response->assertViewIs('captive.packages');
+        $response->assertSeeText('Choose a package');
     }
 
     public function test_packages_resumes_radius_payment_waiting_for_hotspot_login_even_after_raw_idle_expiry(): void
@@ -870,6 +865,81 @@ class CaptivePortalPaymentStatusTest extends TestCase
         $this->assertSame(1, (int) $payment->reconnect_count);
     }
 
+    public function test_reconnect_does_not_treat_another_devices_phone_only_session_as_current_device(): void
+    {
+        config()->set('radius.enabled', true);
+        config()->set('radius.pure_radius', true);
+
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant);
+        $router = $this->createRouter($tenant, [
+            'status' => 'online',
+            'last_seen_at' => now(),
+        ]);
+
+        $oldPayment = $this->createPayment($tenant, $package, [
+            'status' => 'completed',
+            'confirmed_at' => now()->subMinutes(15),
+            'completed_at' => now()->subMinutes(15),
+            'activated_at' => now()->subMinutes(15),
+        ]);
+
+        UserSession::query()->create([
+            'tenant_id' => $tenant->id,
+            'router_id' => $router->id,
+            'payment_id' => $oldPayment->id,
+            'package_id' => $package->id,
+            'username' => $this->expectedPhoneRadiusUsername($oldPayment),
+            'phone' => '0712345678',
+            'mac_address' => 'AA:BB:CC:DD:EE:FF',
+            'ip_address' => '10.0.0.50',
+            'status' => 'active',
+            'started_at' => now()->subMinutes(15),
+            'expires_at' => now()->addHour(),
+            'last_synced_at' => now(),
+        ]);
+
+        $payment = $this->createPayment($tenant, $package, [
+            'status' => 'confirmed',
+            'confirmed_at' => now()->subMinute(),
+            'mpesa_receipt_number' => 'QKPHONEONLY02',
+            'metadata' => [
+                'gateway' => 'daraja',
+                'hotspot_context' => [
+                    'link_login_only' => 'http://' . $router->ip_address . '/login',
+                ],
+            ],
+        ]);
+
+        $sessionManager = Mockery::mock(SessionManager::class);
+        $sessionManager->shouldNotReceive('activateSession');
+        $this->app->instance(SessionManager::class, $sessionManager);
+
+        $radiusProvisioning = Mockery::mock(FreeRadiusProvisioningService::class);
+        $radiusProvisioning->shouldReceive('provisionUser')->once();
+        $this->app->instance(FreeRadiusProvisioningService::class, $radiusProvisioning);
+
+        $response = $this->post(route('wifi.reconnect', ['tenant_id' => $tenant->id]), [
+            'tenant_id' => $tenant->id,
+            'phone' => '0712345678',
+            'mpesa_code' => 'QKPHONEONLY02',
+            'link-login-only' => 'http://' . $router->ip_address . '/login',
+        ]);
+
+        $payment->refresh();
+
+        $response->assertRedirect(route('wifi.status', [
+            'phone' => '0712345678',
+            'tenant_id' => $tenant->id,
+            'payment' => $payment->id,
+            'link-login-only' => 'http://' . $router->ip_address . '/login',
+            'link-login' => 'http://' . $router->ip_address . '/login',
+        ]));
+        $response->assertSessionHas('success');
+        $this->assertSame(1, (int) $payment->reconnect_count);
+        $this->assertNotNull(UserSession::query()->where('payment_id', $payment->id)->first());
+    }
+
     public function test_voucher_redemption_works_without_phone_input(): void
     {
         config()->set('radius.enabled', true);
@@ -913,9 +983,80 @@ class CaptivePortalPaymentStatusTest extends TestCase
         ]));
         $response->assertSessionHas('success');
 
-        $this->assertNull($payment->phone);
+        $this->assertStringStartsWith('access-voucher-', (string) $payment->phone);
         $this->assertSame(Voucher::STATUS_USED, (string) $voucher->status);
         $this->assertNull($voucher->used_by_phone);
+    }
+
+    public function test_voucher_redemption_is_not_blocked_by_another_devices_phone_only_session(): void
+    {
+        config()->set('radius.enabled', true);
+        config()->set('radius.pure_radius', true);
+
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant);
+        $router = $this->createRouter($tenant, [
+            'status' => 'online',
+            'last_seen_at' => now(),
+        ]);
+        $voucher = $this->createVoucher($tenant, $package);
+
+        $activePayment = $this->createPayment($tenant, $package, [
+            'status' => 'completed',
+            'confirmed_at' => now()->subMinutes(10),
+            'completed_at' => now()->subMinutes(10),
+            'activated_at' => now()->subMinutes(10),
+        ]);
+
+        UserSession::query()->create([
+            'tenant_id' => $tenant->id,
+            'router_id' => $router->id,
+            'payment_id' => $activePayment->id,
+            'package_id' => $package->id,
+            'username' => $this->expectedPhoneRadiusUsername($activePayment),
+            'phone' => '0712345678',
+            'mac_address' => 'AA:BB:CC:DD:EE:FF',
+            'ip_address' => '10.0.0.50',
+            'status' => 'active',
+            'started_at' => now()->subMinutes(10),
+            'expires_at' => now()->addHour(),
+            'last_synced_at' => now(),
+        ]);
+
+        $sessionManager = Mockery::mock(SessionManager::class);
+        $sessionManager->shouldNotReceive('activateSession');
+        $this->app->instance(SessionManager::class, $sessionManager);
+
+        $radiusProvisioning = Mockery::mock(FreeRadiusProvisioningService::class);
+        $radiusProvisioning->shouldReceive('provisionUser')->once();
+        $this->app->instance(FreeRadiusProvisioningService::class, $radiusProvisioning);
+
+        $response = $this->withSession([
+            'captive_phone' => '0712345678',
+        ])->post(route('wifi.reconnect', ['tenant_id' => $tenant->id]), [
+            'tenant_id' => $tenant->id,
+            'voucher_code' => $voucher->code_display,
+            'link-login-only' => 'http://' . $router->ip_address . '/login',
+        ]);
+
+        $payment = Payment::query()
+            ->where('payment_channel', Payment::CHANNEL_VOUCHER)
+            ->latest('id')
+            ->firstOrFail();
+
+        $voucher->refresh();
+
+        $response->assertRedirect(route('wifi.status', [
+            'phone' => '0712345678',
+            'tenant_id' => $tenant->id,
+            'payment' => $payment->id,
+            'link-login-only' => 'http://' . $router->ip_address . '/login',
+            'link-login' => 'http://' . $router->ip_address . '/login',
+        ]));
+        $response->assertSessionHas('success');
+        $this->assertSame(Voucher::STATUS_USED, (string) $voucher->status);
+        $this->assertSame('0712345678', (string) $voucher->used_by_phone);
+        $this->assertSame(Payment::CHANNEL_VOUCHER, (string) $payment->payment_channel);
     }
 
     public function test_status_shows_prompt_sent_after_successful_stk_acceptance(): void
