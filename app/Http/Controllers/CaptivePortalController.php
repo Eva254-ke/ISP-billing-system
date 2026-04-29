@@ -2194,11 +2194,16 @@ class CaptivePortalController extends Controller
             $existingRadiusMetadata = is_array($existingSessionMetadata['radius'] ?? null)
                 ? $existingSessionMetadata['radius']
                 : [];
+            $radiusProvisioning = app(FreeRadiusProvisioningService::class);
             $provisionedUntil = $this->parseFlexibleDateTime($existingRadiusMetadata['expires_at'] ?? null);
             $radiusProvisioned = (bool) ($existingRadiusMetadata['provisioned'] ?? false)
                 && (string) ($existingRadiusMetadata['username'] ?? '') === $username
                 && $provisionedUntil !== null
-                && !$provisionedUntil->lt($extensionExpiresAt);
+                && !$provisionedUntil->lt($extensionExpiresAt)
+                && !$radiusProvisioning->profileNeedsRefresh(
+                    username: $username,
+                    callingStationId: $reusedExtensionSession->mac_address ?? $clientMac
+                );
 
             $radiusMetadata = array_merge($existingRadiusMetadata, [
                 'username' => $username,
@@ -2211,7 +2216,6 @@ class CaptivePortalController extends Controller
 
             if (!$radiusProvisioned) {
                 try {
-                    $radiusProvisioning = app(FreeRadiusProvisioningService::class);
                     $radiusProvisioning->provisionUser(
                         username: $username,
                         password: $password,
@@ -2375,13 +2379,17 @@ class CaptivePortalController extends Controller
 
         $sessionMetadata = is_array($session->metadata) ? $session->metadata : [];
         $existingRadiusMetadata = is_array($sessionMetadata['radius'] ?? null) ? $sessionMetadata['radius'] : [];
+        $radiusProvisioning = app(FreeRadiusProvisioningService::class);
         $radiusProvisioned = (bool) ($existingRadiusMetadata['provisioned'] ?? false)
             && (string) ($existingRadiusMetadata['username'] ?? '') === $username
-            && $expiresAt->isFuture();
+            && $expiresAt->isFuture()
+            && !$radiusProvisioning->profileNeedsRefresh(
+                username: $username,
+                callingStationId: $session->mac_address ?? $clientMac
+            );
 
         if ($radiusEnabled && $payment->package && !$radiusProvisioned) {
             try {
-                $radiusProvisioning = app(FreeRadiusProvisioningService::class);
                 $radiusProvisioning->provisionUser(
                     username: $username,
                     password: $password,

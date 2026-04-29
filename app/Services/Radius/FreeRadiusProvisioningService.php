@@ -34,13 +34,19 @@ class FreeRadiusProvisioningService
         $rateLimitAttribute = (string) config('radius.attributes.rate_limit', 'Mikrotik-Rate-Limit');
         $simultaneousUseAttribute = (string) config('radius.attributes.simultaneous_use', 'Simultaneous-Use');
         $simultaneousUse = max(1, (int) config('radius.simultaneous_use', 1));
-        $normalizedCallingStationId = $this->resolveIdentityResolver()->normalizeMacAddress($callingStationId);
+        $identityResolver = $this->resolveIdentityResolver();
+        $normalizedCallingStationId = $identityResolver->normalizeMacAddress($callingStationId);
+        $normalizedUsernameMac = $identityResolver->normalizeMacAddress($username);
+        $enforceSimultaneousUse = !(
+            $normalizedUsernameMac !== null
+            && ($normalizedCallingStationId === null || $normalizedCallingStationId === $normalizedUsernameMac)
+        );
 
         $sessionTimeout = max(60, (int) $package->duration_in_minutes * 60);
         $rateLimit = $this->buildMikrotikRateLimit($package);
         $db = DB::connection($connection);
 
-        $db->transaction(function () use ($db, $radcheck, $radreply, $username, $password, $sessionTimeout, $rateLimit, $simultaneousUse, $expiresAt, $normalizedCallingStationId, $cleartextPasswordAttribute, $callingStationIdAttribute, $expirationAttribute, $sessionTimeoutAttribute, $rateLimitAttribute, $simultaneousUseAttribute) {
+        $db->transaction(function () use ($db, $radcheck, $radreply, $username, $password, $sessionTimeout, $rateLimit, $simultaneousUse, $expiresAt, $normalizedCallingStationId, $cleartextPasswordAttribute, $callingStationIdAttribute, $expirationAttribute, $sessionTimeoutAttribute, $rateLimitAttribute, $simultaneousUseAttribute, $enforceSimultaneousUse) {
             // Reset profile rows for idempotent provisioning
             $db
                 ->table($radcheck)
@@ -54,22 +60,25 @@ class FreeRadiusProvisioningService
                 ->whereIn('attribute', [$sessionTimeoutAttribute, $rateLimitAttribute])
                 ->delete();
 
+            $radcheckRows = [[
+                'username' => $username,
+                'attribute' => $cleartextPasswordAttribute,
+                'op' => ':=',
+                'value' => $password,
+            ]];
+
+            if ($enforceSimultaneousUse) {
+                $radcheckRows[] = [
+                    'username' => $username,
+                    'attribute' => $simultaneousUseAttribute,
+                    'op' => ':=',
+                    'value' => (string) $simultaneousUse,
+                ];
+            }
+
             $db
                 ->table($radcheck)
-                ->insert([
-                    [
-                        'username' => $username,
-                        'attribute' => $cleartextPasswordAttribute,
-                        'op' => ':=',
-                        'value' => $password,
-                    ],
-                    [
-                        'username' => $username,
-                        'attribute' => $simultaneousUseAttribute,
-                        'op' => ':=',
-                        'value' => (string) $simultaneousUse,
-                    ],
-                ]);
+                ->insert($radcheckRows);
 
             if ($normalizedCallingStationId !== null) {
                 $db
@@ -117,11 +126,65 @@ class FreeRadiusProvisioningService
             'package_name' => $package->name,
             'session_timeout_seconds' => $sessionTimeout,
             'rate_limit' => $rateLimit,
-            'simultaneous_use' => $simultaneousUse,
+            'simultaneous_use' => $enforceSimultaneousUse ? $simultaneousUse : null,
+            'simultaneous_use_enforced' => $enforceSimultaneousUse,
             'calling_station_id' => $normalizedCallingStationId,
             'expires_at' => $expiresAt?->format(\DateTimeInterface::ATOM),
             'connection' => $connection,
         ]);
+    }
+
+    public function profileNeedsRefresh(string $username, ?string $callingStationId = null): bool
+    {
+        $username = trim($username);
+        if ($username === '') {
+            return true;
+        }
+
+        $identityResolver = $this->resolveIdentityResolver();
+        $normalizedCallingStationId = $identityResolver->normalizeMacAddress($callingStationId);
+        $normalizedUsernameMac = $identityResolver->normalizeMacAddress($username);
+
+        if (
+            $normalizedUsernameMac === null
+            || ($normalizedCallingStationId !== null && $normalizedCallingStationId !== $normalizedUsernameMac)
+        ) {
+            return false;
+        }
+
+        $connection = (string) config('radius.db_connection', 'radius');
+        $radcheck = (string) config('radius.tables.radcheck', 'radcheck');
+        $cleartextPasswordAttribute = (string) config('radius.attributes.cleartext_password', 'Cleartext-Password');
+        $callingStationIdAttribute = (string) config('radius.attributes.calling_station_id', 'Calling-Station-Id');
+        $simultaneousUseAttribute = (string) config('radius.attributes.simultaneous_use', 'Simultaneous-Use');
+        $db = DB::connection($connection);
+
+        $hasPassword = $db
+            ->table($radcheck)
+            ->where('username', $username)
+            ->where('attribute', $cleartextPasswordAttribute)
+            ->exists();
+
+        if (!$hasPassword) {
+            return true;
+        }
+
+        $hasMacBinding = $normalizedCallingStationId === null || $db
+            ->table($radcheck)
+            ->where('username', $username)
+            ->where('attribute', $callingStationIdAttribute)
+            ->where('value', $normalizedCallingStationId)
+            ->exists();
+
+        if (!$hasMacBinding) {
+            return true;
+        }
+
+        return $db
+            ->table($radcheck)
+            ->where('username', $username)
+            ->where('attribute', $simultaneousUseAttribute)
+            ->exists();
     }
 
     public function revokeUser(string $username): void

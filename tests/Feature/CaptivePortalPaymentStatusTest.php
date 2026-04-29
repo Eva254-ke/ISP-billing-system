@@ -2566,6 +2566,172 @@ class CaptivePortalPaymentStatusTest extends TestCase
         $this->assertSame('AA:BB:CC:DD:EE:FF', $macBinding->value);
     }
 
+    public function test_pure_radius_mac_provisioning_does_not_set_simultaneous_use_for_mac_identity(): void
+    {
+        config()->set('radius.enabled', true);
+        config()->set('radius.pure_radius', true);
+        config()->set('radius.access_mode', 'mac');
+        $this->configureRadiusProvisioningConnection();
+
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant);
+        $router = $this->createRouter($tenant, [
+            'status' => 'online',
+            'last_seen_at' => now(),
+        ]);
+
+        $payment = $this->createPayment($tenant, $package, [
+            'status' => 'confirmed',
+            'confirmed_at' => now(),
+            'mpesa_checkout_request_id' => 'ws_CO_radius_mac_no_simultaneous_use_001',
+        ]);
+
+        $sessionManager = Mockery::mock(SessionManager::class);
+        $sessionManager->shouldNotReceive('activateSession');
+        $this->app->instance(SessionManager::class, $sessionManager);
+
+        $response = $this->get(route('wifi.status', [
+            'phone' => '0712345678',
+            'tenant_id' => $tenant->id,
+            'payment' => $payment->id,
+            'mac' => 'FA-38-A3-68-6F-CA',
+            'ip' => '10.0.0.25',
+            'link-login-only' => 'http://' . $router->ip_address . '/login',
+        ]));
+
+        $response->assertOk();
+
+        $username = 'FA:38:A3:68:6F:CA';
+        $this->assertSame(0, DB::connection('radius')->table('radcheck')
+            ->where('username', $username)
+            ->where('attribute', 'Simultaneous-Use')
+            ->count());
+
+        $macBinding = DB::connection('radius')->table('radcheck')
+            ->where('username', $username)
+            ->where('attribute', 'Calling-Station-Id')
+            ->first();
+
+        $this->assertNotNull($macBinding);
+        $this->assertSame('FA:38:A3:68:6F:CA', $macBinding->value);
+    }
+
+    public function test_status_reprovisions_mac_identity_when_existing_radius_profile_still_enforces_simultaneous_use(): void
+    {
+        config()->set('radius.enabled', true);
+        config()->set('radius.pure_radius', true);
+        config()->set('radius.access_mode', 'mac');
+        $this->configureRadiusProvisioningConnection();
+
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant);
+        $router = $this->createRouter($tenant, [
+            'status' => 'online',
+            'last_seen_at' => now(),
+        ]);
+
+        $payment = $this->createPayment($tenant, $package, [
+            'status' => 'completed',
+            'confirmed_at' => now()->subMinute(),
+            'completed_at' => now()->subMinute(),
+            'activated_at' => now()->subMinute(),
+            'mpesa_checkout_request_id' => 'ws_CO_radius_mac_refresh_profile_001',
+            'metadata' => [
+                'radius' => [
+                    'provisioned' => true,
+                    'username' => 'FA:38:A3:68:6F:CA',
+                    'expires_at' => now()->addDay()->toIso8601String(),
+                    'identity_type' => 'mac',
+                    'access_mode' => 'mac',
+                ],
+            ],
+        ]);
+
+        $session = UserSession::query()->create([
+            'tenant_id' => $tenant->id,
+            'router_id' => $router->id,
+            'payment_id' => $payment->id,
+            'package_id' => $package->id,
+            'username' => 'FA:38:A3:68:6F:CA',
+            'phone' => '0712345678',
+            'mac_address' => 'FA:38:A3:68:6F:CA',
+            'ip_address' => '10.0.0.25',
+            'status' => 'idle',
+            'started_at' => now()->subMinute(),
+            'last_activity_at' => now()->subMinute(),
+            'expires_at' => now()->addDay(),
+            'metadata' => [
+                'radius' => [
+                    'provisioned' => true,
+                    'username' => 'FA:38:A3:68:6F:CA',
+                    'expires_at' => now()->addDay()->toIso8601String(),
+                    'identity_type' => 'mac',
+                    'access_mode' => 'mac',
+                ],
+            ],
+        ]);
+
+        DB::connection('radius')->table('radcheck')->insert([
+            [
+                'username' => 'FA:38:A3:68:6F:CA',
+                'attribute' => 'Cleartext-Password',
+                'op' => ':=',
+                'value' => 'FA:38:A3:68:6F:CA',
+            ],
+            [
+                'username' => 'FA:38:A3:68:6F:CA',
+                'attribute' => 'Simultaneous-Use',
+                'op' => ':=',
+                'value' => '1',
+            ],
+            [
+                'username' => 'FA:38:A3:68:6F:CA',
+                'attribute' => 'Calling-Station-Id',
+                'op' => '==',
+                'value' => 'FA:38:A3:68:6F:CA',
+            ],
+        ]);
+
+        DB::connection('radius')->table('radreply')->insert([
+            [
+                'username' => 'FA:38:A3:68:6F:CA',
+                'attribute' => 'Session-Timeout',
+                'op' => ':=',
+                'value' => '86400',
+            ],
+            [
+                'username' => 'FA:38:A3:68:6F:CA',
+                'attribute' => 'Mikrotik-Rate-Limit',
+                'op' => ':=',
+                'value' => '8M/10M',
+            ],
+        ]);
+
+        $sessionManager = Mockery::mock(SessionManager::class);
+        $sessionManager->shouldNotReceive('activateSession');
+        $this->app->instance(SessionManager::class, $sessionManager);
+
+        $response = $this->get(route('wifi.status', [
+            'phone' => '0712345678',
+            'tenant_id' => $tenant->id,
+            'payment' => $payment->id,
+            'mac' => 'FA-38-A3-68-6F-CA',
+            'ip' => '10.0.0.25',
+            'link-login-only' => 'http://' . $router->ip_address . '/login',
+        ]));
+
+        $response->assertOk();
+        $response->assertSee('Connecting you to WiFi', false);
+
+        $session->refresh();
+
+        $this->assertSame(0, DB::connection('radius')->table('radcheck')
+            ->where('username', 'FA:38:A3:68:6F:CA')
+            ->where('attribute', 'Simultaneous-Use')
+            ->count());
+        $this->assertSame('FA:38:A3:68:6F:CA', (string) data_get($session->metadata, 'radius.username'));
+    }
+
     public function test_status_hashes_password_field_for_chap_radius_autologin(): void
     {
         config()->set('radius.enabled', true);
