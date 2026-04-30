@@ -60,7 +60,7 @@ return [
         'stack' => [
             'driver' => 'stack',
             'channels' => explode(',', env('LOG_STACK', 'single,security')),
-            'ignore_exceptions' => env('LOG_STACK_IGNORE_EXCEPTIONS', false),
+            'ignore_exceptions' => env('LOG_STACK_IGNORE_EXCEPTIONS', true),
         ],
 
         // ──────────────────────────────────────────────────────────────────
@@ -87,6 +87,12 @@ return [
         // 🔐 SECURITY LOGS (Audit trail, logins, payments, admin actions)
         // ──────────────────────────────────────────────────────────────────
         'security' => [
+            'driver' => 'stack',
+            'channels' => ['security_file'],
+            'ignore_exceptions' => true,
+        ],
+
+        'security_file' => [
             'driver' => 'daily',
             'path' => storage_path('logs/security.log'),
             'level' => env('LOG_SECURITY_LEVEL', 'info'),
@@ -105,6 +111,12 @@ return [
         // 💰 PAYMENT LOGS (M-Pesa transactions, reconciliation)
         // ──────────────────────────────────────────────────────────────────
         'payment' => [
+            'driver' => 'stack',
+            'channels' => ['payment_file'],
+            'ignore_exceptions' => true,
+        ],
+
+        'payment_file' => [
             'driver' => 'daily',
             'path' => storage_path('logs/payment.log'),
             'level' => env('LOG_PAYMENT_LEVEL', 'info'),
@@ -114,6 +126,12 @@ return [
         ],
 
         'radius' => [
+            'driver' => 'stack',
+            'channels' => ['radius_file'],
+            'ignore_exceptions' => true,
+        ],
+
+        'radius_file' => [
             'driver' => 'daily',
             'path' => storage_path('logs/radius.log'),
             'level' => env('LOG_RADIUS_LEVEL', 'info'),
@@ -129,6 +147,12 @@ return [
         // 📡 MIKROTIK LOGS (Router API calls, session management)
         // ──────────────────────────────────────────────────────────────────
         'mikrotik' => [
+            'driver' => 'stack',
+            'channels' => ['mikrotik_file'],
+            'ignore_exceptions' => true,
+        ],
+
+        'mikrotik_file' => [
             'driver' => 'daily',
             'path' => storage_path('logs/mikrotik.log'),
             'level' => env('LOG_MIKROTIK_LEVEL', 'warning'), // Only log warnings+ in prod
@@ -141,6 +165,12 @@ return [
         // 🚨 ERROR LOGS (Only errors and above, separate file)
         // ──────────────────────────────────────────────────────────────────
         'error' => [
+            'driver' => 'stack',
+            'channels' => ['error_file'],
+            'ignore_exceptions' => true,
+        ],
+
+        'error_file' => [
             'driver' => 'daily',
             'path' => storage_path('logs/error.log'),
             'level' => 'error',
@@ -153,6 +183,12 @@ return [
         // 📧 NOTIFICATION LOGS (SMS, email delivery)
         // ──────────────────────────────────────────────────────────────────
         'notification' => [
+            'driver' => 'stack',
+            'channels' => ['notification_file'],
+            'ignore_exceptions' => true,
+        ],
+
+        'notification_file' => [
             'driver' => 'daily',
             'path' => storage_path('logs/notification.log'),
             'level' => env('LOG_NOTIFICATION_LEVEL', 'info'),

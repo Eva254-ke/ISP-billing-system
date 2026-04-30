@@ -85,7 +85,7 @@ class PaymentReconciliation extends Model
     // HELPER METHODS
     // ──────────────────────────────────────────────────────────────────────
 
-    public function markResolved(int $userId, string $notes = null): void
+    public function markResolved(int $userId, ?string $notes = null): void
     {
         $this->update([
             'resolved_by' => $userId,

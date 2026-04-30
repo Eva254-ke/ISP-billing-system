@@ -1759,6 +1759,58 @@ class CaptivePortalPaymentStatusTest extends TestCase
         $this->assertSame('QKROUTE001', $payment->mpesa_receipt_number);
     }
 
+    public function test_mpesa_callback_route_still_acknowledges_when_payment_log_channel_throws(): void
+    {
+        config()->set('logging.channels.payment', [
+            'driver' => 'stack',
+            'channels' => ['throwing_payment_handler'],
+            'ignore_exceptions' => true,
+        ]);
+        config()->set('logging.channels.throwing_payment_handler', [
+            'driver' => 'monolog',
+            'handler' => \Tests\Support\Logging\ThrowingMonologHandler::class,
+        ]);
+
+        app('log')->forgetChannel('payment');
+
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant);
+
+        $payment = $this->createPayment($tenant, $package, [
+            'status' => 'pending',
+            'mpesa_checkout_request_id' => 'ws_CO_callback_route_log_failure_001',
+        ]);
+
+        $response = $this->postJson(route('api.mpesa.callback', ['tenant' => $tenant->id]), [
+            'Body' => [
+                'stkCallback' => [
+                    'MerchantRequestID' => '29115-12345-10',
+                    'CheckoutRequestID' => 'ws_CO_callback_route_log_failure_001',
+                    'ResultCode' => 0,
+                    'ResultDesc' => 'The service request is processed successfully.',
+                    'CallbackMetadata' => [
+                        'Item' => [
+                            ['Name' => 'MpesaReceiptNumber', 'Value' => 'QKROUTE002'],
+                            ['Name' => 'PhoneNumber', 'Value' => '254712345678'],
+                            ['Name' => 'Amount', 'Value' => 50],
+                        ],
+                    ],
+                ],
+            ],
+        ]);
+
+        $response->assertOk();
+        $response->assertJson([
+            'ResultCode' => 0,
+            'ResultDesc' => 'Accepted',
+        ]);
+
+        $payment->refresh();
+
+        $this->assertSame('confirmed', $payment->status);
+        $this->assertSame('QKROUTE002', $payment->mpesa_receipt_number);
+    }
+
     public function test_pay_reuses_recent_pending_payment_attempt_instead_of_creating_duplicate(): void
     {
         $tenant = $this->createTenant();

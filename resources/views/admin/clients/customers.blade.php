@@ -135,6 +135,12 @@
                             default => 'bg-secondary',
                         };
                         $isOnline = $status === 'active';
+                        $awaitingFirstLogin = $session->awaitsRadiusReauthentication();
+                        $authorizationExpiresAt = $awaitingFirstLogin ? $session->pendingRadiusAuthorizationExpiresAt() : null;
+                        $durationLabel = optional($session->package)->duration_formatted;
+                        $expiryLabel = $awaitingFirstLogin
+                            ? 'Starts on first login' . ($durationLabel ? ' (' . $durationLabel . ')' : '')
+                            : (optional($session->expires_at)->format('Y-m-d H:i') ?? '-');
                     @endphp
                     <tr class="{{ $isOnline ? '' : 'text-muted' }}">
                         <td><input type="checkbox" class="customer-checkbox" value="{{ $session->id }}"></td>
@@ -150,7 +156,13 @@
                             <div class="text-muted small">{{ optional($session->last_activity_at ?? $session->started_at)->diffForHumans() ?? '-' }}</div>
                         </td>
                         <td>
-                            <div class="fw-semibold">{{ optional($session->expires_at)->format('Y-m-d H:i') ?? '-' }}</div>
+                            @if($awaitingFirstLogin)
+                                <div class="fw-semibold">Starts on first login</div>
+                                <div class="text-muted small">{{ $durationLabel ?? '-' }}</div>
+                                <div class="text-muted small">Login window: {{ $authorizationExpiresAt?->format('Y-m-d H:i') ?? '-' }}</div>
+                            @else
+                                <div class="fw-semibold">{{ optional($session->expires_at)->format('Y-m-d H:i') ?? '-' }}</div>
+                            @endif
                         </td>
                         <td>{{ optional($session->created_at)->format('Y-m-d H:i') ?? '-' }}</td>
                         <td>
@@ -168,7 +180,7 @@
                                         data-package="{{ optional($session->package)->name ?? '-' }}"
                                         data-status="{{ ucfirst($status) }}"
                                         data-last-online="{{ optional($session->last_activity_at ?? $session->started_at)->diffForHumans() ?? '-' }}"
-                                        data-expiry="{{ optional($session->expires_at)->format('Y-m-d H:i') ?? '-' }}"
+                                        data-expiry="{{ $expiryLabel }}"
                                         data-last-payment="{{ optional($session->created_at)->format('Y-m-d H:i') ?? '-' }}"
                                         data-router="{{ optional($session->router)->name ?? '-' }}">
                                     <i class="fas fa-eye"></i>
@@ -534,7 +546,14 @@ document.addEventListener('DOMContentLoaded', function() {
             const status = row.status || '-';
             const online = String(status).toLowerCase() === 'active';
             const lastOnline = row.started_at ? new Date(row.started_at).toLocaleString('en-KE') : '-';
-            const expiry = row.expires_at ? new Date(row.expires_at).toLocaleString('en-KE') : '-';
+            const expiry = row.display_expires_at ? new Date(row.display_expires_at).toLocaleString('en-KE') : '-';
+            const authorizationExpires = row.authorization_expires_at ? new Date(row.authorization_expires_at).toLocaleString('en-KE') : '-';
+            const expiryDisplay = row.awaiting_first_login
+                ? `Starts on first login (${row.duration_label || '-'})`
+                : expiry;
+            const expiryCell = row.awaiting_first_login
+                ? `<div class="fw-semibold">Starts on first login</div><div class="text-muted small">${row.duration_label || '-'}</div><div class="text-muted small">Login window: ${authorizationExpires}</div>`
+                : `<div class="fw-semibold">${expiry}</div>`;
 
             return `
                 <tr>
@@ -544,12 +563,12 @@ document.addEventListener('DOMContentLoaded', function() {
                     <td>${packageName}</td>
                     <td>${badgeForStatus(status)}</td>
                     <td><div class="fw-semibold ${online ? 'text-success' : 'text-muted'}">${online ? 'Online' : 'Offline'}</div><div class="text-muted small">${lastOnline}</div></td>
-                    <td><div class="fw-semibold">${expiry}</div></td>
+                    <td>${expiryCell}</td>
                     <td>${lastOnline}</td>
                     <td><span class="status-dot ${online ? 'online' : 'offline'}"></span><span class="${online ? 'text-success' : 'text-muted'}">${online ? 'Online' : 'Offline'}</span></td>
                     <td class="action-col">
                         <div class="btn-group">
-                            <button type="button" class="btn btn-sm btn-outline-primary" onclick="viewCustomerDetails(this)" data-name="${username}" data-phone="${row.phone || '-'}" data-username="${username}" data-type="${type}" data-package="${packageName}" data-status="${status}" data-last-online="${lastOnline}" data-expiry="${expiry}" data-last-payment="${lastOnline}" data-router="${row.router || '-'}"><i class="fas fa-eye"></i></button>
+                            <button type="button" class="btn btn-sm btn-outline-primary" onclick="viewCustomerDetails(this)" data-name="${username}" data-phone="${row.phone || '-'}" data-username="${username}" data-type="${type}" data-package="${packageName}" data-status="${status}" data-last-online="${lastOnline}" data-expiry="${expiryDisplay}" data-last-payment="${lastOnline}" data-router="${row.router || '-'}"><i class="fas fa-eye"></i></button>
                             <button type="button" class="btn btn-sm btn-outline-warning" onclick="toggleCustomerStatus('${username}', 'suspend')"><i class="fas fa-user-slash"></i></button>
                             <button type="button" class="btn btn-sm btn-outline-secondary" onclick="resetCustomerPassword('${username}')"><i class="fas fa-key"></i></button>
                         </div>

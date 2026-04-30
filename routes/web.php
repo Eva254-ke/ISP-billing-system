@@ -1249,6 +1249,8 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
                 ->limit($limit)
                 ->get()
                 ->map(function (UserSession $session) {
+                    $awaitingFirstLogin = $session->awaitsRadiusReauthentication();
+
                     return [
                         'id' => $session->id,
                         'username' => $session->username,
@@ -1258,7 +1260,15 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
                         'mac_address' => $session->mac_address,
                         'router' => $session->router?->name,
                         'package' => $session->package?->name,
+                        'duration_label' => $session->package?->duration_formatted,
+                        'awaiting_first_login' => $awaitingFirstLogin,
+                        'authorization_expires_at' => $awaitingFirstLogin
+                            ? $session->pendingRadiusAuthorizationExpiresAt()?->toIso8601String()
+                            : null,
                         'expires_at' => $session->expires_at?->toIso8601String(),
+                        'display_expires_at' => $awaitingFirstLogin
+                            ? null
+                            : $session->expires_at?->toIso8601String(),
                         'started_at' => $session->started_at?->toIso8601String(),
                         'bytes_total' => (int) ($session->bytes_total ?? 0),
                     ];
