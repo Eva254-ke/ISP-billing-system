@@ -80,6 +80,27 @@ class AdminDashboardExperienceTest extends TestCase
         $invoiceResponse->assertSee('Alice Example');
     }
 
+    public function test_payment_api_uses_captured_client_context_name_when_direct_name_is_missing(): void
+    {
+        $tenant = $this->createTenant();
+        $admin = $this->createAdminUser($tenant, 'client-context-admin@example.com');
+        $package = $this->createPackage($tenant);
+
+        $this->createPayment($tenant, $package, [
+            'customer_name' => null,
+            'metadata' => [
+                'client_context' => [
+                    'customer_name' => 'Evans Omwenga',
+                ],
+            ],
+        ]);
+
+        $listResponse = $this->actingAs($admin)->getJson(route('admin.api.payments.index'));
+
+        $listResponse->assertOk();
+        $listResponse->assertJsonPath('data.0.customer_name', 'Evans Omwenga');
+    }
+
     private function createTenant(array $overrides = []): Tenant
     {
         return Tenant::query()->create(array_merge([

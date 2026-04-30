@@ -213,6 +213,88 @@
         body.cb-admin-shell .sidebar-panel {
             background-color: #ffffff !important;
         }
+
+        body.cb-admin-shell .card-header,
+        body.cb-admin-shell .card-title,
+        body.cb-admin-shell .card-body,
+        body.cb-admin-shell .card-footer,
+        body.cb-admin-shell .table,
+        body.cb-admin-shell .table thead th,
+        body.cb-admin-shell .table tbody td,
+        body.cb-admin-shell .modal-title,
+        body.cb-admin-shell .form-label {
+            color: #0f172a !important;
+        }
+
+        body.cb-admin-shell .text-muted {
+            color: #475569 !important;
+        }
+
+        body.cb-admin-shell .small-box.bg-primary,
+        body.cb-admin-shell .small-box.bg-success,
+        body.cb-admin-shell .small-box.bg-danger {
+            color: #ffffff !important;
+        }
+
+        body.cb-admin-shell .small-box.bg-warning {
+            color: #111827 !important;
+        }
+
+        body.cb-admin-shell .small-box .inner h3,
+        body.cb-admin-shell .small-box .inner p,
+        body.cb-admin-shell .small-box .small-box-footer {
+            color: inherit !important;
+        }
+
+        body.cb-admin-shell .table thead th {
+            white-space: nowrap !important;
+            word-break: normal !important;
+            overflow-wrap: normal !important;
+        }
+
+        body.cb-admin-shell .table tbody td {
+            word-break: normal !important;
+            overflow-wrap: break-word !important;
+        }
+
+        body.cb-admin-shell .table td code,
+        body.cb-admin-shell .table td strong,
+        body.cb-admin-shell .table td small,
+        body.cb-admin-shell .table td .badge,
+        body.cb-admin-shell .table td .btn-group {
+            word-break: normal !important;
+            overflow-wrap: normal !important;
+        }
+
+        body.cb-admin-shell .table td code {
+            white-space: nowrap !important;
+        }
+
+        body.cb-admin-shell #paymentsPage .table thead th:nth-child(2),
+        body.cb-admin-shell #paymentsPage .table tbody td:nth-child(2) {
+            min-width: 124px;
+        }
+
+        body.cb-admin-shell #paymentsPage .table thead th:nth-child(3),
+        body.cb-admin-shell #paymentsPage .table tbody td:nth-child(3) {
+            min-width: 140px;
+            white-space: nowrap !important;
+        }
+
+        body.cb-admin-shell #paymentsPage .table thead th:nth-child(4),
+        body.cb-admin-shell #paymentsPage .table tbody td:nth-child(4) {
+            min-width: 156px;
+        }
+
+        body.cb-admin-shell #paymentsPage .table thead th:nth-child(5),
+        body.cb-admin-shell #paymentsPage .table tbody td:nth-child(5) {
+            min-width: 112px;
+        }
+
+        body.cb-admin-shell #paymentsPage .table thead th:nth-child(7),
+        body.cb-admin-shell #paymentsPage .table tbody td:nth-child(7) {
+            min-width: 164px;
+        }
     </style>
 </head>
 <body class="hold-transition sidebar-mini layout-fixed layout-navbar-fixed cb-admin-shell">

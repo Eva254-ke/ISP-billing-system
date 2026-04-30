@@ -8,6 +8,10 @@ return new class extends Migration
 {
     public function up(): void
     {
+        if (!Schema::hasTable('tenants') || Schema::hasColumn('tenants', 'payment_method')) {
+            return;
+        }
+
         Schema::table('tenants', function (Blueprint $table) {
             // Payment method: paybill, till, personal, bank_eazzy
             $table->enum('payment_method', ['paybill', 'till', 'personal', 'bank_eazzy'])
@@ -50,6 +54,10 @@ return new class extends Migration
 
     public function down(): void
     {
+        if (!Schema::hasTable('tenants') || !Schema::hasColumn('tenants', 'payment_method')) {
+            return;
+        }
+
         Schema::table('tenants', function (Blueprint $table) {
             $table->dropColumn([
                 'payment_method',

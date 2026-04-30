@@ -202,6 +202,7 @@ class CaptivePortalController extends Controller
         $request->validate([
             'phone' => ['required', 'regex:' . self::KENYA_PHONE_REGEX],
             'package_id' => ['required', 'exists:packages,id'],
+            'customer_name' => ['nullable', 'string', 'max:120'],
         ]);
 
         $phone = $this->normalizePhoneForStorage((string) $request->phone);
@@ -210,6 +211,7 @@ class CaptivePortalController extends Controller
                 ->withErrors(['Use a valid Safaricom number: 07XXXXXXXX, 01XXXXXXXX, +2547XXXXXXXX or +2541XXXXXXXX.'])
                 ->withInput();
         }
+        $customerName = $this->normalizeCustomerNameInput((string) $request->input('customer_name', ''));
         $clientContext = $this->resolveClientContext($request);
         $clientContextMeta = $this->buildClientContextMeta($clientContext, $request);
         $hotspotContext = $this->captureHotspotContext($request, $tenantId);
@@ -268,7 +270,12 @@ class CaptivePortalController extends Controller
                         $existingHotspotMeta = is_array($existingMetadata['hotspot_context'] ?? null) ? $existingMetadata['hotspot_context'] : [];
                         $existingMetadata['hotspot_context'] = array_merge($existingHotspotMeta, $hotspotContextMeta);
                     }
-                    $existing->update(['metadata' => $existingMetadata]);
+                    $existingUpdates = ['metadata' => $existingMetadata];
+                    if ($customerName !== null && $existing->customer_name !== $customerName) {
+                        $existingUpdates['customer_name'] = $customerName;
+                    }
+
+                    $existing->update($existingUpdates);
                     $existing = $existing->fresh();
                 }
 
@@ -306,10 +313,11 @@ class CaptivePortalController extends Controller
                 }
             }
 
-            $payment = DB::transaction(function () use ($phone, $package, $gateway, $clientContextMeta, $hotspotContextMeta) {
+            $payment = DB::transaction(function () use ($phone, $package, $gateway, $clientContextMeta, $hotspotContextMeta, $customerName) {
                 return Payment::create([
                     'tenant_id' => $package->tenant_id,
                     'phone' => $phone,
+                    'customer_name' => $customerName,
                     'package_id' => $package->id,
                     'package_name' => $package->name,
                     'amount' => $package->price,
@@ -1401,10 +1409,13 @@ class CaptivePortalController extends Controller
                 ->withErrors(['No active session found. Please purchase a package first.']);
         }
         
-        $payment = DB::transaction(function () use ($phone, $package, $activeSession, $gateway) {
+        $existingCustomerName = $this->resolveStoredCustomerNameFromPayment($activeSession->payment);
+
+        $payment = DB::transaction(function () use ($phone, $package, $activeSession, $gateway, $existingCustomerName) {
             return Payment::create([
                 'tenant_id' => $package->tenant_id,
                 'phone' => $phone,
+                'customer_name' => $existingCustomerName,
                 'package_id' => $package->id,
                 'package_name' => $package->name,
                 'amount' => $package->price,
@@ -2732,6 +2743,11 @@ class CaptivePortalController extends Controller
             'ip' => $clientContext['ip'] ?? null,
         ], static fn ($value) => $value !== null && $value !== '');
 
+        $customerName = $this->normalizeCustomerNameInput((string) $request->input('customer_name', $request->input('name', '')));
+        if ($customerName !== null) {
+            $meta['customer_name'] = $customerName;
+        }
+
         $userAgent = trim((string) $request->userAgent());
         if ($userAgent !== '') {
             $meta['user_agent'] = $userAgent;
@@ -3334,6 +3350,34 @@ class CaptivePortalController extends Controller
         }
 
         return $payment;
+    }
+
+    private function normalizeCustomerNameInput(?string $value): ?string
+    {
+        $normalized = trim((string) preg_replace('/\s+/', ' ', (string) $value));
+
+        return $normalized !== '' ? $normalized : null;
+    }
+
+    private function resolveStoredCustomerNameFromPayment(?Payment $payment): ?string
+    {
+        if (!$payment) {
+            return null;
+        }
+
+        $candidate = $this->normalizeCustomerNameInput($payment->display_customer_name);
+        if ($candidate === null) {
+            return null;
+        }
+
+        foreach ([$payment->phone, $payment->mpesa_phone] as $phone) {
+            $normalizedPhone = $this->normalizePhoneForStorage((string) $phone);
+            if ($normalizedPhone !== null && $candidate === $normalizedPhone) {
+                return null;
+            }
+        }
+
+        return $candidate;
     }
 
     private function resolveStatusRoutePhone(?string $phone, Payment $payment): string

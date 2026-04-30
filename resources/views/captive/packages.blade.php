@@ -241,8 +241,8 @@
                         Back to packages
                     </button>
 
-                    <h2 class="cp-section-title">Enter your number to pay</h2>
-                    <p class="cp-card-subtitle">We will send the M-Pesa prompt to this number.</p>
+                    <h2 class="cp-section-title">Enter your details to pay</h2>
+                    <p class="cp-card-subtitle">Use your real name and the Safaricom number that will receive the M-Pesa prompt.</p>
 
                     <div class="cp-pay-summary" id="cpPaySummary">
                         <div class="cp-pay-summary-name" id="cpSummaryName">--</div>
@@ -259,6 +259,19 @@
                         @foreach($hotspotFieldValues as $fieldName => $fieldValue)
                             <input type="hidden" name="{{ $fieldName }}" value="{{ $fieldValue }}">
                         @endforeach
+
+                        <div class="cp-field">
+                            <label for="cpCustomerName">Your Name</label>
+                            <input
+                                id="cpCustomerName"
+                                type="text"
+                                name="customer_name"
+                                placeholder="Evans"
+                                value="{{ old('customer_name', '') }}"
+                                required
+                                maxlength="120"
+                                autocomplete="name">
+                        </div>
 
                         <div class="cp-field">
                             <label for="cpPhone">Safaricom M-Pesa Number</label>

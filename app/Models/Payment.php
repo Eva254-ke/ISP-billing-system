@@ -261,15 +261,24 @@ class Payment extends Model
 
         $paths = [
             'customer_name',
+            'customerName',
+            'CustomerName',
             'payer_name',
+            'payerName',
+            'PayerName',
             'customer.name',
             'payer.name',
             'customer.full_name',
             'payer.full_name',
             'client_context.customer_name',
+            'client_context.name',
+            'client_context.full_name',
+            'client_context.payer_name',
             'client.customer_name',
+            'client.customerName',
             'name',
             'full_name',
+            'FullName',
         ];
 
         foreach ($candidateSources as $source) {
@@ -284,6 +293,9 @@ class Payment extends Model
                 (string) data_get($source, 'first_name', ''),
                 (string) data_get($source, 'middle_name', ''),
                 (string) data_get($source, 'last_name', ''),
+                (string) data_get($source, 'FirstName', ''),
+                (string) data_get($source, 'MiddleName', ''),
+                (string) data_get($source, 'LastName', ''),
             ])));
 
             if ($combinedName !== null) {

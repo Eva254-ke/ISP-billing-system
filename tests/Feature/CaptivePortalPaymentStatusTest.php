@@ -1940,6 +1940,49 @@ class CaptivePortalPaymentStatusTest extends TestCase
         ]));
     }
 
+    public function test_pay_captures_customer_name_for_admin_display(): void
+    {
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant);
+
+        $daraja = Mockery::mock(DarajaService::class);
+        $daraja->shouldReceive('isConfigured')->once()->andReturn(true);
+        $daraja->shouldReceive('stkPush')->once()->andReturn([
+            'success' => true,
+            'stage' => 'stk_push',
+            'http_status' => 200,
+            'response_code' => '0',
+            'response_description' => 'Success. Request accepted for processing',
+            'customer_message' => 'Success. Request accepted for processing',
+            'checkout_request_id' => 'ws_CO_customer_name_001',
+            'merchant_request_id' => '29115-33333-3',
+            'raw' => [
+                'ResponseCode' => '0',
+                'CheckoutRequestID' => 'ws_CO_customer_name_001',
+                'MerchantRequestID' => '29115-33333-3',
+            ],
+            'error' => null,
+        ]);
+        $this->app->instance(DarajaService::class, $daraja);
+
+        $response = $this->post(route('wifi.pay', ['tenant_id' => $tenant->id]), [
+            'phone' => '0712345678',
+            'package_id' => $package->id,
+            'customer_name' => 'Evans Omwenga',
+        ]);
+
+        $payment = Payment::query()->latest('id')->firstOrFail();
+
+        $response->assertRedirect(route('wifi.status', [
+            'phone' => '0712345678',
+            'tenant_id' => $tenant->id,
+            'payment' => $payment->id,
+        ]));
+
+        $this->assertSame('Evans Omwenga', $payment->customer_name);
+        $this->assertSame('Evans Omwenga', data_get($payment->metadata, 'client_context.customer_name'));
+    }
+
     public function test_status_ignores_stale_failed_payment_from_session_when_newer_payment_exists(): void
     {
         $tenant = $this->createTenant();
