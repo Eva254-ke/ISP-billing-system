@@ -30,7 +30,9 @@
             $brandInitials = 'WI';
         }
     @endphp
-    <meta name="theme-color" content="{{ $accentColor }}">
+    <meta name="color-scheme" content="light dark">
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="{{ $accentColor }}">
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#020617">
     @if(in_array($statusView, ['pending', 'paid', 'verifying']))
         <meta http-equiv="refresh" content="10">
     @endif
@@ -148,7 +150,9 @@
         }
 
         .cp-brand-mark--image {
-            background: #ffffff;
+            background: var(--cp-logo-surface);
+            border: 1px solid var(--cp-border);
+            border-radius: var(--cp-radius-sm);
             padding: 4px;
         }
 

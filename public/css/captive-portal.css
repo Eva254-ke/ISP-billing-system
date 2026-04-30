@@ -1,20 +1,38 @@
 :root {
-    color-scheme: light;
-    --cp-bg: #ffffff;
+    color-scheme: light dark;
+    --cp-bg: #f8fafc;
     --cp-surface: #ffffff;
-    --cp-surface-soft: #ffffff;
-    --cp-border: rgba(10, 10, 10, 0.16);
-    --cp-border-strong: rgba(10, 10, 10, 0.38);
-    --cp-text: #0a0a0a;
-    --cp-muted: rgba(10, 10, 10, 0.68);
+    --cp-surface-soft: #f8fafc;
+    --cp-border: rgba(15, 23, 42, 0.12);
+    --cp-border-strong: rgba(15, 23, 42, 0.24);
+    --cp-text: #0f172a;
+    --cp-muted: #475569;
     --cp-primary: #111827;
     --cp-primary-strong: var(--cp-primary);
     --cp-success: var(--cp-primary);
     --cp-warning: var(--cp-text);
     --cp-error: var(--cp-text);
+    --cp-logo-surface: #ffffff;
+    --cp-code-prefix-bg: rgba(15, 23, 42, 0.06);
+    --cp-code-prefix-text: #0f172a;
     --cp-radius-lg: 8px;
     --cp-radius-md: 8px;
     --cp-radius-sm: 4px;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        --cp-bg: #020617;
+        --cp-surface: #0f172a;
+        --cp-surface-soft: #111827;
+        --cp-border: rgba(148, 163, 184, 0.18);
+        --cp-border-strong: rgba(148, 163, 184, 0.32);
+        --cp-text: #e2e8f0;
+        --cp-muted: #94a3b8;
+        --cp-logo-surface: #0f172a;
+        --cp-code-prefix-bg: rgba(148, 163, 184, 0.12);
+        --cp-code-prefix-text: #e2e8f0;
+    }
 }
 
 * {
@@ -220,6 +238,11 @@ a {
     font: inherit;
     font-size: 15px;
     padding: 12px;
+}
+
+.cp-field input::placeholder {
+    color: var(--cp-muted);
+    opacity: 1;
 }
 
 .cp-field input:focus {

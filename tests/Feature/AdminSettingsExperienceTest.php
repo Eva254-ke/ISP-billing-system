@@ -92,6 +92,32 @@ class AdminSettingsExperienceTest extends TestCase
         $portalResponse->assertSee('Acme Fiber');
     }
 
+    public function test_captive_portal_uses_device_theme_meta_tags(): void
+    {
+        $tenant = $this->createTenant();
+        $this->createPackage($tenant);
+
+        $response = $this->get(route('wifi.packages', ['tenant_id' => $tenant->id]));
+
+        $response->assertOk();
+        $response->assertSee('name="color-scheme" content="light dark"', false);
+        $response->assertSee('media="(prefers-color-scheme: dark)"', false);
+    }
+
+    public function test_admin_can_open_real_voucher_generation_page(): void
+    {
+        $tenant = $this->createTenant();
+        $admin = $this->createAdminUser($tenant, 'voucher-admin@example.com');
+        $this->createPackage($tenant, ['name' => 'Voucher Package']);
+
+        $response = $this->actingAs($admin)->get(route('admin.vouchers.generate'));
+
+        $response->assertOk();
+        $response->assertSee('Generate Vouchers');
+        $response->assertSee('generateVoucherPageForm', false);
+        $response->assertSee('Code preview:');
+    }
+
     public function test_admin_can_download_and_restore_a_real_tenant_backup(): void
     {
         $tenant = $this->createTenant(['name' => 'Backup Tenant']);

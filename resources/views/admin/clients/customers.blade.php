@@ -139,7 +139,7 @@
                         $authorizationExpiresAt = $awaitingFirstLogin ? $session->pendingRadiusAuthorizationExpiresAt() : null;
                         $durationLabel = optional($session->package)->duration_formatted;
                         $expiryLabel = $awaitingFirstLogin
-                            ? 'Starts on first login' . ($durationLabel ? ' (' . $durationLabel . ')' : '')
+                            ? ($authorizationExpiresAt?->format('Y-m-d H:i') ?? '-')
                             : (optional($session->expires_at)->format('Y-m-d H:i') ?? '-');
                     @endphp
                     <tr class="{{ $isOnline ? '' : 'text-muted' }}">
@@ -157,9 +157,7 @@
                         </td>
                         <td>
                             @if($awaitingFirstLogin)
-                                <div class="fw-semibold">Starts on first login</div>
-                                <div class="text-muted small">{{ $durationLabel ?? '-' }}</div>
-                                <div class="text-muted small">Login window: {{ $authorizationExpiresAt?->format('Y-m-d H:i') ?? '-' }}</div>
+                                <div class="fw-semibold">{{ $authorizationExpiresAt?->format('Y-m-d H:i') ?? '-' }}</div>
                             @else
                                 <div class="fw-semibold">{{ optional($session->expires_at)->format('Y-m-d H:i') ?? '-' }}</div>
                             @endif
@@ -549,10 +547,10 @@ document.addEventListener('DOMContentLoaded', function() {
             const expiry = row.display_expires_at ? new Date(row.display_expires_at).toLocaleString('en-KE') : '-';
             const authorizationExpires = row.authorization_expires_at ? new Date(row.authorization_expires_at).toLocaleString('en-KE') : '-';
             const expiryDisplay = row.awaiting_first_login
-                ? `Starts on first login (${row.duration_label || '-'})`
+                ? authorizationExpires
                 : expiry;
             const expiryCell = row.awaiting_first_login
-                ? `<div class="fw-semibold">Starts on first login</div><div class="text-muted small">${row.duration_label || '-'}</div><div class="text-muted small">Login window: ${authorizationExpires}</div>`
+                ? `<div class="fw-semibold">${authorizationExpires}</div>`
                 : `<div class="fw-semibold">${expiry}</div>`;
 
             return `

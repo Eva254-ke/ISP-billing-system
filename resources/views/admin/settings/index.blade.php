@@ -20,11 +20,16 @@
     data-portal-preview-url="{{ $portalPreviewUrl }}"
     data-tenant-id="{{ (string) ($tenant?->id ?? request()->query('tenant_id', '')) }}"
 >
-<div class="d-flex justify-content-between align-items-center mb-4">
-    <h2><i class="fas fa-cogs me-2"></i>System Settings</h2>
-    <button class="btn btn-success" onclick="saveAllSettings()">
-        <i class="fas fa-save me-1"></i>Save All Changes
-    </button>
+<div class="cb-page-header">
+    <div class="cb-page-heading">
+        <h2><i class="fas fa-cogs me-2"></i>System Settings</h2>
+        <p>Manage live payment, billing, branding, router, and backup settings for the current tenant. Changes here affect the real captive portal and admin workflows.</p>
+    </div>
+    <div class="cb-page-actions">
+        <button class="btn btn-success" onclick="saveAllSettings()">
+            <i class="fas fa-save me-1"></i>Save All Changes
+        </button>
+    </div>
 </div>
 
 <!-- Settings Tabs -->
@@ -347,37 +352,32 @@
             <!-- BILLING & TAX SETTINGS TAB -->
             <!-- ======================================================================= -->
             <div class="tab-pane fade" id="tab-billing">
-                <h5 class="mb-4"><i class="fas fa-file-invoice-dollar me-2"></i>Sales Levy & Invoicing</h5>
+                <div class="cb-section-card mb-4">
+                    <h5 class="mb-0"><i class="fas fa-file-invoice-dollar me-2"></i>Sales Levy & Invoicing</h5>
+                    <p class="cb-section-copy">This tab controls the real 3% levy on successful tenant sales, invoice numbering, and receipt wording used in the Payments workflow.</p>
+                </div>
 
-                <div class="row mb-4">
-                    <div class="col-md-4">
-                        <div class="card bg-light border-0 h-100">
-                            <div class="card-body">
-                                <div class="text-muted small text-uppercase">Successful Sales Total</div>
-                                <div class="h4 mb-0">{{ $currencySymbol }} {{ number_format((float) ($billingSummary['successful_sales_total'] ?? 0), 2) }}</div>
-                            </div>
-                        </div>
+                <div class="cb-metric-grid mb-4">
+                    <div class="cb-metric-card">
+                        <div class="cb-metric-label">Successful Sales Total</div>
+                        <div class="cb-metric-value">{{ $currencySymbol }} {{ number_format((float) ($billingSummary['successful_sales_total'] ?? 0), 2) }}</div>
                     </div>
-                    <div class="col-md-4">
-                        <div class="card bg-light border-0 h-100">
-                            <div class="card-body">
-                                <div class="text-muted small text-uppercase">This Month Sales</div>
-                                <div class="h4 mb-0">{{ $currencySymbol }} {{ number_format((float) ($billingSummary['successful_sales_this_month'] ?? 0), 2) }}</div>
-                            </div>
-                        </div>
+                    <div class="cb-metric-card">
+                        <div class="cb-metric-label">This Month Sales</div>
+                        <div class="cb-metric-value">{{ $currencySymbol }} {{ number_format((float) ($billingSummary['successful_sales_this_month'] ?? 0), 2) }}</div>
                     </div>
-                    <div class="col-md-4">
-                        <div class="card border-primary h-100">
-                            <div class="card-body">
-                                <div class="text-muted small text-uppercase">3% Levy This Month</div>
-                                <div class="h4 mb-1">{{ $currencySymbol }} {{ number_format((float) ($billingSummary['levy_this_month'] ?? 0), 2) }}</div>
-                                <small class="text-muted">Calculated from confirmed, completed, and activated sales.</small>
-                            </div>
-                        </div>
+                    <div class="cb-metric-card">
+                        <div class="cb-metric-label">3% Levy This Month</div>
+                        <div class="cb-metric-value">{{ $currencySymbol }} {{ number_format((float) ($billingSummary['levy_this_month'] ?? 0), 2) }}</div>
+                        <div class="cb-metric-note">Calculated from confirmed, completed, and activated sales.</div>
                     </div>
                 </div>
 
-                <div class="row">
+                <div class="cb-section-card mb-4">
+                    <h6 class="cb-section-title">Levy rules</h6>
+                    <p class="cb-section-copy">Use this to control how the 3% sales levy is applied to the tenant's completed sales.</p>
+
+                <div class="row mt-1">
                     <div class="col-md-6">
                         <div class="form-group mb-3">
                             <label class="form-label">Apply Sales Levy</label>
@@ -385,7 +385,7 @@
                                 <input class="form-check-input" type="checkbox" id="tax_enabled" checked>
                                 <label class="form-check-label" for="tax_enabled">Apply a 3% levy to successful sales and invoices</label>
                             </div>
-                            <small class="text-muted">This levy is based on what the tenant actually sold.</small>
+                            <small class="cb-field-note">This levy is based on what the tenant actually sold.</small>
                         </div>
                     </div>
                     <div class="col-md-6">
@@ -414,10 +414,14 @@
 
                 <input type="hidden" id="tax_number" value="">
 
-                <hr class="my-4">
+                </div>
 
-                <h6 class="mb-3">Invoice Templates</h6>
-                <div class="row">
+                <div class="cb-section-card mb-4">
+                    <h6 class="cb-section-title">Invoice defaults</h6>
+                    <p class="cb-section-copy">These values are used when the admin opens a real invoice from the Payments page.</p>
+
+                <h6 class="cb-section-title mb-3">Invoice fields</h6>
+                <div class="row mt-1">
                     <div class="col-md-4">
                         <div class="form-group mb-3">
                             <label class="form-label">Template Style</label>
@@ -477,16 +481,23 @@ Nairobi, Kenya</textarea>
                 <div class="alert alert-light border d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3">
                     <div>
                         <strong>Where invoices are generated:</strong> use the <code>Invoice</code> action on the Payments screen for real customer invoices.
-                        <div class="text-muted small">This tab controls the real 3% sales levy, numbering, footer text, and receipt wording used there.</div>
+                        <div class="cb-field-note mt-2">This tab controls the real 3% sales levy, numbering, footer text, and receipt wording used there.</div>
                     </div>
                     <a href="{{ route('admin.payments.index') }}" class="btn btn-outline-dark btn-sm">
                         <i class="fas fa-file-invoice me-1"></i>Open Payments
                     </a>
                 </div>
 
-                <hr class="my-4">
+                </div>
 
-                <h6 class="mb-3">Receipt Emails</h6>
+                <div class="cb-section-card">
+                    <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-start gap-3 mb-3">
+                        <div>
+                            <h6 class="cb-section-title">Receipts and invoice access</h6>
+                            <p class="cb-section-copy">Real customer invoices are generated from the <code>Invoice</code> action on the Payments screen using the defaults saved here.</p>
+                        </div>
+                    </div>
+
                 <div class="row">
                     <div class="col-md-6">
                         <div class="form-group mb-3">
@@ -516,7 +527,9 @@ Nairobi, Kenya</textarea>
 We’ve received your payment of {amount}. Your service is active until {expiry}.
 
 Thank you for choosing CloudBridge Networks.</textarea>
-                    <small class="text-muted">Available variables: <code>{name}</code> <code>{amount}</code> <code>{expiry}</code> <code>{invoice}</code> <code>{package}</code></small>
+                    <small class="cb-field-note">Available variables: <code>{name}</code> <code>{amount}</code> <code>{expiry}</code> <code>{invoice}</code> <code>{package}</code></small>
+                </div>
+
                 </div>
             </div>
 

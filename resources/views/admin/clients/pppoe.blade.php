@@ -307,12 +307,9 @@
                             @php
                                 $awaitingFirstLogin = $session->awaitsRadiusReauthentication();
                                 $authorizationExpiresAt = $awaitingFirstLogin ? $session->pendingRadiusAuthorizationExpiresAt() : null;
-                                $durationLabel = optional($session->package)->duration_formatted;
                             @endphp
                             @if($awaitingFirstLogin)
-                                <div class="fw-semibold">Starts on first login</div>
-                                <div class="text-muted small">{{ $durationLabel ?? '-' }}</div>
-                                <span class="badge bg-info text-dark">Login window: {{ $authorizationExpiresAt?->format('Y-m-d H:i') ?? '-' }}</span>
+                                <div class="fw-semibold">{{ $authorizationExpiresAt?->format('Y-m-d H:i') ?? '-' }}</div>
                             @else
                                 <div class="fw-semibold">{{ optional($session->expires_at)->format('Y-m-d H:i') ?? '-' }}</div>
                                 <span class="badge bg-warning text-dark">{{ optional($session->expires_at)->diffForHumans() ?? '-' }}</span>
@@ -1228,7 +1225,7 @@ document.addEventListener('DOMContentLoaded', function() {
             const started = row.started_at ? new Date(row.started_at).toLocaleString('en-KE') : '-';
             const totalGb = (Number(row.bytes_total || 0) / (1024 * 1024 * 1024)).toFixed(2);
             const expiresCell = row.awaiting_first_login
-                ? `<div class="fw-semibold">Starts on first login</div><div class="text-muted small">${row.duration_label || '-'}</div><span class="badge bg-info text-dark">Login window: ${authorizationExpires}</span>`
+                ? `<div class="fw-semibold">${authorizationExpires}</div>`
                 : `<div class="fw-semibold">${expires}</div>`;
 
             return `

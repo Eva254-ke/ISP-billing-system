@@ -6,9 +6,9 @@
 <!-- Page Header -->
 <div class="d-flex justify-content-between align-items-center mb-4">
     <h2>Voucher Codes</h2>
-    <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#generateVouchersModal" data-toggle="modal" data-target="#generateVouchersModal">
+    <a href="{{ route('admin.vouchers.generate') }}" class="btn btn-primary">
         <i class="fas fa-ticket-alt me-2"></i>Generate Codes
-    </button>
+    </a>
 </div>
 
 <!-- Stats Row -->

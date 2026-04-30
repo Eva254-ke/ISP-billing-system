@@ -3,84 +3,118 @@
 @section('page-title', 'Create Package')
 
 @section('content')
-<div class="d-flex justify-content-between align-items-center mb-4">
-    <h2>Create Package</h2>
-    <a href="{{ route('admin.packages.index') }}" class="btn btn-outline-secondary">Back</a>
+<div class="cb-page-header">
+    <div class="cb-page-heading">
+        <h2>Create Package</h2>
+        <p>Set the price, duration, and connection profile for a package on {{ $tenant?->name ?? 'the selected scope' }}.</p>
+    </div>
+    <div class="cb-page-actions">
+        <a href="{{ route('admin.packages.index') }}" class="btn btn-outline-secondary">Back to Packages</a>
+    </div>
 </div>
 
-<div class="card">
-    <div class="card-body">
-        <p class="text-muted">Create a new package for {{ $tenant?->name ?? 'the selected scope' }}.</p>
-        <form id="createPackageForm" class="row g-3">
-            @if(!empty($isSuperAdmin))
-            <div class="col-md-6">
-                <label class="form-label">Tenant</label>
-                <select class="form-select" name="tenant_id" required>
-                    <option value="">Select tenant</option>
-                    @foreach($tenants as $tenantOption)
-                        <option value="{{ $tenantOption->id }}">{{ $tenantOption->name }} (ID {{ $tenantOption->id }})</option>
-                    @endforeach
-                </select>
-            </div>
-            @endif
-            <div class="col-md-6">
-                <label class="form-label">Name</label>
-                <input class="form-control" name="name" placeholder="1 Hour Pass" required>
-            </div>
-            <div class="col-md-3">
-                <label class="form-label">Price (KES)</label>
-                <input type="number" min="0" step="0.01" class="form-control" name="price" placeholder="50" required>
-            </div>
-            <div class="col-md-3">
-                <label class="form-label">Duration Value</label>
-                <input type="number" min="1" class="form-control" name="duration_value" placeholder="1" required>
-            </div>
-            <div class="col-md-3">
-                <label class="form-label">Duration Unit</label>
-                <select class="form-select" name="duration_unit" required>
-                    <option value="minutes">minutes</option>
-                    <option value="hours" selected>hours</option>
-                    <option value="days">days</option>
-                    <option value="weeks">weeks</option>
-                    <option value="months">months</option>
-                </select>
-            </div>
-            <div class="col-md-3">
-                <label class="form-label">Active</label>
-                <div class="form-check mt-2">
-                    <input class="form-check-input" type="checkbox" name="is_active" id="isActive" checked>
-                    <label class="form-check-label" for="isActive">Enable package</label>
+<div class="row g-4">
+    <div class="col-xl-8">
+        <div class="cb-section-card">
+            <form id="createPackageForm">
+                <div>
+                    <h3 class="cb-section-title">Package details</h3>
+                    <p class="cb-section-copy">Customers will see this name, price, and duration in the captive portal.</p>
                 </div>
-            </div>
-            <div class="col-md-3">
-                <label class="form-label">Download Mbps</label>
-                <input type="number" min="1" class="form-control" name="download_limit_mbps" placeholder="Optional">
-            </div>
-            <div class="col-md-3">
-                <label class="form-label">Upload Mbps</label>
-                <input type="number" min="1" class="form-control" name="upload_limit_mbps" placeholder="Optional">
-            </div>
-            <div class="col-md-6">
-                <label class="form-label">Router for Profile Lookup</label>
-                <select class="form-select" name="router_id">
-                    <option value="">No router profile</option>
-                    <option value="" disabled>Loading routers...</option>
-                </select>
-                <small class="text-muted">Optional. Leave this blank if the package should work using direct per-user limits only.</small>
-            </div>
-            <div class="col-md-6">
-                <label class="form-label">MikroTik Profile</label>
-                <select class="form-select" name="mikrotik_profile_name">
-                    <option value="">No router profile</option>
-                    <option value="" disabled>Loading MikroTik profiles...</option>
-                </select>
-                <small class="text-muted">Optional. Only use this if the same profile exists on every router that may activate the package.</small>
-            </div>
-            <div class="col-12 d-flex gap-2 justify-content-end">
-                <a href="{{ route('admin.packages.index') }}" class="btn btn-outline-secondary">Cancel</a>
-                <button type="submit" class="btn btn-primary">Save Package</button>
-            </div>
-        </form>
+
+                <div class="row g-3 mt-1">
+                    @if(!empty($isSuperAdmin))
+                    <div class="col-md-6">
+                        <label class="form-label">Tenant</label>
+                        <select class="form-select" name="tenant_id" required>
+                            <option value="">Select tenant</option>
+                            @foreach($tenants as $tenantOption)
+                                <option value="{{ $tenantOption->id }}">{{ $tenantOption->name }} (ID {{ $tenantOption->id }})</option>
+                            @endforeach
+                        </select>
+                        <small class="cb-field-note">Choose which tenant owns this package before loading routers and profiles.</small>
+                    </div>
+                    @endif
+                    <div class="col-md-{{ !empty($isSuperAdmin) ? '6' : '12' }}">
+                        <label class="form-label">Name</label>
+                        <input class="form-control" name="name" placeholder="1 Hour Pass" required>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">Price (KES)</label>
+                        <input type="number" min="0" step="0.01" class="form-control" name="price" placeholder="50" required>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">Duration Value</label>
+                        <input type="number" min="1" class="form-control" name="duration_value" placeholder="1" required>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">Duration Unit</label>
+                        <select class="form-select" name="duration_unit" required>
+                            <option value="minutes">minutes</option>
+                            <option value="hours" selected>hours</option>
+                            <option value="days">days</option>
+                            <option value="weeks">weeks</option>
+                            <option value="months">months</option>
+                        </select>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">Status</label>
+                        <div class="form-check mt-2">
+                            <input class="form-check-input" type="checkbox" name="is_active" id="isActive" checked>
+                            <label class="form-check-label" for="isActive">Enable package</label>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="cb-divider"></div>
+
+                <div>
+                    <h3 class="cb-section-title">Speed and router profile</h3>
+                    <p class="cb-section-copy">Use direct speed limits, a router profile, or both if the deployment needs it.</p>
+                </div>
+
+                <div class="row g-3 mt-1">
+                    <div class="col-md-3">
+                        <label class="form-label">Download Mbps</label>
+                        <input type="number" min="1" class="form-control" name="download_limit_mbps" placeholder="Optional">
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">Upload Mbps</label>
+                        <input type="number" min="1" class="form-control" name="upload_limit_mbps" placeholder="Optional">
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Router for Profile Lookup</label>
+                        <select class="form-select" name="router_id">
+                            <option value="">No router profile</option>
+                            <option value="" disabled>Loading routers...</option>
+                        </select>
+                        <small class="cb-field-note">Leave this blank if the package should work using direct per-user limits only.</small>
+                    </div>
+                    <div class="col-md-12">
+                        <label class="form-label">MikroTik Profile</label>
+                        <select class="form-select" name="mikrotik_profile_name">
+                            <option value="">No router profile</option>
+                            <option value="" disabled>Loading MikroTik profiles...</option>
+                        </select>
+                        <small class="cb-field-note">Only use this if the same profile exists on every router that may activate the package.</small>
+                    </div>
+                </div>
+
+                <div class="cb-stacked-actions">
+                    <a href="{{ route('admin.packages.index') }}" class="btn btn-outline-secondary">Cancel</a>
+                    <button type="submit" class="btn btn-primary">Save Package</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div class="col-xl-4">
+        <div class="cb-section-card cb-section-card--compact">
+            <h3 class="cb-section-title">What to check</h3>
+            <p class="cb-section-copy">Use the same duration the admin expects to sell. The expiry time is calculated from this value after activation.</p>
+            <p class="cb-section-copy">If you pick a router profile, keep the profile names aligned across routers so paid users connect the same way everywhere.</p>
+            <p class="cb-section-copy">If you only need rate limits, you can leave the router profile fields empty and save the package directly.</p>
+        </div>
     </div>
 </div>
 

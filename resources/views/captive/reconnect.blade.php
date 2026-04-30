@@ -29,7 +29,9 @@
             $brandInitials = 'WI';
         }
     @endphp
-    <meta name="theme-color" content="{{ $accentColor }}">
+    <meta name="color-scheme" content="light dark">
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="{{ $accentColor }}">
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#020617">
     <title>{{ $brandTitle }} - Reconnect</title>
     @php
         $captiveCssPath = public_path('css/captive-portal.css');
@@ -90,7 +92,9 @@
         }
 
         .cp-brand-mark--image {
-            background: #ffffff;
+            background: var(--cp-logo-surface);
+            border: 1px solid var(--cp-border);
+            border-radius: var(--cp-radius-sm);
             padding: 4px;
         }
 
@@ -104,19 +108,19 @@
             display: flex;
             align-items: center;
             gap: 0;
-            border: 1px solid rgba(15, 23, 42, 0.12);
-            border-radius: 16px;
+            border: 1px solid var(--cp-border-strong);
+            border-radius: var(--cp-radius-md);
             overflow: hidden;
-            background: #fff;
+            background: var(--cp-surface);
         }
 
         .cp-code-prefix {
             padding: 0.95rem 0.9rem;
-            background: rgba(15, 118, 110, 0.08);
-            color: #0f172a;
+            background: var(--cp-code-prefix-bg);
+            color: var(--cp-code-prefix-text);
             font-weight: 700;
             white-space: nowrap;
-            border-right: 1px solid rgba(15, 23, 42, 0.08);
+            border-right: 1px solid var(--cp-border);
         }
 
         .cp-code-input input {
@@ -129,7 +133,7 @@
         .cp-field-hint {
             display: block;
             margin-top: 0.45rem;
-            color: #64748b;
+            color: var(--cp-muted);
             font-size: 0.88rem;
         }
 
