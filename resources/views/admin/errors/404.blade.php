@@ -4,10 +4,12 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Admin 404</title>
+    <link rel="preconnect" href="https://fonts.bunny.net">
+    <link href="https://fonts.bunny.net/css?family=inter:400,500,600,700&display=swap" rel="stylesheet" />
     <style>
         body {
             margin: 0;
-            font-family: Segoe UI, Arial, sans-serif;
+            font-family: Inter, Arial, sans-serif;
             background: #f3f4f6;
             color: #111827;
             display: grid;
@@ -18,9 +20,8 @@
             width: min(620px, 92vw);
             background: #fff;
             border: 1px solid #e5e7eb;
-            border-radius: 12px;
+            border-radius: 8px;
             padding: 28px;
-            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.06);
             text-align: center;
         }
         h1 { margin: 0 0 8px; font-size: 26px; }
@@ -31,7 +32,7 @@
             background: #1f2937;
             color: #fff;
             padding: 10px 14px;
-            border-radius: 8px;
+            border-radius: 4px;
             font-weight: 600;
         }
     </style>

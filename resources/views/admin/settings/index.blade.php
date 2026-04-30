@@ -5,7 +5,7 @@
 @section('content')
 @php
     $portalPreviewUrl = $settingsPreview['portal_preview_url'] ?? route('wifi.packages');
-    $latestPaymentInvoiceUrl = $settingsPreview['latest_payment_invoice_url'] ?? null;
+    $currencySymbol = (string) ($tenant?->currency ?: 'KES');
 @endphp
 <!-- Page Header -->
 <div
@@ -18,7 +18,6 @@
     data-cache-clear-url="{{ route('admin.api.settings.cache.clear') }}"
     data-system-status-url="{{ route('admin.api.settings.system.status') }}"
     data-portal-preview-url="{{ $portalPreviewUrl }}"
-    data-latest-invoice-url="{{ $latestPaymentInvoiceUrl ?? '' }}"
     data-tenant-id="{{ (string) ($tenant?->id ?? request()->query('tenant_id', '')) }}"
 >
 <div class="d-flex justify-content-between align-items-center mb-4">
@@ -348,23 +347,51 @@
             <!-- BILLING & TAX SETTINGS TAB -->
             <!-- ======================================================================= -->
             <div class="tab-pane fade" id="tab-billing">
-                <h5 class="mb-4"><i class="fas fa-file-invoice-dollar me-2"></i>Taxes & Invoicing</h5>
+                <h5 class="mb-4"><i class="fas fa-file-invoice-dollar me-2"></i>Sales Levy & Invoicing</h5>
+
+                <div class="row mb-4">
+                    <div class="col-md-4">
+                        <div class="card bg-light border-0 h-100">
+                            <div class="card-body">
+                                <div class="text-muted small text-uppercase">Successful Sales Total</div>
+                                <div class="h4 mb-0">{{ $currencySymbol }} {{ number_format((float) ($billingSummary['successful_sales_total'] ?? 0), 2) }}</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="card bg-light border-0 h-100">
+                            <div class="card-body">
+                                <div class="text-muted small text-uppercase">This Month Sales</div>
+                                <div class="h4 mb-0">{{ $currencySymbol }} {{ number_format((float) ($billingSummary['successful_sales_this_month'] ?? 0), 2) }}</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="card border-primary h-100">
+                            <div class="card-body">
+                                <div class="text-muted small text-uppercase">3% Levy This Month</div>
+                                <div class="h4 mb-1">{{ $currencySymbol }} {{ number_format((float) ($billingSummary['levy_this_month'] ?? 0), 2) }}</div>
+                                <small class="text-muted">Calculated from confirmed, completed, and activated sales.</small>
+                            </div>
+                        </div>
+                    </div>
+                </div>
 
                 <div class="row">
                     <div class="col-md-6">
                         <div class="form-group mb-3">
-                            <label class="form-label">Enable VAT/Tax</label>
+                            <label class="form-label">Apply Sales Levy</label>
                             <div class="form-check">
                                 <input class="form-check-input" type="checkbox" id="tax_enabled" checked>
-                                <label class="form-check-label" for="tax_enabled">Apply tax to invoices and receipts</label>
+                                <label class="form-check-label" for="tax_enabled">Apply a 3% levy to successful sales and invoices</label>
                             </div>
-                            <small class="text-muted">Disable if you are not VAT registered</small>
+                            <small class="text-muted">This levy is based on what the tenant actually sold.</small>
                         </div>
                     </div>
                     <div class="col-md-6">
                         <div class="form-group mb-3">
-                            <label class="form-label">Tax Label</label>
-                            <input type="text" class="form-control" id="tax_label" value="VAT" placeholder="VAT, GST, Sales Tax">
+                            <label class="form-label">Levy Label</label>
+                            <input type="text" class="form-control" id="tax_label" value="Sales Levy" placeholder="Sales Levy">
                         </div>
                     </div>
                 </div>
@@ -372,26 +399,20 @@
                 <div class="row">
                     <div class="col-md-4">
                         <div class="form-group mb-3">
-                            <label class="form-label">Tax Rate (%)</label>
-                            <input type="number" class="form-control" id="tax_rate" value="16" min="0" max="100" step="0.01">
+                            <label class="form-label">Levy Rate (%)</label>
+                            <input type="number" class="form-control" id="tax_rate" value="3" min="3" max="3" step="0.01" readonly>
                         </div>
                     </div>
-                    <div class="col-md-4">
+                    <div class="col-md-8">
                         <div class="form-group mb-3">
-                            <label class="form-label">Price Type</label>
-                            <select class="form-select" id="tax_inclusive">
-                                <option value="inclusive" selected>Prices include tax</option>
-                                <option value="exclusive">Prices exclude tax</option>
-                            </select>
-                        </div>
-                    </div>
-                    <div class="col-md-4">
-                        <div class="form-group mb-3">
-                            <label class="form-label">VAT/Tax Number</label>
-                            <input type="text" class="form-control" id="tax_number" value="P051234567Q" placeholder="Registration number">
+                            <label class="form-label">Calculation Basis</label>
+                            <input type="hidden" id="tax_inclusive" value="exclusive">
+                            <input type="text" class="form-control" value="3% of each successful sale made by the tenant" readonly>
                         </div>
                     </div>
                 </div>
+
+                <input type="hidden" id="tax_number" value="">
 
                 <hr class="my-4">
 
@@ -456,16 +477,12 @@ Nairobi, Kenya</textarea>
                 <div class="alert alert-light border d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3">
                     <div>
                         <strong>Where invoices are generated:</strong> use the <code>Invoice</code> action on the Payments screen for real customer invoices.
-                        <div class="text-muted small">This billing tab controls tax, numbering, footer text, and receipt wording used there.</div>
+                        <div class="text-muted small">This tab controls the real 3% sales levy, numbering, footer text, and receipt wording used there.</div>
                     </div>
                     <a href="{{ route('admin.payments.index') }}" class="btn btn-outline-dark btn-sm">
                         <i class="fas fa-file-invoice me-1"></i>Open Payments
                     </a>
                 </div>
-
-                <button class="btn btn-outline-primary mb-4" onclick="previewInvoiceTemplate()">
-                    <i class="fas fa-eye me-1"></i>Preview Sample Invoice
-                </button>
 
                 <hr class="my-4">
 
@@ -1016,7 +1033,6 @@ const CACHE_CLEAR_URL = settingsPage?.dataset?.cacheClearUrl || `${SETTINGS_API_
 const SYSTEM_STATUS_URL = settingsPage?.dataset?.systemStatusUrl || `${SETTINGS_API_BASE}/system/status`;
 const SETTINGS_TENANT_ID = settingsPage?.dataset?.tenantId || '';
 let portalPreviewUrl = settingsPage?.dataset?.portalPreviewUrl || '/wifi';
-let latestInvoiceUrl = settingsPage?.dataset?.latestInvoiceUrl || '';
 let lastMikrotikCommands = [];
 
 function appendTenantContext(url) {
@@ -1061,13 +1077,6 @@ async function apiRequest(url, method = 'GET', body = null) {
     return payload;
 }
 
-function setLatestInvoiceUrl(url) {
-    latestInvoiceUrl = typeof url === 'string' ? url : '';
-    if (settingsPage) {
-        settingsPage.dataset.latestInvoiceUrl = latestInvoiceUrl;
-    }
-}
-
 function renderSystemStatus(status) {
     if (!status) {
         return;
@@ -1110,10 +1119,6 @@ function renderBackupStatus(status) {
 function updatePageContext(data) {
     if (typeof data?.portal_preview_url === 'string' && data.portal_preview_url !== '') {
         portalPreviewUrl = data.portal_preview_url;
-    }
-
-    if (typeof data?.latest_payment_invoice_url === 'string') {
-        setLatestInvoiceUrl(data.latest_payment_invoice_url);
     }
 
     renderSystemStatus(data?.system_status || null);
@@ -1456,77 +1461,6 @@ function uploadLogo() {
 // Upload Favicon
 function uploadFavicon() {
     uploadBrandAsset('favicon');
-}
-
-// Preview Invoice Template
-function previewInvoiceTemplate() {
-    const brandName = document.getElementById('brand_name')?.value?.trim() || 'Your Business';
-    const invoiceAddress = document.getElementById('invoice_address')?.value?.trim() || 'Business address';
-    const taxEnabled = !!document.getElementById('tax_enabled')?.checked;
-    const taxLabel = document.getElementById('tax_label')?.value?.trim() || 'Tax';
-    const taxRate = Number(document.getElementById('tax_rate')?.value || 0);
-    const taxInclusive = (document.getElementById('tax_inclusive')?.value || 'inclusive') === 'inclusive';
-    const invoicePrefix = document.getElementById('invoice_prefix')?.value?.trim() || 'INV-';
-    const invoiceNextNumber = document.getElementById('invoice_next_number')?.value?.trim() || '10001';
-    const footerNote = document.getElementById('invoice_footer_note')?.value?.trim() || 'Thank you for your business.';
-    const currencySymbol = document.getElementById('sys_currency_symbol')?.value?.trim() || 'KES';
-    const sampleBaseAmount = 1000;
-
-    let subtotal = sampleBaseAmount;
-    let taxAmount = 0;
-    let total = sampleBaseAmount;
-
-    if (taxEnabled && taxRate > 0) {
-        if (taxInclusive) {
-            subtotal = Number((sampleBaseAmount / (1 + taxRate / 100)).toFixed(2));
-            taxAmount = Number((sampleBaseAmount - subtotal).toFixed(2));
-            total = sampleBaseAmount;
-        } else {
-            subtotal = sampleBaseAmount;
-            taxAmount = Number((subtotal * taxRate / 100).toFixed(2));
-            total = Number((subtotal + taxAmount).toFixed(2));
-        }
-    }
-
-    const invoiceHtml = `
-        <div style="text-align:left; font-size:13px;">
-            <strong style="font-size:16px;">${brandName}</strong><br>
-            ${invoiceAddress.replace(/\n/g, '<br>')}
-            ${taxEnabled ? `<br>${taxLabel}: ${document.getElementById('tax_number')?.value?.trim() || 'Not set'}` : ''}
-            <hr>
-            <div style="display:flex; justify-content:space-between; gap:16px;">
-                <div>
-                    <strong>Invoice:</strong> ${invoicePrefix}${invoiceNextNumber}<br>
-                    <strong>Date:</strong> ${new Date().toISOString().slice(0, 10)}<br>
-                    <strong>Customer:</strong> Jane Doe
-                </div>
-                <div style="text-align:right;">
-                    <strong>Total:</strong> ${currencySymbol} ${total.toFixed(2)}<br>
-                    <small>${taxEnabled ? (taxInclusive ? 'Tax included in price' : `${taxRate}% ${taxLabel} added`) : 'No tax applied'}</small>
-                </div>
-            </div>
-            <hr>
-            <table style="width:100%; font-size:12px;">
-                <tr><td>WiFi Package - 30 Days</td><td style="text-align:right;">${currencySymbol} ${subtotal.toFixed(2)}</td></tr>
-                ${taxEnabled && taxAmount > 0 ? `<tr><td>${taxLabel} (${taxRate}%)</td><td style="text-align:right;">${currencySymbol} ${taxAmount.toFixed(2)}</td></tr>` : ''}
-            </table>
-            <hr>
-            <em>${footerNote}</em>
-        </div>
-    `;
-
-    Swal.fire({
-        title: 'Invoice Preview',
-        html: invoiceHtml,
-        width: 650,
-        showDenyButton: !!latestInvoiceUrl,
-        denyButtonText: 'Open latest real invoice',
-        confirmButtonText: 'Close'
-    }).then((result) => {
-        if (result.isDenied && latestInvoiceUrl) {
-            window.open(latestInvoiceUrl, '_blank', 'noopener');
-        }
-    });
 }
 
 // Download Backup

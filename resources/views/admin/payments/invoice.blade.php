@@ -4,6 +4,8 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Invoice {{ $invoice['number'] ?? '' }}</title>
+    <link rel="preconnect" href="https://fonts.bunny.net">
+    <link href="https://fonts.bunny.net/css?family=inter:400,500,600,700&display=swap" rel="stylesheet" />
     @php
         $invoiceTenant = $invoice['tenant'];
         $invoicePayment = $invoice['payment'];
@@ -32,7 +34,7 @@
             margin: 0;
             background: #eef2f7;
             color: var(--invoice-text);
-            font-family: "Segoe UI", Arial, sans-serif;
+            font-family: "Inter", Arial, sans-serif;
             line-height: 1.5;
             padding: 32px 16px;
         }
@@ -58,7 +60,7 @@
         .invoice-toolbar button,
         .invoice-toolbar a {
             border: 0;
-            border-radius: 999px;
+            border-radius: 4px;
             background: var(--invoice-primary);
             color: #fff;
             cursor: pointer;
@@ -71,8 +73,7 @@
         .invoice-card {
             background: #fff;
             border: 1px solid rgba(15, 23, 42, 0.08);
-            border-radius: 24px;
-            box-shadow: 0 28px 60px rgba(15, 23, 42, 0.08);
+            border-radius: 8px;
             padding: 32px;
         }
 
@@ -93,7 +94,7 @@
         .invoice-brand__mark {
             width: 64px;
             height: 64px;
-            border-radius: 18px;
+            border-radius: 8px;
             background: rgba(30, 64, 175, 0.08);
             border: 1px solid rgba(30, 64, 175, 0.18);
             display: grid;
@@ -134,7 +135,7 @@
             align-items: center;
             gap: 8px;
             background: rgba(30, 64, 175, 0.08);
-            border-radius: 999px;
+            border-radius: 4px;
             color: var(--invoice-primary);
             font-size: 0.82rem;
             font-weight: 700;
@@ -153,7 +154,7 @@
         .invoice-panel {
             background: var(--invoice-surface);
             border: 1px solid var(--invoice-border);
-            border-radius: 18px;
+            border-radius: 8px;
             padding: 18px;
         }
 
@@ -239,7 +240,6 @@
             .invoice-card {
                 border: 0;
                 border-radius: 0;
-                box-shadow: none;
                 padding: 0;
             }
         }
@@ -264,7 +264,7 @@
     <div class="invoice-shell">
         <div class="invoice-toolbar">
             <div class="invoice-toolbar__meta">
-                Payment #{{ $invoicePayment->id }} • {{ ucfirst((string) ($invoicePayment->status ?? 'unknown')) }}
+                Payment #{{ $invoicePayment->id }} | {{ ucfirst((string) ($invoicePayment->status ?? 'unknown')) }}
             </div>
             <div>
                 <button type="button" onclick="window.print()">Print invoice</button>

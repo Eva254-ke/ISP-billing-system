@@ -246,6 +246,64 @@ class Payment extends Model
         return strtoupper($this->mpesa_code);
     }
 
+    public function getDisplayCustomerNameAttribute(): string
+    {
+        $directName = $this->normalizeCustomerName($this->customer_name);
+        if ($directName !== null) {
+            return $directName;
+        }
+
+        $candidateSources = array_filter([
+            is_array($this->metadata) ? $this->metadata : null,
+            is_array($this->callback_payload) ? $this->callback_payload : null,
+            is_array($this->callback_data) ? $this->callback_data : null,
+        ]);
+
+        $paths = [
+            'customer_name',
+            'payer_name',
+            'customer.name',
+            'payer.name',
+            'customer.full_name',
+            'payer.full_name',
+            'client_context.customer_name',
+            'client.customer_name',
+            'name',
+            'full_name',
+        ];
+
+        foreach ($candidateSources as $source) {
+            foreach ($paths as $path) {
+                $resolved = $this->normalizeCustomerName((string) data_get($source, $path, ''));
+                if ($resolved !== null) {
+                    return $resolved;
+                }
+            }
+
+            $combinedName = $this->normalizeCustomerName(implode(' ', array_filter([
+                (string) data_get($source, 'first_name', ''),
+                (string) data_get($source, 'middle_name', ''),
+                (string) data_get($source, 'last_name', ''),
+            ])));
+
+            if ($combinedName !== null) {
+                return $combinedName;
+            }
+        }
+
+        $phoneLabel = $this->normalizeCustomerName($this->phone ?: $this->mpesa_phone);
+        if ($phoneLabel !== null) {
+            return $phoneLabel;
+        }
+
+        $sessionUsername = $this->normalizeCustomerName($this->session?->username);
+        if ($sessionUsername !== null) {
+            return $sessionUsername;
+        }
+
+        return 'Not captured';
+    }
+
     public function getExpiryTimeAttribute(): ?string
     {
         if (!$this->package) {
@@ -254,6 +312,13 @@ class Payment extends Model
 
         $baseTime = $this->activated_at ?? $this->completed_at ?? $this->created_at;
         return $baseTime->copy()->addMinutes($this->package->duration_in_minutes)->toIso8601String();
+    }
+
+    private function normalizeCustomerName(?string $value): ?string
+    {
+        $normalized = trim((string) preg_replace('/\s+/', ' ', (string) $value));
+
+        return $normalized !== '' ? $normalized : null;
     }
 
     // ──────────────────────────────────────────────────────────────────────

@@ -1060,15 +1060,11 @@ document.getElementById('selectAll').addEventListener('change', function() {
 
 
 
-// Auto-refresh indicator animation
+const pppoeLiveIndicator = document.getElementById('liveIndicator');
 
-setInterval(() => {
-
-    const indicator = document.getElementById('liveIndicator');
-
-    indicator.style.opacity = indicator.style.opacity === '0.5' ? '1' : '0.5';
-
-}, 1000);
+if (pppoeLiveIndicator) {
+    pppoeLiveIndicator.style.opacity = '1';
+}
 
 
 
@@ -1096,7 +1092,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
             toolbar: { show: false },
 
-            animations: { enabled: true }
+            animations: { enabled: false }
 
         },
 
@@ -1132,19 +1128,9 @@ document.addEventListener('DOMContentLoaded', function() {
 
         fill: {
 
-            type: 'gradient',
+            type: 'solid',
 
-            gradient: {
-
-                shadeIntensity: 1,
-
-                opacityFrom: 0.5,
-
-                opacityTo: 0.2,
-
-                stops: [0, 100]
-
-            }
+            opacity: 0.12
 
         },
 

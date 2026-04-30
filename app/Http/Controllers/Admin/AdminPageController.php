@@ -24,6 +24,7 @@ class AdminPageController extends Controller
     {
         $tenant = $this->resolveTenant();
         UserSession::expireStaleSessions($tenant?->id);
+        $successStatuses = ['completed', 'confirmed', 'activated'];
 
         $payments = Payment::query();
         $packages = Package::query();
@@ -37,37 +38,86 @@ class AdminPageController extends Controller
             $sessions->where('tenant_id', $tenant->id);
         }
 
+        $weeklyRevenue = collect();
+        for ($i = 6; $i >= 0; $i--) {
+            $day = now()->subDays($i);
+            $weeklyRevenue->push([
+                'date' => $day->toDateString(),
+                'label' => $day->format('D'),
+                'amount' => (float) (clone $payments)
+                    ->whereDate('created_at', $day->toDateString())
+                    ->whereIn('status', $successStatuses)
+                    ->sum('amount'),
+            ]);
+        }
+
+        $weeklyTransactions = (clone $payments)->where('created_at', '>=', now()->startOfWeek());
+        $successfulTransactionsWeek = (clone $weeklyTransactions)
+            ->whereIn('status', $successStatuses)
+            ->count();
+        $transactionsWeek = (clone $weeklyTransactions)->count();
+
+        $routerRows = (clone $routers)->get();
+        $routerStatusCounts = [
+            'online' => 0,
+            'warning' => 0,
+            'offline' => 0,
+            'error' => 0,
+            'unknown' => 0,
+        ];
+
+        foreach ($routerRows as $router) {
+            $status = strtolower((string) ($router->status ?? 'unknown'));
+            if (!array_key_exists($status, $routerStatusCounts)) {
+                $status = 'unknown';
+            }
+
+            $routerStatusCounts[$status]++;
+        }
+
         $stats = [
             'revenue_today' => (float) (clone $payments)
                 ->whereDate('created_at', now()->toDateString())
-                ->whereIn('status', ['completed', 'confirmed'])
+                ->whereIn('status', $successStatuses)
                 ->sum('amount'),
             'active_sessions' => (clone $sessions)->active()->count(),
             'packages_total' => (clone $packages)->count(),
-            'routers_online' => (clone $routers)->whereIn('status', ['online', 'warning'])->count(),
-            'routers_total' => (clone $routers)->count(),
+            'routers_online' => $routerStatusCounts['online'],
+            'routers_total' => $routerRows->count(),
             'revenue_week' => (float) (clone $payments)
                 ->where('created_at', '>=', now()->startOfWeek())
-                ->whereIn('status', ['completed', 'confirmed'])
+                ->whereIn('status', $successStatuses)
                 ->sum('amount'),
         ];
 
         $recentPayments = (clone $payments)
-            ->with('package')
+            ->with(['package', 'session'])
             ->latest('created_at')
             ->limit(8)
             ->get();
 
-        $routerStatuses = (clone $routers)
-            ->latest('updated_at')
-            ->limit(8)
-            ->get();
+        $routerStatuses = $routerRows
+            ->sortByDesc(fn (Router $router) => $router->updated_at?->timestamp ?? 0)
+            ->take(8)
+            ->values();
 
         return view('admin.dashboard', [
             'tenant' => $tenant,
             'stats' => $stats,
             'recentPayments' => $recentPayments,
             'routerStatuses' => $routerStatuses,
+            'weeklyRevenue' => $weeklyRevenue,
+            'transactionsWeek' => $transactionsWeek,
+            'successRateWeek' => $transactionsWeek > 0
+                ? (int) round(($successfulTransactionsWeek / $transactionsWeek) * 100)
+                : 0,
+            'routerStatusBreakdown' => [
+                ['key' => 'online', 'label' => 'Online', 'count' => $routerStatusCounts['online'], 'color' => '#198754'],
+                ['key' => 'warning', 'label' => 'Warning', 'count' => $routerStatusCounts['warning'], 'color' => '#f59e0b'],
+                ['key' => 'offline', 'label' => 'Offline', 'count' => $routerStatusCounts['offline'], 'color' => '#dc3545'],
+                ['key' => 'error', 'label' => 'Error', 'count' => $routerStatusCounts['error'], 'color' => '#6c757d'],
+                ['key' => 'unknown', 'label' => 'Unknown', 'count' => $routerStatusCounts['unknown'], 'color' => '#adb5bd'],
+            ],
         ]);
     }
 
@@ -122,7 +172,7 @@ class AdminPageController extends Controller
             'inactive' => $rows->where('is_active', false)->count(),
             'revenue_week' => (float) (clone $payments)
                 ->where('created_at', '>=', now()->startOfWeek())
-                ->whereIn('status', ['completed', 'confirmed'])
+                ->whereIn('status', ['completed', 'confirmed', 'activated'])
                 ->sum('amount'),
         ];
 
@@ -150,7 +200,7 @@ class AdminPageController extends Controller
             ->get(['id', 'name']);
 
         $rows = (clone $basePayments)
-            ->with('package')
+            ->with(['package', 'session'])
             ->latest('created_at')
             ->limit(100)
             ->get();
@@ -170,11 +220,11 @@ class AdminPageController extends Controller
 
         $stats = [
             'revenue_total' => (float) (clone $basePayments)
-                ->whereIn('status', ['completed', 'confirmed'])
+                ->whereIn('status', ['completed', 'confirmed', 'activated'])
                 ->sum('amount'),
             'revenue_today' => (float) (clone $basePayments)
                 ->whereDate('created_at', now()->toDateString())
-                ->whereIn('status', ['completed', 'confirmed'])
+                ->whereIn('status', ['completed', 'confirmed', 'activated'])
                 ->sum('amount'),
             'pending' => (clone $basePayments)->where('status', 'pending')->count(),
             'failed' => (clone $basePayments)->where('status', 'failed')->count(),
@@ -195,6 +245,7 @@ class AdminPageController extends Controller
 
         $payments = Payment::query()
             ->when($tenant, fn ($query) => $query->where('tenant_id', $tenant->id))
+            ->with(['package', 'session'])
             ->latest('created_at')
             ->limit(1000)
             ->get();
@@ -203,12 +254,13 @@ class AdminPageController extends Controller
 
         return response()->streamDownload(function () use ($payments) {
             $out = fopen('php://output', 'w');
-            fputcsv($out, ['date', 'phone', 'package', 'amount', 'currency', 'status', 'receipt']);
+            fputcsv($out, ['date', 'phone', 'customer', 'package', 'amount', 'currency', 'status', 'receipt']);
 
             foreach ($payments as $payment) {
                 fputcsv($out, [
                     $payment->created_at?->toDateTimeString(),
                     $payment->phone,
+                    $payment->display_customer_name,
                     $payment->package_name,
                     $payment->amount,
                     $payment->currency,
@@ -288,12 +340,12 @@ class AdminPageController extends Controller
 
         $sales = Payment::query()
             ->where('package_id', $package->id)
-            ->whereIn('status', ['completed', 'confirmed'])
+            ->whereIn('status', ['completed', 'confirmed', 'activated'])
             ->count();
 
         $revenue = (float) Payment::query()
             ->where('package_id', $package->id)
-            ->whereIn('status', ['completed', 'confirmed'])
+            ->whereIn('status', ['completed', 'confirmed', 'activated'])
             ->sum('amount');
 
         return view('admin.packages.show', [
@@ -512,6 +564,7 @@ class AdminPageController extends Controller
         UserSession::expireStaleSessions($tenant?->id);
         $settingsService = app(AdminSettingsService::class);
         $backupService = app(TenantBackupService::class);
+        $settings = $settingsService->getSettings($tenant);
 
         $tenantStats = [
             'routers_total' => Router::query()
@@ -527,14 +580,31 @@ class AdminPageController extends Controller
             'payments_today' => (float) Payment::query()
                 ->when($tenant, fn ($query) => $query->where('tenant_id', $tenant->id))
                 ->whereDate('created_at', now()->toDateString())
-                ->whereIn('status', ['completed', 'confirmed'])
+                ->whereIn('status', ['completed', 'confirmed', 'activated'])
                 ->sum('amount'),
         ];
+
+        $successfulPayments = Payment::query()
+            ->when($tenant, fn ($query) => $query->where('tenant_id', $tenant->id))
+            ->whereIn('status', ['confirmed', 'completed', 'activated']);
+
+        $successfulSalesTotal = (float) (clone $successfulPayments)->sum('amount');
+        $successfulSalesThisMonth = (float) (clone $successfulPayments)
+            ->where('created_at', '>=', now()->startOfMonth())
+            ->sum('amount');
+        $salesLevyRate = !empty($settings['tax_enabled']) ? (float) ($settings['tax_rate'] ?? 0) : 0.0;
 
         return view('admin.settings.index', [
             'tenant' => $tenant,
             'activeTab' => $tab,
             'tenantStats' => $tenantStats,
+            'billingSummary' => [
+                'successful_sales_total' => $successfulSalesTotal,
+                'successful_sales_this_month' => $successfulSalesThisMonth,
+                'levy_rate' => $salesLevyRate,
+                'levy_total' => round($successfulSalesTotal * ($salesLevyRate / 100), 2),
+                'levy_this_month' => round($successfulSalesThisMonth * ($salesLevyRate / 100), 2),
+            ],
             'systemStatus' => $settingsService->runtimeStatus(),
             'backupStatus' => $backupService->latestBackupMetadata($tenant),
             'settingsPreview' => $settingsService->invoicePreviewContext($tenant),

@@ -28,8 +28,11 @@ class PaymentInvoiceService
 
         $amount = (float) $payment->amount;
         $taxEnabled = (bool) ($billing['tax_enabled'] ?? false);
-        $taxRate = max(0, (float) ($billing['tax_rate'] ?? 0));
-        $inclusive = (string) ($billing['tax_inclusive'] ?? 'inclusive') === 'inclusive';
+        $taxRate = $taxEnabled ? 3.0 : 0.0;
+        $taxLabel = trim((string) ($billing['tax_label'] ?? '')) !== ''
+            ? trim((string) $billing['tax_label'])
+            : 'Sales Levy';
+        $inclusive = false;
 
         $subtotal = $amount;
         $taxAmount = 0.0;
@@ -63,7 +66,7 @@ class PaymentInvoiceService
             'currency' => $currency,
             'currency_symbol' => $currencySymbol,
             'tax_enabled' => $taxEnabled,
-            'tax_label' => (string) ($billing['tax_label'] ?? 'Tax'),
+            'tax_label' => $taxLabel,
             'tax_rate' => $taxRate,
             'tax_number' => (string) ($billing['tax_number'] ?? ''),
             'tax_inclusive' => $inclusive,
@@ -74,7 +77,7 @@ class PaymentInvoiceService
             'invoice_email' => (string) ($billing['invoice_email'] ?? ''),
             'invoice_footer_note' => (string) ($billing['invoice_footer_note'] ?? ''),
             'receipt_enabled' => (bool) ($billing['receipt_enabled'] ?? false),
-            'customer_name' => (string) ($payment->customer_name ?: $payment->phone ?: 'Customer'),
+            'customer_name' => $payment->display_customer_name,
             'line_description' => (string) ($payment->package_name ?: ($payment->package?->name ?: 'Internet access payment')),
             'reference' => (string) ($payment->mpesa_receipt_number ?: ($payment->mpesa_checkout_request_id ?: ($payment->reference ?: 'PAY-' . $payment->id))),
         ];
@@ -146,10 +149,10 @@ class PaymentInvoiceService
         $billingSettings = (array) Arr::get($tenantSettings, 'billing', []);
 
         $defaults = [
-            'tax_enabled' => false,
-            'tax_label' => 'VAT',
-            'tax_rate' => '0',
-            'tax_inclusive' => 'inclusive',
+            'tax_enabled' => true,
+            'tax_label' => 'Sales Levy',
+            'tax_rate' => '3',
+            'tax_inclusive' => 'exclusive',
             'tax_number' => '',
             'invoice_template' => 'modern',
             'invoice_prefix' => 'INV-',

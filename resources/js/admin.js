@@ -531,7 +531,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     parentHeightOffset: 0,
                     toolbar: { show: false },
                     zoom: { enabled: false },
-                    animations: { enabled: true, easing: 'easeinout', speed: 450 },
+                    animations: { enabled: false },
                 },
                 series: [{ name: 'Revenue (KES)', data }],
                 noData: { text: 'No revenue available for this range' },
@@ -544,13 +544,8 @@ document.addEventListener('DOMContentLoaded', function () {
                     hover: { size: 6 },
                 },
                 fill: {
-                    type: 'gradient',
-                    gradient: {
-                        shadeIntensity: 1,
-                        opacityFrom: 0.38,
-                        opacityTo: 0.05,
-                        stops: [0, 90, 100],
-                    },
+                    type: 'solid',
+                    opacity: 0.12,
                 },
                 grid: {
                     borderColor: '#E2E8F0',

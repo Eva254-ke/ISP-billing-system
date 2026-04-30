@@ -26,7 +26,7 @@
 <div class="alert alert-light border d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3">
     <div>
         <strong>Invoices live here now:</strong> open any successful payment and click <code>Invoice</code>.
-        <div class="text-muted small">Tax, invoice prefix, numbering, and footer text come from Settings > Billing & Tax.</div>
+        <div class="text-muted small">The real 3% sales levy, invoice prefix, numbering, and footer text come from Settings > Billing & Tax.</div>
     </div>
     <a href="{{ route('admin.settings.index') }}#tab-billing" class="btn btn-outline-dark btn-sm">
         <i class="fas fa-cog me-1"></i>Billing Settings
@@ -138,7 +138,7 @@
         <h3 class="card-title">Transaction History</h3>
         <div class="card-tools">
             <div class="input-group input-group-sm" style="width: 250px;">
-                <input type="text" class="form-control" id="paymentSearch" placeholder="Search by phone, ref...">
+                <input type="text" class="form-control" id="paymentSearch" placeholder="Search by phone, payer, ref...">
                 <button type="button" class="btn btn-outline-secondary" onclick="searchPayments()">
                     <i class="fas fa-search"></i>
                 </button>
@@ -152,7 +152,7 @@
                     <th><input type="checkbox" id="selectAll"></th>
                     <th>Date & Time</th>
                     <th>Phone Number</th>
-                    <th>Customer</th>
+                    <th>Payer</th>
                     <th>Package</th>
                     <th>Amount (KES)</th>
                     <th>M-Pesa Ref</th>
@@ -180,7 +180,7 @@
                             <small class="text-muted">{{ optional($payment->created_at)->format('H:i:s') }}</small>
                         </td>
                         <td><code>{{ $payment->phone ?? '-' }}</code></td>
-                        <td>{{ $payment->customer_name ?? '-' }}</td>
+                        <td>{{ $payment->display_customer_name }}</td>
                         <td><span class="badge bg-secondary">{{ $payment->package_name ?? optional($payment->package)->name ?? '-' }}</span></td>
                         <td><strong>KES {{ number_format((float) ($payment->amount ?? 0), 0) }}</strong></td>
                         <td><code class="text-primary">{{ $reference }}</code></td>
@@ -293,7 +293,7 @@
                         <p class="mb-0" id="detailPhone">-</p>
                     </div>
                     <div class="col-6">
-                        <label class="form-label text-muted">Customer Name</label>
+                        <label class="form-label text-muted">Payer Name</label>
                         <p class="mb-0" id="detailCustomer">-</p>
                     </div>
                 </div>

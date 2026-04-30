@@ -6,12 +6,51 @@
     <title>Login - CloudBridge Networks Admin</title>
     
     <!-- Fonts -->
-    <link href="https://fonts.bunny.net/css?family=figtree:400,500,600&display=swap" rel="stylesheet" />
+    <link rel="preconnect" href="https://fonts.bunny.net">
+    <link href="https://fonts.bunny.net/css?family=inter:400,500,600,700&display=swap" rel="stylesheet" />
     
     <!-- Vite Assets -->
     @include('partials.vite-assets', ['entries' => ['resources/css/app.css', 'resources/js/app.js']])
+    <style>
+        @keyframes admin-login-fade {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        body {
+            font-family: Inter, Arial, sans-serif;
+            background: #f3f4f6 !important;
+            opacity: 0;
+            animation: admin-login-fade 300ms ease forwards;
+        }
+
+        .login-box,
+        .login-logo,
+        .card,
+        .card-body,
+        .input-group-text,
+        .btn,
+        .form-control,
+        .alert {
+            box-shadow: none !important;
+            backdrop-filter: none !important;
+            transition: none !important;
+            background-image: none !important;
+        }
+
+        .card {
+            border-radius: 8px !important;
+        }
+
+        .btn,
+        .form-control,
+        .input-group-text,
+        .btn-close {
+            border-radius: 4px !important;
+        }
+    </style>
 </head>
-<body class="hold-transition login-page bg-gradient-primary">
+<body class="hold-transition login-page">
     <div class="login-box">
         <div class="login-logo">
             <a href="#"><b>CloudBridge</b> Networks</a>

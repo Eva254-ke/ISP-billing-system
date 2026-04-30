@@ -9,7 +9,7 @@
 
     <!-- Fonts -->
     <link rel="preconnect" href="https://fonts.bunny.net">
-    <link href="https://fonts.bunny.net/css?family=figtree:400,500,600&display=swap" rel="stylesheet" />
+    <link href="https://fonts.bunny.net/css?family=inter:400,500,600,700&display=swap" rel="stylesheet" />
 
     <!-- Vite Assets -->
     @include('partials.vite-assets', ['entries' => ['resources/css/app.css', 'resources/js/app.js']])
@@ -17,8 +17,157 @@
     <!-- Font Awesome CDN fallback (prevents missing icons showing as squares if local build assets fail) -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" crossorigin="anonymous" referrerpolicy="no-referrer">
     @stack('styles')
+    <style>
+        :root {
+            --cb-space-4: 4px;
+            --cb-space-8: 8px;
+            --cb-space-12: 12px;
+            --cb-space-16: 16px;
+            --cb-space-24: 24px;
+            --cb-space-32: 32px;
+            --cb-space-48: 48px;
+            --cb-space-64: 64px;
+            --cb-space-96: 96px;
+            --cb-radius-control: 4px;
+            --cb-radius-card: 8px;
+        }
+
+        @keyframes admin-page-fade {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        body.cb-admin-shell {
+            font-family: 'Inter', sans-serif !important;
+            opacity: 0;
+            animation: admin-page-fade 300ms ease forwards !important;
+        }
+
+        body.cb-admin-shell *,
+        body.cb-admin-shell *::before,
+        body.cb-admin-shell *::after {
+            box-shadow: none !important;
+            backdrop-filter: none !important;
+            transition: none !important;
+            animation: none !important;
+            text-shadow: none !important;
+            scroll-behavior: auto !important;
+        }
+
+        body.cb-admin-shell h1,
+        body.cb-admin-shell h2,
+        body.cb-admin-shell h3,
+        body.cb-admin-shell h4,
+        body.cb-admin-shell h5,
+        body.cb-admin-shell h6,
+        body.cb-admin-shell p,
+        body.cb-admin-shell span,
+        body.cb-admin-shell a,
+        body.cb-admin-shell button,
+        body.cb-admin-shell input,
+        body.cb-admin-shell select,
+        body.cb-admin-shell textarea,
+        body.cb-admin-shell table,
+        body.cb-admin-shell th,
+        body.cb-admin-shell td,
+        body.cb-admin-shell label,
+        body.cb-admin-shell small,
+        body.cb-admin-shell li {
+            font-family: 'Inter', sans-serif !important;
+        }
+
+        body.cb-admin-shell .main-header,
+        body.cb-admin-shell .main-sidebar,
+        body.cb-admin-shell .sidebar,
+        body.cb-admin-shell .content-wrapper,
+        body.cb-admin-shell .main-footer,
+        body.cb-admin-shell .card,
+        body.cb-admin-shell .small-box,
+        body.cb-admin-shell .btn,
+        body.cb-admin-shell .dropdown-menu,
+        body.cb-admin-shell .modal-content,
+        body.cb-admin-shell .alert,
+        body.cb-admin-shell .shell-brand__mark,
+        body.cb-admin-shell .shell-search,
+        body.cb-admin-shell .navbar-user-menu .nav-link,
+        body.cb-admin-shell .sidebar-panel,
+        body.cb-admin-shell .nav-sidebar > .nav-item > .nav-link,
+        body.cb-admin-shell .card-header,
+        body.cb-admin-shell .card-footer,
+        body.cb-admin-shell .small-box-footer,
+        body.cb-admin-shell .badge {
+            background-image: none !important;
+            filter: none !important;
+        }
+
+        body.cb-admin-shell .card,
+        body.cb-admin-shell .small-box,
+        body.cb-admin-shell .dropdown-menu,
+        body.cb-admin-shell .modal-content,
+        body.cb-admin-shell .alert,
+        body.cb-admin-shell .sidebar,
+        body.cb-admin-shell .main-header,
+        body.cb-admin-shell .content-wrapper,
+        body.cb-admin-shell .table-responsive,
+        body.cb-admin-shell .main-footer,
+        body.cb-admin-shell .sidebar-panel {
+            border-radius: var(--cb-radius-card) !important;
+        }
+
+        body.cb-admin-shell .btn,
+        body.cb-admin-shell .form-control,
+        body.cb-admin-shell .form-select,
+        body.cb-admin-shell .input-group-text,
+        body.cb-admin-shell .nav-link,
+        body.cb-admin-shell .page-link,
+        body.cb-admin-shell .badge,
+        body.cb-admin-shell .btn-close,
+        body.cb-admin-shell .dropdown-item {
+            border-radius: var(--cb-radius-control) !important;
+        }
+
+        body.cb-admin-shell .container-fluid {
+            padding-left: var(--cb-space-24) !important;
+            padding-right: var(--cb-space-24) !important;
+        }
+
+        body.cb-admin-shell .card-header,
+        body.cb-admin-shell .card-body,
+        body.cb-admin-shell .card-footer,
+        body.cb-admin-shell .modal-header,
+        body.cb-admin-shell .modal-body,
+        body.cb-admin-shell .modal-footer,
+        body.cb-admin-shell .alert,
+        body.cb-admin-shell .small-box .inner,
+        body.cb-admin-shell .main-footer {
+            padding: var(--cb-space-16) var(--cb-space-24) !important;
+        }
+
+        body.cb-admin-shell .content-header {
+            padding: var(--cb-space-24) 0 var(--cb-space-16) !important;
+        }
+
+        body.cb-admin-shell .content {
+            padding-bottom: var(--cb-space-24) !important;
+        }
+
+        body.cb-admin-shell .shell-toggle,
+        body.cb-admin-shell .navbar-user-menu .nav-link,
+        body.cb-admin-shell .nav-sidebar > .nav-item > .nav-link,
+        body.cb-admin-shell .shell-brand__mark {
+            border-radius: var(--cb-radius-control) !important;
+        }
+
+        body.cb-admin-shell .shell-brand__mark {
+            background-color: #0b57d0 !important;
+        }
+
+        body.cb-admin-shell .sidebar-panel {
+            background-color: #ffffff !important;
+        }
+    </style>
 </head>
-<body class="hold-transition sidebar-mini layout-fixed layout-navbar-fixed">
+<body class="hold-transition sidebar-mini layout-fixed layout-navbar-fixed cb-admin-shell">
     @php
         $currentUser = auth()->user();
         $displayName = trim((string) ($currentUser?->full_name ?: $currentUser?->name ?: $currentUser?->email ?: 'Account'));

@@ -345,8 +345,7 @@
     cursor: pointer;
     top: 0; left: 0; right: 0; bottom: 0;
     background-color: #ccc;
-    transition: .4s;
-    border-radius: 24px;
+    border-radius: 4px;
 }
 .slider:before {
     position: absolute;
@@ -356,8 +355,7 @@
     left: 3px;
     bottom: 3px;
     background-color: white;
-    transition: .4s;
-    border-radius: 50%;
+    border-radius: 4px;
 }
 input:checked + .slider { background-color: #2563EB; }
 input:checked + .slider:before { transform: translateX(26px); }

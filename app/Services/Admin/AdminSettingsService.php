@@ -50,11 +50,11 @@ class AdminSettingsService
 
     public function getSettings(?Tenant $tenant): array
     {
-        $settings = array_merge(
+        $settings = $this->sanitize(array_merge(
             $this->defaults(),
             $this->globalSettings(),
             $this->storedSettings($tenant),
-        );
+        ));
 
         if ($tenant) {
             $settings['brand_name'] = trim((string) ($tenant->name ?: $settings['brand_name']));
@@ -316,9 +316,9 @@ class AdminSettingsService
             'mail_from_address' => '',
             'mail_from_name' => '',
             'tax_enabled' => true,
-            'tax_label' => 'VAT',
-            'tax_rate' => '16',
-            'tax_inclusive' => 'inclusive',
+            'tax_label' => 'Sales Levy',
+            'tax_rate' => '3',
+            'tax_inclusive' => 'exclusive',
             'tax_number' => '',
             'invoice_template' => 'modern',
             'invoice_prefix' => 'INV-',
@@ -423,6 +423,12 @@ class AdminSettingsService
         foreach (self::DECIMAL_FIELDS as $field) {
             $settings[$field] = number_format((float) ($settings[$field] ?? 0), 2, '.', '');
         }
+
+        $settings['tax_label'] = trim((string) ($settings['tax_label'] ?? '')) !== ''
+            ? trim((string) $settings['tax_label'])
+            : 'Sales Levy';
+        $settings['tax_rate'] = '3.00';
+        $settings['tax_inclusive'] = 'exclusive';
 
         $settings['brand_primary'] = $this->normalizeHexColor((string) ($settings['brand_primary'] ?? ''), '#1E40AF');
         $settings['brand_secondary'] = $this->normalizeHexColor((string) ($settings['brand_secondary'] ?? ''), '#38BDF8');

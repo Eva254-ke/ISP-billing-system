@@ -51,9 +51,9 @@ class AdminSettingsExperienceTest extends TestCase
                 'sys_currency_symbol' => 'KES',
                 'sys_session_timeout' => '180',
                 'tax_enabled' => true,
-                'tax_label' => 'VAT',
-                'tax_rate' => '16',
-                'tax_inclusive' => 'inclusive',
+                'tax_label' => 'Sales Levy',
+                'tax_rate' => '3',
+                'tax_inclusive' => 'exclusive',
                 'invoice_prefix' => 'AC-',
                 'invoice_next_number' => '4100',
                 'invoice_address' => "Acme Fiber\nNairobi",
@@ -80,6 +80,8 @@ class AdminSettingsExperienceTest extends TestCase
         $this->assertSame('#123456', $tenant->brand_color_primary);
         $this->assertSame('#654321', $tenant->brand_color_secondary);
         $this->assertSame('AC-', data_get($tenant->settings, 'billing.invoice_prefix'));
+        $this->assertSame('3.00', data_get($tenant->settings, 'billing.tax_rate'));
+        $this->assertSame('exclusive', data_get($tenant->settings, 'billing.tax_inclusive'));
         $this->assertSame('4100', data_get($tenant->settings, 'admin_settings.invoice_next_number'));
 
         $portalResponse = $this->get(route('wifi.packages', ['tenant_id' => $tenant->id]));
@@ -159,8 +161,8 @@ class AdminSettingsExperienceTest extends TestCase
             'settings' => [
                 'billing' => [
                     'tax_enabled' => true,
-                    'tax_label' => 'VAT',
-                    'tax_rate' => '16',
+                    'tax_label' => 'Sales Levy',
+                    'tax_rate' => '3',
                     'tax_inclusive' => 'exclusive',
                     'invoice_prefix' => 'CBN-',
                     'invoice_next_number' => '2001',
@@ -190,8 +192,8 @@ class AdminSettingsExperienceTest extends TestCase
 
         $response->assertOk();
         $response->assertSee('CBN-2001');
-        $response->assertSee('VAT (16.00%)');
-        $response->assertSee('KES 23.20');
+        $response->assertSee('Sales Levy (3.00%)');
+        $response->assertSee('KES 20.60');
         $response->assertSee('Jane Doe');
 
         $payment->refresh();

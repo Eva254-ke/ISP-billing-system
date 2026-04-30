@@ -643,11 +643,11 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
                 'active' => (clone $packages)->where('is_active', true)->count(),
                 'revenue_today' => (float) (clone $payments)
                     ->whereDate('created_at', now()->toDateString())
-                    ->whereIn('status', ['completed', 'confirmed'])
+                    ->whereIn('status', ['completed', 'confirmed', 'activated'])
                     ->sum('amount'),
                 'revenue_week' => (float) (clone $payments)
                     ->where('created_at', '>=', now()->startOfWeek())
-                    ->whereIn('status', ['completed', 'confirmed'])
+                    ->whereIn('status', ['completed', 'confirmed', 'activated'])
                     ->sum('amount'),
             ]);
         })->name('packages.stats');
@@ -660,7 +660,7 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
             $routers = Router::query()->when($tenant, fn ($query) => $query->where('tenant_id', $tenant->id));
             $sessions = UserSession::query()->when($tenant, fn ($query) => $query->where('tenant_id', $tenant->id));
 
-            $successStatuses = ['completed', 'confirmed'];
+            $successStatuses = ['completed', 'confirmed', 'activated'];
             $weeklyRevenue = [];
             for ($i = 6; $i >= 0; $i--) {
                 $day = now()->subDays($i);
@@ -1403,16 +1403,16 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
             $payments = Payment::query()
                 ->when($tenant, fn ($query) => $query->where('tenant_id', $tenant->id))
                 ->when($status !== '', fn ($query) => $query->where('status', $status))
-                ->with('package')
+                ->with(['package', 'session'])
                 ->latest('created_at')
                 ->limit($limit)
                 ->get()
                 ->map(function (Payment $payment) {
                     return [
                         'id' => $payment->id,
-                        'phone' => $payment->phone,
-                        'customer_name' => $payment->customer_name,
-                        'package_name' => $payment->package_name,
+                        'phone' => $payment->phone ?: $payment->mpesa_phone,
+                        'customer_name' => $payment->display_customer_name,
+                        'package_name' => $payment->package_name ?: $payment->package?->name,
                         'package_id' => $payment->package_id,
                         'amount' => (float) $payment->amount,
                         'currency' => $payment->currency,
@@ -1457,7 +1457,7 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
                     'reference' => $reference,
                     'status' => strtolower((string) ($payment->status ?? 'unknown')),
                     'phone' => $payment->phone ?: $payment->mpesa_phone,
-                    'customer_name' => $payment->customer_name,
+                    'customer_name' => $payment->display_customer_name,
                     'package_name' => $payment->package_name ?: $payment->package?->name,
                     'amount' => (float) $payment->amount,
                     'currency' => $payment->currency ?: 'KES',
