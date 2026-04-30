@@ -162,6 +162,54 @@
             background-color: #0b57d0 !important;
         }
 
+        body.cb-admin-shell .main-sidebar,
+        body.cb-admin-shell .sidebar {
+            background-color: #0f172a !important;
+        }
+
+        body.cb-admin-shell .sidebar {
+            border-right: 1px solid #1e293b !important;
+        }
+
+        body.cb-admin-shell .sidebar-brand__link {
+            color: #f8fafc !important;
+        }
+
+        body.cb-admin-shell .sidebar-brand__name {
+            color: #f8fafc !important;
+        }
+
+        body.cb-admin-shell .sidebar-brand__sub {
+            color: #94a3b8 !important;
+        }
+
+        body.cb-admin-shell .nav-sidebar > .nav-item > .nav-link,
+        body.cb-admin-shell .nav-treeview .nav-link {
+            color: #cbd5e1 !important;
+            background-color: transparent !important;
+        }
+
+        body.cb-admin-shell .nav-sidebar > .nav-item > .nav-link:hover,
+        body.cb-admin-shell .nav-sidebar > .nav-item > .nav-link:focus,
+        body.cb-admin-shell .nav-treeview .nav-link:hover,
+        body.cb-admin-shell .nav-treeview .nav-link:focus {
+            color: #ffffff !important;
+            background-color: #1e293b !important;
+        }
+
+        body.cb-admin-shell .nav-sidebar > .nav-item > .nav-link.active,
+        body.cb-admin-shell .nav-treeview .nav-link.active {
+            color: #ffffff !important;
+            background-color: #1d4ed8 !important;
+        }
+
+        body.cb-admin-shell .nav-sidebar > .nav-item > .nav-link p,
+        body.cb-admin-shell .nav-sidebar > .nav-item > .nav-link p span,
+        body.cb-admin-shell .nav-treeview .nav-link p,
+        body.cb-admin-shell .nav-treeview .nav-link p span {
+            color: inherit !important;
+        }
+
         body.cb-admin-shell .sidebar-panel {
             background-color: #ffffff !important;
         }
