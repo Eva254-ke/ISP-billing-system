@@ -246,6 +246,113 @@
             color: inherit !important;
         }
 
+        body.cb-admin-shell .small-box .icon,
+        body.cb-admin-shell .small-box .icon i {
+            color: inherit !important;
+        }
+
+        body.cb-admin-shell .card-primary {
+            background-color: #ffffff !important;
+            border-color: #dbe3ef !important;
+            color: #0f172a !important;
+        }
+
+        body.cb-admin-shell .card-primary .card-header {
+            background-color: #0d6efd !important;
+            color: #ffffff !important;
+            border-bottom-color: #0b5ed7 !important;
+        }
+
+        body.cb-admin-shell .card-primary .card-title,
+        body.cb-admin-shell .card-primary .card-header .btn,
+        body.cb-admin-shell .card-primary .card-header .btn i {
+            color: #ffffff !important;
+        }
+
+        body.cb-admin-shell .card-primary .card-body,
+        body.cb-admin-shell .card-primary .card-footer,
+        body.cb-admin-shell .card-primary .description-block,
+        body.cb-admin-shell .card-primary .description-header,
+        body.cb-admin-shell .card-primary .description-text,
+        body.cb-admin-shell .card-primary .dashboard-bar-chart__value,
+        body.cb-admin-shell .card-primary .dashboard-donut__center strong,
+        body.cb-admin-shell .card-primary .dashboard-status-legend__item,
+        body.cb-admin-shell .card-primary .dashboard-status-legend__meta,
+        body.cb-admin-shell .card-primary .dashboard-status-legend__item strong,
+        body.cb-admin-shell .card-primary .dashboard-status-legend__item span {
+            color: #0f172a !important;
+        }
+
+        body.cb-admin-shell .card-primary .card-body,
+        body.cb-admin-shell .card-primary .card-footer {
+            background-color: #ffffff !important;
+        }
+
+        body.cb-admin-shell .card-primary .description-text,
+        body.cb-admin-shell .card-primary .dashboard-donut__center span {
+            color: #475569 !important;
+        }
+
+        body.cb-admin-shell .alert-success {
+            background-color: #dcfce7 !important;
+            color: #166534 !important;
+            border: 1px solid #86efac !important;
+        }
+
+        body.cb-admin-shell .alert-danger {
+            background-color: #fee2e2 !important;
+            color: #991b1b !important;
+            border: 1px solid #fca5a5 !important;
+        }
+
+        body.cb-admin-shell .alert-warning {
+            background-color: #fef3c7 !important;
+            color: #92400e !important;
+            border: 1px solid #fcd34d !important;
+        }
+
+        body.cb-admin-shell .alert-info {
+            background-color: #dbeafe !important;
+            color: #1d4ed8 !important;
+            border: 1px solid #93c5fd !important;
+        }
+
+        body.cb-admin-shell .toast,
+        body.cb-admin-shell .toast-header,
+        body.cb-admin-shell .toast-body {
+            background-color: #ffffff !important;
+            color: #0f172a !important;
+            border-color: #dbe3ef !important;
+        }
+
+        body.cb-admin-shell .swal2-popup {
+            background: #ffffff !important;
+            color: #0f172a !important;
+            border: 1px solid #dbe3ef !important;
+            border-radius: var(--cb-radius-card) !important;
+        }
+
+        body.cb-admin-shell .swal2-title,
+        body.cb-admin-shell .swal2-html-container,
+        body.cb-admin-shell .swal2-content,
+        body.cb-admin-shell .swal2-actions,
+        body.cb-admin-shell .swal2-footer {
+            color: #0f172a !important;
+        }
+
+        body.cb-admin-shell .swal2-html-container .text-muted,
+        body.cb-admin-shell .swal2-footer,
+        body.cb-admin-shell .swal2-validation-message {
+            color: #475569 !important;
+        }
+
+        body.cb-admin-shell .swal2-confirm,
+        body.cb-admin-shell .swal2-cancel,
+        body.cb-admin-shell .swal2-deny {
+            border-radius: var(--cb-radius-control) !important;
+            box-shadow: none !important;
+        }
+
         body.cb-admin-shell .table thead th {
             white-space: nowrap !important;
             word-break: normal !important;
