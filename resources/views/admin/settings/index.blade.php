@@ -3,7 +3,24 @@
 @section('page-title', 'Settings')
 
 @section('content')
+@php
+    $portalPreviewUrl = $settingsPreview['portal_preview_url'] ?? route('wifi.packages');
+    $latestPaymentInvoiceUrl = $settingsPreview['latest_payment_invoice_url'] ?? null;
+@endphp
 <!-- Page Header -->
+<div
+    id="settingsPage"
+    data-settings-url="{{ route('admin.api.settings.show') }}"
+    data-settings-save-url="{{ route('admin.api.settings.save') }}"
+    data-branding-upload-url="{{ route('admin.api.settings.branding.upload') }}"
+    data-backup-download-url="{{ route('admin.api.settings.backup.download') }}"
+    data-backup-restore-url="{{ route('admin.api.settings.backup.restore') }}"
+    data-cache-clear-url="{{ route('admin.api.settings.cache.clear') }}"
+    data-system-status-url="{{ route('admin.api.settings.system.status') }}"
+    data-portal-preview-url="{{ $portalPreviewUrl }}"
+    data-latest-invoice-url="{{ $latestPaymentInvoiceUrl ?? '' }}"
+    data-tenant-id="{{ (string) ($tenant?->id ?? request()->query('tenant_id', '')) }}"
+>
 <div class="d-flex justify-content-between align-items-center mb-4">
     <h2><i class="fas fa-cogs me-2"></i>System Settings</h2>
     <button class="btn btn-success" onclick="saveAllSettings()">
@@ -238,7 +255,7 @@
                 </div>
 
                 <button class="btn btn-primary" onclick="testSmsConnection()">
-                    <i class="fas fa-paper-plane me-1"></i>Send Test SMS
+                    <i class="fas fa-comment-alt me-1"></i>Preview SMS Template
                 </button>
             </div>
 
@@ -323,7 +340,7 @@
                 </div>
 
                 <button class="btn btn-primary" onclick="testEmailConnection()">
-                    <i class="fas fa-envelope me-1"></i>Send Test Email
+                    <i class="fas fa-envelope-open-text me-1"></i>Preview Receipt Email
                 </button>
             </div>
 
@@ -436,8 +453,18 @@ Nairobi, Kenya</textarea>
                     </div>
                 </div>
 
+                <div class="alert alert-light border d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3">
+                    <div>
+                        <strong>Where invoices are generated:</strong> use the <code>Invoice</code> action on the Payments screen for real customer invoices.
+                        <div class="text-muted small">This billing tab controls tax, numbering, footer text, and receipt wording used there.</div>
+                    </div>
+                    <a href="{{ route('admin.payments.index') }}" class="btn btn-outline-dark btn-sm">
+                        <i class="fas fa-file-invoice me-1"></i>Open Payments
+                    </a>
+                </div>
+
                 <button class="btn btn-outline-primary mb-4" onclick="previewInvoiceTemplate()">
-                    <i class="fas fa-eye me-1"></i>Preview Invoice
+                    <i class="fas fa-eye me-1"></i>Preview Sample Invoice
                 </button>
 
                 <hr class="my-4">
@@ -751,27 +778,43 @@ Thank you for choosing CloudBridge Networks.</textarea>
                             <div class="row">
                                 <div class="col-md-4 mb-2">
                                     <small class="text-muted d-block">Memory Limit</small>
-                                    <strong>128M</strong>
+                                    <strong id="runtimeMemoryLimit">{{ ini_get('memory_limit') ?: 'Unknown' }}</strong>
                                 </div>
                                 <div class="col-md-4 mb-2">
                                     <small class="text-muted d-block">Max Execution Time</small>
-                                    <strong>30s</strong>
+                                    <strong id="runtimeExecutionTime">{{ ini_get('max_execution_time') ? ini_get('max_execution_time') . 's' : 'Unlimited' }}</strong>
                                 </div>
                                 <div class="col-md-4 mb-2">
                                     <small class="text-muted d-block">PHP Version</small>
-                                    <strong>8.5.1</strong>
+                                    <strong id="runtimePhpVersion">{{ $systemStatus['php_version'] ?? PHP_VERSION }}</strong>
                                 </div>
                                 <div class="col-md-4 mb-2">
                                     <small class="text-muted d-block">Laravel Version</small>
-                                    <strong>13.1.1</strong>
+                                    <strong id="runtimeLaravelVersion">{{ $systemStatus['app_version'] ?? app()->version() }}</strong>
                                 </div>
                                 <div class="col-md-4 mb-2">
                                     <small class="text-muted d-block">Database</small>
-                                    <strong>SQLite</strong>
+                                    <strong id="runtimeDatabase">{{ strtoupper((string) ($systemStatus['database_driver'] ?? 'unknown')) }}</strong>
                                 </div>
                                 <div class="col-md-4 mb-2">
                                     <small class="text-muted d-block">Debug Mode</small>
-                                    <strong><span class="badge bg-warning">Enabled</span></strong>
+                                    <strong id="runtimeDebugMode">
+                                        <span class="badge {{ !empty($systemStatus['app_debug']) ? 'bg-warning text-dark' : 'bg-success' }}">
+                                            {{ !empty($systemStatus['app_debug']) ? 'Enabled' : 'Disabled' }}
+                                        </span>
+                                    </strong>
+                                </div>
+                                <div class="col-md-4 mb-2">
+                                    <small class="text-muted d-block">App Environment</small>
+                                    <strong id="runtimeEnvironment">{{ strtoupper((string) ($systemStatus['app_env'] ?? config('app.env'))) }}</strong>
+                                </div>
+                                <div class="col-md-4 mb-2">
+                                    <small class="text-muted d-block">Git Branch</small>
+                                    <strong id="runtimeGitBranch">{{ $systemStatus['git_branch'] ?? 'Unavailable' }}</strong>
+                                </div>
+                                <div class="col-md-4 mb-2">
+                                    <small class="text-muted d-block">Git Commit</small>
+                                    <strong id="runtimeGitCommit">{{ $systemStatus['git_commit'] ?? 'Unavailable' }}</strong>
                                 </div>
                             </div>
                         </div>
@@ -797,11 +840,17 @@ Thank you for choosing CloudBridge Networks.</textarea>
                                 <i class="fas fa-download me-2"></i>Database Backup
                             </div>
                             <div class="card-body">
-                                <p class="card-text">Download a complete backup of your database including all vouchers, payments, and configurations.</p>
+                                <p class="card-text">Download a tenant snapshot with packages, routers, vouchers, payments, sessions, logs, and configuration.</p>
                                 <button class="btn btn-success" onclick="downloadBackup()">
                                     <i class="fas fa-download me-1"></i>Download Backup
                                 </button>
-                                <small class="text-muted d-block mt-2">Format: SQL • Last backup: 2026-03-19 08:00</small>
+                                <small class="text-muted d-block mt-2" id="backupStatusMeta">
+                                    Format: JSON snapshot | Last backup:
+                                    {{ $backupStatus['generated_at_label'] ?? 'No backup generated yet' }}
+                                    @if(!empty($backupStatus['size_label']))
+                                        ({{ $backupStatus['size_label'] }})
+                                    @endif
+                                </small>
                             </div>
                         </div>
                     </div>
@@ -811,8 +860,8 @@ Thank you for choosing CloudBridge Networks.</textarea>
                                 <i class="fas fa-upload me-2"></i>Restore Backup
                             </div>
                             <div class="card-body">
-                                <p class="card-text">Restore from a previously downloaded backup file.</p>
-                                <input type="file" class="form-control mb-2" id="backup_file" accept=".sql">
+                                <p class="card-text">Restore the same tenant from a previously downloaded JSON backup file.</p>
+                                <input type="file" class="form-control mb-2" id="backup_file" accept=".json,application/json">
                                 <button class="btn btn-info" onclick="restoreBackup()">
                                     <i class="fas fa-upload me-1"></i>Restore
                                 </button>
@@ -842,22 +891,22 @@ Thank you for choosing CloudBridge Networks.</textarea>
                                 <i class="fas fa-clipboard-list me-2"></i>View Logs
                             </div>
                             <div class="card-body">
-                                <p class="card-text small">View application error and activity logs.</p>
-                                <button class="btn btn-danger btn-sm" onclick="viewLogs()">
-                                    <i class="fas fa-eye me-1"></i>View Logs
-                                </button>
+                                <p class="card-text small">Open the live system log explorer for payments, routers, RADIUS, and scheduler output.</p>
+                                <a href="{{ route('admin.logs.index') }}" class="btn btn-danger btn-sm">
+                                    <i class="fas fa-eye me-1"></i>Open Logs
+                                </a>
                             </div>
                         </div>
                     </div>
                     <div class="col-md-4">
                         <div class="card mb-3">
                             <div class="card-header bg-primary">
-                                <i class="fas fa-sync me-2"></i>System Update
+                                <i class="fas fa-code-branch me-2"></i>Release Status
                             </div>
                             <div class="card-body">
-                                <p class="card-text small">Check for and install system updates.</p>
+                                <p class="card-text small">Inspect the deployed build, runtime versions, and git state without running a risky in-panel update.</p>
                                 <button class="btn btn-primary btn-sm" onclick="checkUpdates()">
-                                    <i class="fas fa-search me-1"></i>Check Updates
+                                    <i class="fas fa-search me-1"></i>Check Build
                                 </button>
                             </div>
                         </div>
@@ -866,7 +915,7 @@ Thank you for choosing CloudBridge Networks.</textarea>
 
                 <div class="alert alert-info">
                     <i class="fas fa-info-circle me-2"></i>
-                    <strong>Auto-Backup:</strong> Database is automatically backed up daily at 02:00 AM. Backups are retained for 30 days.
+                    <strong>Backup Mode:</strong> Backups here are generated on demand per tenant. If you want automatic backups, schedule this backup service on the server cron.
                 </div>
             </div>
 
@@ -882,6 +931,7 @@ Thank you for choosing CloudBridge Networks.</textarea>
         </button>
     </div>
 </div>
+</div>
 @endsection
 
 @push('scripts')
@@ -896,23 +946,51 @@ function togglePassword(inputId) {
 document.addEventListener('DOMContentLoaded', function () {
     const hasBs5Tab = window.bootstrap && window.bootstrap.Tab;
     const hasBs4Tab = window.jQuery && window.jQuery.fn && window.jQuery.fn.tab;
+    const activateTabByTarget = (target) => {
+        if (!target || !target.startsWith('#')) {
+            return;
+        }
+
+        const link = document.querySelector(`.nav-tabs .nav-link[href="${target}"]`);
+        const pane = document.querySelector(target);
+        if (!link || !pane) {
+            return;
+        }
+
+        if (hasBs5Tab) {
+            window.bootstrap.Tab.getOrCreateInstance(link).show();
+            return;
+        }
+
+        if (hasBs4Tab) {
+            window.jQuery(link).tab('show');
+            return;
+        }
+
+        document.querySelectorAll('.nav-tabs .nav-link').forEach((navLink) => navLink.classList.remove('active'));
+        document.querySelectorAll('.tab-content .tab-pane').forEach((tabPane) => {
+            tabPane.classList.remove('show', 'active');
+        });
+
+        link.classList.add('active');
+        pane.classList.add('show', 'active');
+    };
+
+    const activateTabFromHash = () => activateTabByTarget(window.location.hash || '');
+
+    window.addEventListener('hashchange', activateTabFromHash);
+    activateTabFromHash();
+
     if (hasBs5Tab || hasBs4Tab) return;
 
     const tabLinks = document.querySelectorAll('.nav-tabs .nav-link');
     tabLinks.forEach(link => {
         link.addEventListener('click', function (e) {
             e.preventDefault();
-            tabLinks.forEach(l => l.classList.remove('active'));
-            document.querySelectorAll('.tab-content .tab-pane').forEach(pane => {
-                pane.classList.remove('show', 'active');
-            });
-            this.classList.add('active');
             const target = this.getAttribute('href');
+            activateTabByTarget(target);
             if (target) {
-                const pane = document.querySelector(target);
-                if (pane) {
-                    pane.classList.add('show', 'active');
-                }
+                window.location.hash = target;
             }
         });
     });
@@ -928,8 +1006,29 @@ document.addEventListener('DOMContentLoaded', function () {
     });
 });
 
-const SETTINGS_API_BASE = '/admin/api/settings';
+const settingsPage = document.getElementById('settingsPage');
+const SETTINGS_API_BASE = settingsPage?.dataset?.settingsUrl || '/admin/api/settings';
+const SETTINGS_SAVE_URL = settingsPage?.dataset?.settingsSaveUrl || SETTINGS_API_BASE;
+const BRANDING_UPLOAD_URL = settingsPage?.dataset?.brandingUploadUrl || `${SETTINGS_API_BASE}/branding/upload`;
+const BACKUP_DOWNLOAD_URL = settingsPage?.dataset?.backupDownloadUrl || `${SETTINGS_API_BASE}/backup/download`;
+const BACKUP_RESTORE_URL = settingsPage?.dataset?.backupRestoreUrl || `${SETTINGS_API_BASE}/backup/restore`;
+const CACHE_CLEAR_URL = settingsPage?.dataset?.cacheClearUrl || `${SETTINGS_API_BASE}/cache/clear`;
+const SYSTEM_STATUS_URL = settingsPage?.dataset?.systemStatusUrl || `${SETTINGS_API_BASE}/system/status`;
+const SETTINGS_TENANT_ID = settingsPage?.dataset?.tenantId || '';
+let portalPreviewUrl = settingsPage?.dataset?.portalPreviewUrl || '/wifi';
+let latestInvoiceUrl = settingsPage?.dataset?.latestInvoiceUrl || '';
 let lastMikrotikCommands = [];
+
+function appendTenantContext(url) {
+    if (!SETTINGS_TENANT_ID) {
+        return url;
+    }
+
+    const absolute = new URL(url, window.location.origin);
+    absolute.searchParams.set('tenant_id', SETTINGS_TENANT_ID);
+
+    return absolute.toString();
+}
 
 function getCsrfToken() {
     return document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
@@ -953,10 +1052,72 @@ async function apiRequest(url, method = 'GET', body = null) {
     const payload = await response.json().catch(() => ({}));
 
     if (!response.ok || payload?.success === false) {
-        throw new Error(payload?.message || 'Request failed');
+        const error = new Error(payload?.message || 'Request failed');
+        error.payload = payload;
+        error.status = response.status;
+        throw error;
     }
 
     return payload;
+}
+
+function setLatestInvoiceUrl(url) {
+    latestInvoiceUrl = typeof url === 'string' ? url : '';
+    if (settingsPage) {
+        settingsPage.dataset.latestInvoiceUrl = latestInvoiceUrl;
+    }
+}
+
+function renderSystemStatus(status) {
+    if (!status) {
+        return;
+    }
+
+    const runtimeMap = {
+        runtimePhpVersion: status.php_version,
+        runtimeLaravelVersion: status.app_version,
+        runtimeDatabase: status.database_driver ? String(status.database_driver).toUpperCase() : null,
+        runtimeEnvironment: status.app_env ? String(status.app_env).toUpperCase() : null,
+        runtimeGitBranch: status.git_branch,
+        runtimeGitCommit: status.git_commit,
+    };
+
+    Object.entries(runtimeMap).forEach(([id, value]) => {
+        const el = document.getElementById(id);
+        if (el && value) {
+            el.textContent = value;
+        }
+    });
+
+    const debugMode = document.getElementById('runtimeDebugMode');
+    if (debugMode) {
+        const enabled = !!status.app_debug;
+        debugMode.innerHTML = `<span class="badge ${enabled ? 'bg-warning text-dark' : 'bg-success'}">${enabled ? 'Enabled' : 'Disabled'}</span>`;
+    }
+}
+
+function renderBackupStatus(status) {
+    const el = document.getElementById('backupStatusMeta');
+    if (!el || !status) {
+        return;
+    }
+
+    const timestamp = status.generated_at_label || 'No backup generated yet';
+    const sizeLabel = status.size_label ? ` (${status.size_label})` : '';
+    el.textContent = `Format: JSON snapshot | Last backup: ${timestamp}${sizeLabel}`;
+}
+
+function updatePageContext(data) {
+    if (typeof data?.portal_preview_url === 'string' && data.portal_preview_url !== '') {
+        portalPreviewUrl = data.portal_preview_url;
+    }
+
+    if (typeof data?.latest_payment_invoice_url === 'string') {
+        setLatestInvoiceUrl(data.latest_payment_invoice_url);
+    }
+
+    renderSystemStatus(data?.system_status || null);
+    renderBackupStatus(data?.backup_status || null);
 }
 
 function collectSettings() {
@@ -1041,9 +1202,10 @@ function bindMikrotikCommandRefresh() {
 
 async function loadSettingsFromServer() {
     try {
-        const payload = await apiRequest(SETTINGS_API_BASE, 'GET');
+        const payload = await apiRequest(appendTenantContext(SETTINGS_API_BASE), 'GET');
         const savedSettings = payload?.data?.settings || {};
         applySettings(savedSettings);
+        updatePageContext(payload?.data || {});
 
         const commands = payload?.data?.mikrotik_commands;
         if (Array.isArray(commands) && commands.length > 0) {
@@ -1071,7 +1233,7 @@ async function testMpesaConnection() {
 
     try {
         const settings = collectSettings();
-        const payload = await apiRequest(`${SETTINGS_API_BASE}/mpesa/test`, 'POST', {
+        const payload = await apiRequest(appendTenantContext(`${SETTINGS_API_BASE}/mpesa/test`), 'POST', {
             mpesa_env: settings.mpesa_env,
             mpesa_key: settings.mpesa_key,
             mpesa_secret: settings.mpesa_secret,
@@ -1098,45 +1260,64 @@ async function testMpesaConnection() {
 
 // Test SMS Connection
 function testSmsConnection() {
+    const provider = document.getElementById('sms_provider')?.value || 'custom';
+    const sender = document.getElementById('sms_sender')?.value?.trim() || 'CloudBridge';
+    const template = document.getElementById('sms_payment_success')?.value?.trim()
+        || 'Payment confirmed for {package}. Your internet is active until {expiry}.';
+
+    const sampleMessage = template
+        .replaceAll('{amount}', 'KES 20.00')
+        .replaceAll('{package}', '12hrs@20')
+        .replaceAll('{expiry}', '30 Apr 2026, 23:59')
+        .replaceAll('{code}', 'CB-WIFI-1234')
+        .replaceAll('{validity}', '24 hours')
+        .replaceAll('{reference}', 'CP-123456')
+        .replaceAll('{phone}', '0712345678');
+
     Swal.fire({
-        title: 'Enter Test Phone Number',
-        input: 'tel',
-        inputPlaceholder: '+254 7XX XXX XXX',
-        showCancelButton: true,
-        confirmButtonText: 'Send SMS'
-    }).then((result) => {
-        if (result.isConfirmed) {
-            Swal.fire({
-                title: 'Sending SMS...',
-                allowOutsideClick: false,
-                didOpen: () => { Swal.showLoading(); }
-            });
-            setTimeout(() => {
-                Swal.fire('Sent!', 'Test SMS delivered successfully.', 'success');
-            }, 2000);
-        }
+        icon: 'info',
+        title: 'SMS Preview',
+        html: `
+            <div class="text-start">
+                <div><strong>Provider:</strong> ${provider}</div>
+                <div><strong>Sender ID:</strong> ${sender}</div>
+                <div class="mt-3"><strong>Rendered message:</strong></div>
+                <div class="border rounded p-3 mt-2 bg-light">${sampleMessage}</div>
+                <div class="text-muted small mt-3">This previews the saved template and sender ID. Live SMS delivery is handled by your configured integration workflow.</div>
+            </div>
+        `,
     });
 }
 
 // Test Email Connection
 function testEmailConnection() {
+    const fromName = document.getElementById('mail_from_name')?.value?.trim() || 'CloudBridge Networks';
+    const fromAddress = document.getElementById('mail_from_address')?.value?.trim() || 'noreply@example.com';
+    const subject = document.getElementById('receipt_subject')?.value?.trim() || 'Your receipt';
+    const body = document.getElementById('receipt_body')?.value?.trim()
+        || 'Hello {name}, your payment of {amount} has been received.';
+
+    const renderedBody = body
+        .replaceAll('{name}', 'Jane Doe')
+        .replaceAll('{amount}', 'KES 20.00')
+        .replaceAll('{expiry}', '30 Apr 2026, 23:59')
+        .replaceAll('{invoice}', 'INV-10001')
+        .replaceAll('{package}', '12hrs@20')
+        .replaceAll('\n', '<br>');
+
     Swal.fire({
-        title: 'Enter Test Email',
-        input: 'email',
-        inputPlaceholder: 'test@example.com',
-        showCancelButton: true,
-        confirmButtonText: 'Send Email'
-    }).then((result) => {
-        if (result.isConfirmed) {
-            Swal.fire({
-                title: 'Sending Email...',
-                allowOutsideClick: false,
-                didOpen: () => { Swal.showLoading(); }
-            });
-            setTimeout(() => {
-                Swal.fire('Sent!', 'Test email delivered successfully.', 'success');
-            }, 2000);
-        }
+        icon: 'info',
+        title: 'Receipt Email Preview',
+        html: `
+            <div class="text-start">
+                <div><strong>From:</strong> ${fromName} &lt;${fromAddress}&gt;</div>
+                <div><strong>Subject:</strong> ${subject}</div>
+                <div class="mt-3"><strong>Rendered message:</strong></div>
+                <div class="border rounded p-3 mt-2 bg-light">${renderedBody}</div>
+                <div class="text-muted small mt-3">This previews the saved receipt content. SMTP delivery uses the mail configuration you save on this page.</div>
+            </div>
+        `,
+        width: 700,
     });
 }
 
@@ -1150,7 +1331,7 @@ async function testMikrotikConnection() {
     });
 
     try {
-        const payload = await apiRequest(`${SETTINGS_API_BASE}/mikrotik/test`, 'POST', {
+        const payload = await apiRequest(appendTenantContext(`${SETTINGS_API_BASE}/mikrotik/test`), 'POST', {
             settings: collectSettings(),
         });
 
@@ -1214,90 +1395,182 @@ function copyMikrotikCommands() {
 
 // Preview Portal
 function previewPortal() {
-    window.open('/portal', '_blank');
+    window.open(portalPreviewUrl || '/wifi', '_blank', 'noopener');
+}
+
+async function uploadBrandAsset(target) {
+    const fileInput = document.createElement('input');
+    fileInput.type = 'file';
+    fileInput.accept = target === 'favicon' ? 'image/*,.ico' : 'image/*';
+    fileInput.click();
+
+    fileInput.addEventListener('change', async () => {
+        const file = fileInput.files?.[0];
+        if (!file) {
+            return;
+        }
+
+        const formData = new FormData();
+        formData.append('target', target);
+        formData.append('asset', file);
+
+        Swal.fire({
+            title: `Uploading ${target}...`,
+            allowOutsideClick: false,
+            didOpen: () => { Swal.showLoading(); },
+        });
+
+        try {
+            const response = await fetch(appendTenantContext(BRANDING_UPLOAD_URL), {
+                method: 'POST',
+                headers: {
+                    'Accept': 'application/json',
+                    'X-CSRF-TOKEN': getCsrfToken(),
+                },
+                body: formData,
+            });
+            const payload = await response.json().catch(() => ({}));
+
+            if (!response.ok || payload?.success === false) {
+                throw new Error(payload?.message || `Unable to upload ${target}`);
+            }
+
+            const fieldId = target === 'favicon' ? 'brand_favicon' : 'brand_logo';
+            const field = document.getElementById(fieldId);
+            if (field) {
+                field.value = payload?.data?.url || '';
+            }
+
+            Swal.fire('Uploaded!', payload?.message || `${target} uploaded successfully.`, 'success');
+        } catch (error) {
+            Swal.fire('Upload failed', error.message || `Unable to upload ${target}`, 'error');
+        }
+    }, { once: true });
 }
 
 // Upload Logo
 function uploadLogo() {
-    Swal.fire({
-        title: 'Upload Logo',
-        input: 'file',
-        inputAttributes: { accept: 'image/*' },
-        showCancelButton: true,
-        confirmButtonText: 'Upload'
-    }).then((result) => {
-        if (result.isConfirmed) {
-            Swal.fire('Uploaded!', 'Logo has been uploaded.', 'success');
-        }
-    });
+    uploadBrandAsset('logo');
 }
 
 // Upload Favicon
 function uploadFavicon() {
-    Swal.fire({
-        title: 'Upload Favicon',
-        input: 'file',
-        inputAttributes: { accept: 'image/*,.ico' },
-        showCancelButton: true,
-        confirmButtonText: 'Upload'
-    }).then((result) => {
-        if (result.isConfirmed) {
-            Swal.fire('Uploaded!', 'Favicon has been uploaded.', 'success');
-        }
-    });
+    uploadBrandAsset('favicon');
 }
 
 // Preview Invoice Template
 function previewInvoiceTemplate() {
+    const brandName = document.getElementById('brand_name')?.value?.trim() || 'Your Business';
+    const invoiceAddress = document.getElementById('invoice_address')?.value?.trim() || 'Business address';
+    const taxEnabled = !!document.getElementById('tax_enabled')?.checked;
+    const taxLabel = document.getElementById('tax_label')?.value?.trim() || 'Tax';
+    const taxRate = Number(document.getElementById('tax_rate')?.value || 0);
+    const taxInclusive = (document.getElementById('tax_inclusive')?.value || 'inclusive') === 'inclusive';
+    const invoicePrefix = document.getElementById('invoice_prefix')?.value?.trim() || 'INV-';
+    const invoiceNextNumber = document.getElementById('invoice_next_number')?.value?.trim() || '10001';
+    const footerNote = document.getElementById('invoice_footer_note')?.value?.trim() || 'Thank you for your business.';
+    const currencySymbol = document.getElementById('sys_currency_symbol')?.value?.trim() || 'KES';
+    const sampleBaseAmount = 1000;
+
+    let subtotal = sampleBaseAmount;
+    let taxAmount = 0;
+    let total = sampleBaseAmount;
+
+    if (taxEnabled && taxRate > 0) {
+        if (taxInclusive) {
+            subtotal = Number((sampleBaseAmount / (1 + taxRate / 100)).toFixed(2));
+            taxAmount = Number((sampleBaseAmount - subtotal).toFixed(2));
+            total = sampleBaseAmount;
+        } else {
+            subtotal = sampleBaseAmount;
+            taxAmount = Number((subtotal * taxRate / 100).toFixed(2));
+            total = Number((subtotal + taxAmount).toFixed(2));
+        }
+    }
+
+    const invoiceHtml = `
+        <div style="text-align:left; font-size:13px;">
+            <strong style="font-size:16px;">${brandName}</strong><br>
+            ${invoiceAddress.replace(/\n/g, '<br>')}
+            ${taxEnabled ? `<br>${taxLabel}: ${document.getElementById('tax_number')?.value?.trim() || 'Not set'}` : ''}
+            <hr>
+            <div style="display:flex; justify-content:space-between; gap:16px;">
+                <div>
+                    <strong>Invoice:</strong> ${invoicePrefix}${invoiceNextNumber}<br>
+                    <strong>Date:</strong> ${new Date().toISOString().slice(0, 10)}<br>
+                    <strong>Customer:</strong> Jane Doe
+                </div>
+                <div style="text-align:right;">
+                    <strong>Total:</strong> ${currencySymbol} ${total.toFixed(2)}<br>
+                    <small>${taxEnabled ? (taxInclusive ? 'Tax included in price' : `${taxRate}% ${taxLabel} added`) : 'No tax applied'}</small>
+                </div>
+            </div>
+            <hr>
+            <table style="width:100%; font-size:12px;">
+                <tr><td>WiFi Package - 30 Days</td><td style="text-align:right;">${currencySymbol} ${subtotal.toFixed(2)}</td></tr>
+                ${taxEnabled && taxAmount > 0 ? `<tr><td>${taxLabel} (${taxRate}%)</td><td style="text-align:right;">${currencySymbol} ${taxAmount.toFixed(2)}</td></tr>` : ''}
+            </table>
+            <hr>
+            <em>${footerNote}</em>
+        </div>
+    `;
+
     Swal.fire({
         title: 'Invoice Preview',
-        html: `
-            <div style="text-align:left; font-size:13px;">
-                <strong>CloudBridge Networks</strong><br>
-                P.O. Box 12345 - 00100, Nairobi, Kenya<br>
-                VAT: P051234567Q
-                <hr>
-                <div style="display:flex; justify-content:space-between;">
-                    <div>
-                        <strong>Invoice:</strong> CBN-10001<br>
-                        <strong>Date:</strong> 2026-03-19<br>
-                        <strong>Customer:</strong> Jane Doe
-                    </div>
-                    <div style="text-align:right;">
-                        <strong>Total:</strong> KES 1,160<br>
-                        <small>(KES 1,000 + 16% VAT)</small>
-                    </div>
-                </div>
-                <hr>
-                <table style="width:100%; font-size:12px;">
-                    <tr><td>WiFi Package - 30 Days</td><td style="text-align:right;">KES 1,000</td></tr>
-                    <tr><td>VAT (16%)</td><td style="text-align:right;">KES 160</td></tr>
-                </table>
-                <hr>
-                <em>Thank you for your business. Payments are due upon receipt.</em>
-            </div>
-        `,
+        html: invoiceHtml,
         width: 650,
+        showDenyButton: !!latestInvoiceUrl,
+        denyButtonText: 'Open latest real invoice',
         confirmButtonText: 'Close'
+    }).then((result) => {
+        if (result.isDenied && latestInvoiceUrl) {
+            window.open(latestInvoiceUrl, '_blank', 'noopener');
+        }
     });
 }
 
 // Download Backup
-function downloadBackup() {
+async function downloadBackup() {
     Swal.fire({
         title: 'Generating Backup...',
-        text: 'Creating database backup file',
+        text: 'Preparing the tenant snapshot for download',
         allowOutsideClick: false,
         didOpen: () => { Swal.showLoading(); }
     });
-    setTimeout(() => {
-        Swal.fire({
-            icon: 'success',
-            title: 'Backup Ready!',
-            text: 'cloudbridge-backup-2026-03-19.sql (2.4 MB)',
-            confirmButtonText: 'Download'
+
+    try {
+        const response = await fetch(appendTenantContext(BACKUP_DOWNLOAD_URL), {
+            method: 'GET',
+            headers: {
+                'Accept': 'application/json',
+                'X-CSRF-TOKEN': getCsrfToken(),
+            },
         });
-    }, 2000);
+
+        if (!response.ok) {
+            const payload = await response.json().catch(() => ({}));
+            throw new Error(payload?.message || 'Unable to generate backup');
+        }
+
+        const blob = await response.blob();
+        const disposition = response.headers.get('content-disposition') || '';
+        const matched = disposition.match(/filename="?([^"]+)"?/i);
+        const filename = matched?.[1] || `cloudbridge-backup-${Date.now()}.json`;
+        const url = window.URL.createObjectURL(blob);
+        const anchor = document.createElement('a');
+        anchor.href = url;
+        anchor.download = filename;
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+        window.URL.revokeObjectURL(url);
+
+        await loadSettingsFromServer();
+
+        Swal.fire('Backup Ready!', `${filename} downloaded successfully.`, 'success');
+    } catch (error) {
+        Swal.fire('Backup failed', error.message || 'Unable to generate backup', 'error');
+    }
 }
 
 // Restore Backup
@@ -1314,16 +1587,38 @@ function restoreBackup() {
         showCancelButton: true,
         confirmButtonText: 'Yes, Restore!',
         confirmButtonColor: '#EF4444'
-    }).then((result) => {
+    }).then(async (result) => {
         if (result.isConfirmed) {
             Swal.fire({
                 title: 'Restoring...',
                 allowOutsideClick: false,
                 didOpen: () => { Swal.showLoading(); }
             });
-            setTimeout(() => {
-                Swal.fire('Restored!', 'Database has been restored from backup.', 'success');
-            }, 3000);
+
+            const formData = new FormData();
+            formData.append('backup_file', file);
+
+            try {
+                const response = await fetch(appendTenantContext(BACKUP_RESTORE_URL), {
+                    method: 'POST',
+                    headers: {
+                        'Accept': 'application/json',
+                        'X-CSRF-TOKEN': getCsrfToken(),
+                    },
+                    body: formData,
+                });
+                const payload = await response.json().catch(() => ({}));
+
+                if (!response.ok || payload?.success === false) {
+                    throw new Error(payload?.message || 'Unable to restore backup');
+                }
+
+                await loadSettingsFromServer();
+
+                Swal.fire('Restored!', payload?.message || 'Backup restored successfully.', 'success');
+            } catch (error) {
+                Swal.fire('Restore failed', error.message || 'Unable to restore backup', 'error');
+            }
         }
     });
 }
@@ -1337,54 +1632,57 @@ function clearCache() {
         showCancelButton: true,
         confirmButtonText: 'Yes, Clear!',
         confirmButtonColor: '#F59E0B'
-    }).then((result) => {
+    }).then(async (result) => {
         if (result.isConfirmed) {
             Swal.fire({
                 title: 'Clearing...',
                 allowOutsideClick: false,
                 didOpen: () => { Swal.showLoading(); }
             });
-            setTimeout(() => {
-                Swal.fire('Cleared!', 'Application cache has been cleared.', 'success');
-            }, 1000);
+
+            try {
+                const payload = await apiRequest(appendTenantContext(CACHE_CLEAR_URL), 'POST');
+                Swal.fire('Cleared!', payload?.message || 'Application cache has been cleared.', 'success');
+            } catch (error) {
+                Swal.fire('Cache clear failed', error.message || 'Unable to clear caches', 'error');
+            }
         }
     });
 }
 
-// View Logs
-function viewLogs() {
-    Swal.fire({
-        title: 'System Logs',
-        html: `
-            <div style="text-align: left; max-height: 300px; overflow-y: auto; font-family: monospace; font-size: 12px;">
-                <p style="color: #10B981;">[2026-03-19 14:32:10] INFO: Application started</p>
-                <p style="color: #10B981;">[2026-03-19 14:32:15] INFO: Database connection established</p>
-                <p style="color: #3B82F6;">[2026-03-19 14:35:22] DEBUG: Router sync: Main Hotspot</p>
-                <p style="color: #10B981;">[2026-03-19 14:40:05] INFO: Payment processed: KES 50</p>
-                <p style="color: #EF4444;">[2026-03-19 14:42:18] ERROR: M-Pesa callback timeout</p>
-                <p style="color: #10B981;">[2026-03-19 14:42:25] INFO: M-Pesa callback received: SUCCESS</p>
-            </div>
-        `,
-        width: 600,
-        confirmButtonText: 'Close'
-    });
-}
-
 // Check Updates
-function checkUpdates() {
+async function checkUpdates() {
     Swal.fire({
-        title: 'Checking for Updates...',
+        title: 'Checking release status...',
         allowOutsideClick: false,
         didOpen: () => { Swal.showLoading(); }
     });
-    setTimeout(() => {
+
+    try {
+        const payload = await apiRequest(appendTenantContext(SYSTEM_STATUS_URL), 'GET');
+        const data = payload?.data || {};
+        renderSystemStatus(data);
+
         Swal.fire({
             icon: 'info',
-            title: 'Up to Date',
-            text: 'You are running the latest version (v1.0.0)',
-            footer: 'Next release: v1.1.0 (Estimated: 2026-04-01)'
+            title: 'Current Build',
+            html: `
+                <div class="text-start">
+                    <div><strong>Laravel:</strong> ${data.app_version || '-'}</div>
+                    <div><strong>PHP:</strong> ${data.php_version || '-'}</div>
+                    <div><strong>Database:</strong> ${data.database_driver || '-'}</div>
+                    <div><strong>Environment:</strong> ${data.app_env || '-'}</div>
+                    <div><strong>Branch:</strong> ${data.git_branch || 'Unavailable'}</div>
+                    <div><strong>Commit:</strong> ${data.git_commit || 'Unavailable'}</div>
+                    <div><strong>Last Commit:</strong> ${data.git_last_commit_label || 'Unavailable'}</div>
+                    <div><strong>Working Tree Dirty:</strong> ${data.git_dirty ? 'Yes' : 'No'}</div>
+                    <div class="mt-3 text-muted small">${data.update_summary || ''}</div>
+                </div>
+            `,
         });
-    }, 2000);
+    } catch (error) {
+        Swal.fire('Release check failed', error.message || 'Unable to inspect current build', 'error');
+    }
 }
 
 // Save All Settings
@@ -1397,18 +1695,22 @@ async function saveAllSettings() {
     });
 
     try {
-        const payload = await apiRequest(SETTINGS_API_BASE, 'POST', {
+        const payload = await apiRequest(appendTenantContext(SETTINGS_SAVE_URL), 'POST', {
             settings: collectSettings(),
         });
 
+        if (payload?.data?.settings) {
+            applySettings(payload.data.settings);
+        }
         if (Array.isArray(payload?.data?.mikrotik_commands)) {
             setMikrotikCommands(payload.data.mikrotik_commands);
         }
+        updatePageContext(payload?.data || {});
 
         Swal.fire({
             icon: 'success',
             title: 'Settings Saved!',
-            text: 'All configurations have been saved successfully.',
+            text: 'All configurations have been saved successfully and live portal branding has been updated.',
             timer: 2000,
             showConfirmButton: false
         });
@@ -1426,9 +1728,10 @@ function resetSettings() {
         showCancelButton: true,
         confirmButtonText: 'Yes, Reset!',
         confirmButtonColor: '#EF4444'
-    }).then((result) => {
+    }).then(async (result) => {
         if (result.isConfirmed) {
-            Swal.fire('Reset!', 'Settings have been reset to defaults.', 'success');
+            await loadSettingsFromServer();
+            Swal.fire('Reset!', 'Unsaved changes were cleared and saved settings were reloaded.', 'success');
         }
     });
 }

@@ -23,6 +23,16 @@
     </div>
 </div>
 
+<div class="alert alert-light border d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-3">
+    <div>
+        <strong>Invoices live here now:</strong> open any successful payment and click <code>Invoice</code>.
+        <div class="text-muted small">Tax, invoice prefix, numbering, and footer text come from Settings > Billing & Tax.</div>
+    </div>
+    <a href="{{ route('admin.settings.index') }}#tab-billing" class="btn btn-outline-dark btn-sm">
+        <i class="fas fa-cog me-1"></i>Billing Settings
+    </a>
+</div>
+
 <!-- Stats Row -->
 <div class="row mb-4">
     <div class="col-md-3">
@@ -161,6 +171,7 @@
                             'failed' => 'bg-danger',
                             default => 'bg-secondary',
                         };
+                        $canOpenInvoice = in_array($status, ['completed', 'confirmed', 'activated'], true);
                     @endphp
                     <tr>
                         <td><input type="checkbox" class="payment-checkbox" value="{{ $payment->id }}"></td>
@@ -179,6 +190,15 @@
                                 <button type="button" class="btn btn-sm btn-outline-primary" title="View Details" onclick="viewPaymentDetails({{ (int) $payment->id }})">
                                     <i class="fas fa-eye"></i>
                                 </button>
+                                @if($canOpenInvoice)
+                                    <a href="{{ route('admin.payments.invoice', $payment) }}" target="_blank" rel="noopener" class="btn btn-sm btn-outline-dark" title="Open Invoice">
+                                        <i class="fas fa-file-invoice me-1"></i><span class="d-none d-xl-inline">Invoice</span>
+                                    </a>
+                                @else
+                                    <button type="button" class="btn btn-sm btn-outline-dark" title="Invoice is available after payment confirmation" disabled>
+                                        <i class="fas fa-file-invoice me-1"></i><span class="d-none d-xl-inline">Invoice</span>
+                                    </button>
+                                @endif
                                 <button type="button" class="btn btn-sm btn-outline-secondary" title="Resend SMS" onclick='resendReceipt(@json($payment->phone ?? ""), @json($reference))'>
                                     <i class="fas fa-sms"></i>
                                 </button>

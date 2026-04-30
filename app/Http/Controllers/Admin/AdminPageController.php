@@ -9,6 +9,10 @@ use App\Models\Router;
 use App\Models\Tenant;
 use App\Models\UserSession;
 use App\Models\Voucher;
+use App\Services\Admin\AdminSettingsService;
+use App\Services\Admin\PaymentInvoiceService;
+use App\Services\Admin\SystemLogExplorer;
+use App\Services\Admin\TenantBackupService;
 use Illuminate\Contracts\View\View;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\StreamedResponse;
@@ -215,6 +219,17 @@ class AdminPageController extends Controller
 
             fclose($out);
         }, $filename, ['Content-Type' => 'text/csv']);
+    }
+
+    public function paymentInvoice(Payment $payment, PaymentInvoiceService $invoiceService): View
+    {
+        $tenant = $this->resolveTenant();
+        $payment = $this->scopedPayment($payment, $tenant);
+
+        return view('admin.payments.invoice', [
+            'tenant' => $tenant,
+            'invoice' => $invoiceService->buildInvoice($payment),
+        ]);
     }
 
     public function routersCreate(): View
@@ -435,6 +450,20 @@ class AdminPageController extends Controller
         return $this->settingsView('account');
     }
 
+    public function logsIndex(Request $request, SystemLogExplorer $logExplorer): View
+    {
+        return view('admin.logs.index', [
+            'tenant' => $this->resolveTenant(),
+            'logSnapshot' => $logExplorer->snapshot($request->only([
+                'source',
+                'level',
+                'search',
+                'limit',
+                'file',
+            ])),
+        ]);
+    }
+
     private function clientsView(string $mode): View
     {
         $tenant = $this->resolveTenant();
@@ -481,6 +510,8 @@ class AdminPageController extends Controller
     {
         $tenant = $this->resolveTenant();
         UserSession::expireStaleSessions($tenant?->id);
+        $settingsService = app(AdminSettingsService::class);
+        $backupService = app(TenantBackupService::class);
 
         $tenantStats = [
             'routers_total' => Router::query()
@@ -504,6 +535,9 @@ class AdminPageController extends Controller
             'tenant' => $tenant,
             'activeTab' => $tab,
             'tenantStats' => $tenantStats,
+            'systemStatus' => $settingsService->runtimeStatus(),
+            'backupStatus' => $backupService->latestBackupMetadata($tenant),
+            'settingsPreview' => $settingsService->invoicePreviewContext($tenant),
         ]);
     }
 
@@ -523,6 +557,15 @@ class AdminPageController extends Controller
         }
 
         return $package;
+    }
+
+    private function scopedPayment(Payment $payment, ?Tenant $tenant): Payment
+    {
+        if ($tenant && $payment->tenant_id !== $tenant->id) {
+            abort(404);
+        }
+
+        return $payment;
     }
 
     private function resolveTenant(): ?Tenant

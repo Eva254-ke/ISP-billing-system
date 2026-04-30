@@ -4,16 +4,37 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     @php
+        $statusTenant = $payment->tenant;
+        $brandingSettings = is_array($statusTenant?->settings ?? null) ? (array) ($statusTenant?->settings ?? []) : [];
+        $brandingSettings = (array) ($brandingSettings['branding'] ?? []);
         $accentColor = trim((string) ($payment->tenant?->brand_color_primary ?? ''));
         if (preg_match('/^#(?:[0-9A-Fa-f]{3}){1,2}$/', $accentColor) !== 1) {
             $accentColor = '#0f766e';
+        }
+        $secondaryColor = trim((string) ($statusTenant?->brand_color_secondary ?? ($brandingSettings['brand_secondary'] ?? '')));
+        if (preg_match('/^#(?:[0-9A-Fa-f]{3}){1,2}$/', $secondaryColor) !== 1) {
+            $secondaryColor = $accentColor;
+        }
+        $brandTitle = trim((string) ($statusTenant?->captive_portal_title ?: $statusTenant?->name ?: 'WiFi Portal'));
+        $companyName = trim((string) ($statusTenant?->name ?: $brandTitle));
+        $logoUrl = trim((string) ($statusTenant?->logo_url ?: ($brandingSettings['brand_logo'] ?? '')));
+        $faviconUrl = trim((string) ($brandingSettings['brand_favicon'] ?? ''));
+        $termsUrl = trim((string) ($statusTenant?->captive_portal_terms_url ?: ($brandingSettings['brand_terms'] ?? '')));
+        $customCss = trim((string) ($statusTenant?->captive_portal_custom_css ?? ''));
+        $brandInitials = collect(preg_split('/\s+/', $brandTitle) ?: [])
+            ->filter()
+            ->take(2)
+            ->map(fn ($part) => strtoupper(substr((string) $part, 0, 1)))
+            ->implode('');
+        if ($brandInitials === '') {
+            $brandInitials = 'WI';
         }
     @endphp
     <meta name="theme-color" content="{{ $accentColor }}">
     @if(in_array($statusView, ['pending', 'paid', 'verifying']))
         <meta http-equiv="refresh" content="10">
     @endif
-    <title>Connection Status - CloudBridge WiFi</title>
+    <title>Connection Status - {{ $brandTitle }}</title>
     @php
         $captiveCssPath = public_path('css/captive-portal.css');
         $captiveCssVersion = file_exists($captiveCssPath) ? filemtime($captiveCssPath) : time();
@@ -41,9 +62,13 @@
         if (is_string($supportDigits) && str_starts_with($supportDigits, '0')) {
             $supportDigits = '254' . substr($supportDigits, 1);
         }
+        $supportEmail = trim((string) ($payment->tenant?->captive_portal_support_email ?? ''));
         $supportTelHref = (is_string($supportDigits) && $supportDigits !== '')
             ? 'tel:+' . ltrim($supportDigits, '+')
-            : 'tel:+254742939094';
+            : ($supportEmail !== '' ? 'mailto:' . $supportEmail : 'tel:+254742939094');
+        $supportLabel = (is_string($supportDigits) && $supportDigits !== '')
+            ? 'Call support'
+            : ($supportEmail !== '' ? 'Email support' : 'Contact support');
         $displayPhone = preg_match('/^(?:0[17]\d{8}|(?:\+?254)[17]\d{8})$/', (string) ($payment->phone ?? '')) === 1
             ? (string) $payment->phone
             : (preg_match('/^(?:0[17]\d{8}|(?:\+?254)[17]\d{8})$/', (string) $phone) === 1 ? (string) $phone : null);
@@ -112,24 +137,45 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/css/captive-portal.css?v={{ $captiveCssVersion }}">
+    @if($faviconUrl !== '')
+        <link rel="icon" href="{{ $faviconUrl }}">
+    @endif
     <style>
         :root {
             --cp-primary: {{ $accentColor }};
             --cp-primary-strong: {{ $accentColor }};
+            --cp-accent: {{ $secondaryColor }};
         }
+
+        .cp-brand-mark--image {
+            background: #ffffff;
+            padding: 4px;
+        }
+
+        .cp-brand-mark--image img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
+
+        {!! $customCss !!}
     </style>
 </head>
 <body>
     <main class="cp-page cp-page-narrow">
         <header class="cp-topbar">
             <div class="cp-brand">
-                <div class="cp-brand-mark">CB</div>
+                @if($logoUrl !== '')
+                    <div class="cp-brand-mark cp-brand-mark--image"><img src="{{ $logoUrl }}" alt="{{ $companyName }} logo"></div>
+                @else
+                    <div class="cp-brand-mark">{{ $brandInitials }}</div>
+                @endif
                 <div class="cp-brand-text">
-                    <h1>CloudBridge WiFi</h1>
+                    <h1>{{ $brandTitle }}</h1>
                     <p>Connection progress</p>
                 </div>
             </div>
-            <div class="cp-support"><a class="cp-link-support" href="{{ $supportTelHref }}">Call support</a></div>
+            <div class="cp-support"><a class="cp-link-support" href="{{ $supportTelHref }}">{{ $supportLabel }}</a></div>
         </header>
 
         @if(session('message'))
@@ -382,8 +428,11 @@
         @endif
 
         <footer class="cp-footer">
-            <p><a class="cp-link-support" href="{{ $supportTelHref }}">Call support</a></p>
-            <p>Engineered by Engineer Omwenga Evans</p>
+            <p><a class="cp-link-support" href="{{ $supportTelHref }}">{{ $supportLabel }}</a></p>
+            @if($termsUrl !== '')
+                <p><a class="cp-link-support" href="{{ $termsUrl }}" target="_blank" rel="noopener">Terms and conditions</a></p>
+            @endif
+            <p>{{ $companyName }}</p>
         </footer>
     </main>
 

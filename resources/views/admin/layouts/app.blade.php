@@ -16,6 +16,7 @@
     <link rel="stylesheet" href="{{ asset('css/admin-overrides.css') }}?v=20260416-6">
     <!-- Font Awesome CDN fallback (prevents missing icons showing as squares if local build assets fail) -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" crossorigin="anonymous" referrerpolicy="no-referrer">
+    @stack('styles')
 </head>
 <body class="hold-transition sidebar-mini layout-fixed layout-navbar-fixed">
     @php
@@ -119,6 +120,13 @@
                             <a href="{{ route('admin.payments.index') }}" 
                                class="nav-link {{ request()->routeIs('admin.payments.*') ? 'active' : '' }}">
                                 <p class="mb-0"><span>Payments</span></p>
+                            </a>
+                        </li>
+
+                        <li class="nav-item">
+                            <a href="{{ route('admin.logs.index') }}"
+                               class="nav-link {{ request()->routeIs('admin.logs.*') ? 'active' : '' }}">
+                                <p class="mb-0"><span>Logs</span></p>
                             </a>
                         </li>
 

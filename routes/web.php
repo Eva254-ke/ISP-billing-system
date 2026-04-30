@@ -11,8 +11,12 @@ use App\Models\UserSession;
 use App\Models\Tenant;
 use App\Services\MikroTik\MikroTikService;
 use App\Services\Mpesa\DarajaService;
+use App\Services\Admin\AdminSettingsService;
+use App\Services\Admin\TenantBackupService;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
+use Illuminate\Validation\Rules\File as ValidationFile;
 
 /*
 |--------------------------------------------------------------------------
@@ -194,6 +198,15 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
         Route::get('/', [AdminPageController::class, 'payments'])->name('index');
         
         Route::get('/export', [AdminPageController::class, 'paymentsExport'])->name('export');
+
+        Route::get('/{payment}/invoice', [AdminPageController::class, 'paymentInvoice'])->name('invoice');
+    });
+
+    // ----------------------------------------------------------------------------
+    // System Logs & Diagnostics
+    // ----------------------------------------------------------------------------
+    Route::prefix('logs')->name('logs.')->group(function () {
+        Route::get('/', [AdminPageController::class, 'logsIndex'])->name('index');
     });
     
     // ----------------------------------------------------------------------------
@@ -249,69 +262,139 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
             return null;
         };
 
-        $buildMikrotikCommands = function (array $settings): array {
-            $radiusServer = trim((string) ($settings['radius_server'] ?? config('radius.server_ip', '127.0.0.1')));
-            $radiusAuthPort = (int) ($settings['radius_port'] ?? config('radius.auth_port', 1812));
-            $radiusAcctPort = (int) ($settings['radius_acct_port'] ?? config('radius.acct_port', 1813));
-            $radiusTimeoutSeconds = max(1, (int) ($settings['radius_timeout'] ?? config('radius.timeout', 5)));
-            $radiusSecret = trim((string) ($settings['radius_secret'] ?? config('radius.shared_secret', '')));
-
-            $isLoopbackServer = in_array(strtolower($radiusServer), ['127.0.0.1', 'localhost', '::1'], true);
-            $safeServer = ($radiusServer !== '' && !$isLoopbackServer) ? $radiusServer : 'YOUR_RADIUS_SERVER_IP';
-            $safeSecret = ($radiusSecret !== '' && strtolower($radiusSecret) !== 'your-radius-secret')
-                ? $radiusSecret
-                : 'YOUR_SHARED_SECRET';
-
-            return [
-                '/radius add service=hotspot,ppp address=' . $safeServer . ' protocol=udp authentication-port=' . max(1, $radiusAuthPort) . ' accounting-port=' . max(1, $radiusAcctPort) . ' secret=' . $safeSecret . ' timeout=' . $radiusTimeoutSeconds . 's',
-                '/ip hotspot profile set [find] use-radius=yes',
-                '/ppp aaa set use-radius=yes accounting=yes interim-update=1m',
-                '/radius incoming set accept=yes port=3799',
-                '/radius monitor 0 once',
-            ];
-        };
-
-        Route::get('/settings', function () use ($resolveTenant, $buildMikrotikCommands) {
+        Route::get('/settings', function (AdminSettingsService $settingsService, TenantBackupService $backupService) use ($resolveTenant) {
             $tenant = $resolveTenant();
-
-            $settings = [];
-            if ($tenant) {
-                $tenantSettings = (array) ($tenant->settings ?? []);
-                $settings = (array) ($tenantSettings['admin_settings'] ?? []);
-            } else {
-                $settings = (array) cache()->get('admin_settings_global', []);
-            }
+            $settings = $settingsService->getSettings($tenant);
 
             return response()->json([
                 'success' => true,
                 'data' => [
                     'settings' => $settings,
-                    'mikrotik_commands' => $buildMikrotikCommands($settings),
+                    'mikrotik_commands' => $settingsService->buildMikrotikCommands($settings),
+                    'system_status' => $settingsService->runtimeStatus(),
+                    'backup_status' => $backupService->latestBackupMetadata($tenant),
+                    ...$settingsService->invoicePreviewContext($tenant),
                 ],
             ]);
         })->name('settings.show');
 
-        Route::post('/settings', function (Request $request) use ($resolveTenant, $buildMikrotikCommands) {
-            $settings = (array) $request->input('settings', []);
-
+        Route::post('/settings', function (Request $request, AdminSettingsService $settingsService, TenantBackupService $backupService) use ($resolveTenant) {
             $tenant = $resolveTenant();
-            if ($tenant) {
-                $tenantSettings = (array) ($tenant->settings ?? []);
-                $tenantSettings['admin_settings'] = $settings;
-                $tenant->settings = $tenantSettings;
-                $tenant->save();
-            } else {
-                cache()->forever('admin_settings_global', $settings);
-            }
+            $settings = $settingsService->save($tenant, (array) $request->input('settings', []));
 
             return response()->json([
                 'success' => true,
                 'message' => 'Settings saved successfully',
                 'data' => [
-                    'mikrotik_commands' => $buildMikrotikCommands($settings),
+                    'settings' => $settings,
+                    'mikrotik_commands' => $settingsService->buildMikrotikCommands($settings),
+                    'system_status' => $settingsService->runtimeStatus(),
+                    'backup_status' => $backupService->latestBackupMetadata($tenant?->fresh()),
+                    ...$settingsService->invoicePreviewContext($tenant?->fresh()),
                 ],
             ]);
         })->name('settings.save');
+
+        Route::post('/settings/branding/upload', function (Request $request, AdminSettingsService $settingsService) use ($resolveTenant) {
+            $validated = $request->validate([
+                'target' => 'required|string|in:logo,favicon',
+                'asset' => ['required', ValidationFile::types(['png', 'jpg', 'jpeg', 'svg', 'webp', 'ico'])->max(4096)],
+            ]);
+
+            $tenant = $resolveTenant();
+            $asset = $request->file('asset');
+            if (!$asset) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'No file was uploaded.',
+                ], 422);
+            }
+
+            $stored = $settingsService->storeBrandAsset($tenant, $asset, (string) $validated['target']);
+
+            return response()->json([
+                'success' => true,
+                'message' => ucfirst((string) $validated['target']) . ' uploaded successfully.',
+                'data' => $stored,
+            ]);
+        })->name('settings.branding.upload');
+
+        Route::get('/settings/backup/download', function (TenantBackupService $backupService) use ($resolveTenant) {
+            $tenant = $resolveTenant();
+            if (!$tenant) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Select a tenant before generating a backup.',
+                ], 422);
+            }
+
+            $backup = $backupService->createBackup($tenant);
+
+            return response()->download($backup['path'], $backup['filename'], [
+                'Content-Type' => 'application/json',
+            ]);
+        })->name('settings.backup.download');
+
+        Route::post('/settings/backup/restore', function (Request $request, TenantBackupService $backupService, AdminSettingsService $settingsService) use ($resolveTenant) {
+            $tenant = $resolveTenant();
+            if (!$tenant) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Select a tenant before restoring a backup.',
+                ], 422);
+            }
+
+            $request->validate([
+                'backup_file' => ['required', ValidationFile::types(['json'])->max(10240)],
+            ]);
+
+            $file = $request->file('backup_file');
+            if (!$file) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Choose a backup file to restore.',
+                ], 422);
+            }
+
+            try {
+                $result = $backupService->restoreBackup($tenant, $file);
+                $settingsService->clearCaches();
+            } catch (\Throwable $exception) {
+                return response()->json([
+                    'success' => false,
+                    'message' => $exception->getMessage(),
+                ], 422);
+            }
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Backup restored successfully for this tenant.',
+                'data' => [
+                    'restored_tables' => $result['restored_tables'],
+                    'backup_status' => $backupService->latestBackupMetadata($tenant->fresh()),
+                ],
+            ]);
+        })->name('settings.backup.restore');
+
+        Route::post('/settings/cache/clear', function (AdminSettingsService $settingsService) {
+            $result = $settingsService->clearCaches();
+
+            return response()->json([
+                'success' => true,
+                'message' => $result['message'],
+                'data' => [
+                    'output' => $result['output'],
+                ],
+            ]);
+        })->name('settings.cache.clear');
+
+        Route::get('/settings/system/status', function (AdminSettingsService $settingsService) {
+            return response()->json([
+                'success' => true,
+                'message' => 'Current release information loaded.',
+                'data' => $settingsService->runtimeStatus(),
+            ]);
+        })->name('settings.system.status');
 
         Route::post('/settings/mpesa/test', function (Request $request) {
             $validated = $request->validate([
@@ -367,11 +450,11 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
             ]);
         })->name('settings.mpesa.test');
 
-        Route::post('/settings/mikrotik/test', function (Request $request, MikroTikService $mikroTikService) use ($resolveTenant, $buildMikrotikCommands) {
+        Route::post('/settings/mikrotik/test', function (Request $request, MikroTikService $mikroTikService, AdminSettingsService $settingsService) use ($resolveTenant) {
             $tenant = $resolveTenant();
 
-            $settings = (array) $request->input('settings', []);
-            $commands = $buildMikrotikCommands($settings);
+            $settings = $settingsService->previewSettings($tenant, (array) $request->input('settings', []));
+            $commands = $settingsService->buildMikrotikCommands($settings);
 
             $router = Router::query()
                 ->when($tenant, fn ($query) => $query->where('tenant_id', $tenant->id))
