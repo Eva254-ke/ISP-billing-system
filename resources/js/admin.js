@@ -779,13 +779,50 @@ document.addEventListener('DOMContentLoaded', function () {
             refreshView();
         };
 
+        const buildExportUrl = (format) => {
+            if (!exportUrl) {
+                return '';
+            }
+
+            const params = new URLSearchParams();
+            params.set('format', format === 'pdf' ? 'pdf' : 'csv');
+            params.set('date_range', String(dateRangeField?.value || 'week'));
+
+            const dateFromValue = String(dateFromField?.value || '');
+            const dateToValue = String(dateToField?.value || '');
+            if (dateFromValue !== '') {
+                params.set('date_from', dateFromValue);
+            }
+            if (dateToValue !== '') {
+                params.set('date_to', dateToValue);
+            }
+
+            const statusValue = String(statusField?.value || 'all');
+            if (statusValue !== 'all') {
+                params.set('status', statusValue);
+            }
+
+            const packageValue = String(packageField?.value || 'all');
+            if (packageValue !== '' && packageValue !== 'all') {
+                params.set('package_id', packageValue);
+            }
+
+            const searchValue = String(searchField?.value || '').trim();
+            if (searchValue !== '') {
+                params.set('search', searchValue);
+            }
+
+            return `${exportUrl}?${params.toString()}`;
+        };
+
         window.exportPayments = (format) => {
-            if (format === 'csv' && exportUrl) {
-                window.location.href = exportUrl;
+            const target = buildExportUrl(format);
+            if (target !== '') {
+                window.location.href = target;
                 return;
             }
 
-            notify('PDF export is not configured yet. Use CSV export for production downloads.');
+            notify('Payments export is unavailable right now.');
         };
 
         window.copyRef = () => {

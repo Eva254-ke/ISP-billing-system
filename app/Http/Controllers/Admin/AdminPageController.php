@@ -10,9 +10,11 @@ use App\Models\Tenant;
 use App\Models\UserSession;
 use App\Models\Voucher;
 use App\Services\Admin\AdminSettingsService;
+use App\Services\Admin\PaymentExportService;
 use App\Services\Admin\PaymentInvoiceService;
 use App\Services\Admin\SystemLogExplorer;
 use App\Services\Admin\TenantBackupService;
+use Illuminate\Http\Response;
 use Illuminate\Contracts\View\View;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\StreamedResponse;
@@ -239,34 +241,40 @@ class AdminPageController extends Controller
         ]);
     }
 
-    public function paymentsExport(): StreamedResponse
+    public function paymentsExport(Request $request, PaymentExportService $exportService): Response|StreamedResponse
     {
         $tenant = $this->resolveTenant();
+        $filters = $exportService->sanitizeFilters((array) $request->only([
+            'format',
+            'date_range',
+            'date_from',
+            'date_to',
+            'status',
+            'package_id',
+            'search',
+        ]));
 
-        $payments = Payment::query()
-            ->when($tenant, fn ($query) => $query->where('tenant_id', $tenant->id))
-            ->with(['package', 'session'])
+        $payments = $exportService->paymentsQuery($tenant, $filters)
             ->latest('created_at')
             ->limit(1000)
             ->get();
 
-        $filename = 'payments-export-' . now()->format('Ymd-His') . '.csv';
+        $format = (string) ($filters['format'] ?? 'csv');
+        $filename = $exportService->filename($format);
 
-        return response()->streamDownload(function () use ($payments) {
+        if ($format === 'pdf') {
+            return response($exportService->pdfDocument($tenant, $payments, $filters), 200, [
+                'Content-Type' => 'application/pdf',
+                'Content-Disposition' => 'attachment; filename="' . $filename . '"',
+                'Cache-Control' => 'no-store, no-cache, must-revalidate, max-age=0',
+            ]);
+        }
+
+        return response()->streamDownload(function () use ($payments, $exportService) {
             $out = fopen('php://output', 'w');
-            fputcsv($out, ['date', 'phone', 'customer', 'package', 'amount', 'currency', 'status', 'receipt']);
 
-            foreach ($payments as $payment) {
-                fputcsv($out, [
-                    $payment->created_at?->toDateTimeString(),
-                    $payment->phone,
-                    $payment->display_customer_name,
-                    $payment->package_name,
-                    $payment->amount,
-                    $payment->currency,
-                    $payment->status,
-                    $payment->mpesa_receipt_number ?: $payment->mpesa_checkout_request_id,
-                ]);
+            foreach ($exportService->csvRows($payments) as $row) {
+                fputcsv($out, $row);
             }
 
             fclose($out);

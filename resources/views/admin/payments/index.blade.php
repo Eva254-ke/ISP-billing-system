@@ -14,12 +14,12 @@
 <div class="d-flex justify-content-between align-items-center mb-4">
     <h2>Payments</h2>
     <div>
-        <button type="button" class="btn btn-outline-secondary me-2" onclick="exportPayments('csv')">
+        <a href="{{ route('admin.payments.export', ['format' => 'csv']) }}" class="btn btn-outline-secondary me-2" id="exportCsvLink">
             <i class="fas fa-file-csv me-1"></i>Export CSV
-        </button>
-        <button type="button" class="btn btn-outline-primary" onclick="exportPayments('pdf')">
+        </a>
+        <a href="{{ route('admin.payments.export', ['format' => 'pdf']) }}" class="btn btn-outline-primary" id="exportPdfLink">
             <i class="fas fa-file-pdf me-1"></i>Export PDF
-        </button>
+        </a>
     </div>
 </div>
 
@@ -28,7 +28,7 @@
         <strong>Invoices live here now:</strong> open any successful payment and click <code>Invoice</code>.
         <div class="text-muted small">The real 3% sales levy, invoice prefix, numbering, and footer text come from Settings > Billing & Tax.</div>
     </div>
-    <a href="{{ route('admin.settings.index') }}#tab-billing" class="btn btn-outline-dark btn-sm">
+    <a href="{{ route('admin.settings') }}#tab-billing" class="btn btn-outline-dark btn-sm">
         <i class="fas fa-cog me-1"></i>Billing Settings
     </a>
 </div>
@@ -364,4 +364,87 @@
 
 <!-- Hidden Print Area -->
 <div id="printArea" style="display: none;"></div>
+
+<script>
+    document.addEventListener('DOMContentLoaded', function () {
+        const page = document.getElementById('paymentsPage');
+        const csvLink = document.getElementById('exportCsvLink');
+        const pdfLink = document.getElementById('exportPdfLink');
+
+        if (!page || !csvLink || !pdfLink) {
+            return;
+        }
+
+        const exportUrl = page.dataset.exportUrl || '';
+        if (!exportUrl) {
+            return;
+        }
+
+        const dateRange = document.getElementById('dateRange');
+        const dateFrom = document.getElementById('dateFrom');
+        const dateTo = document.getElementById('dateTo');
+        const statusFilter = document.getElementById('statusFilter');
+        const packageFilter = document.getElementById('packageFilter');
+        const paymentSearch = document.getElementById('paymentSearch');
+
+        const buildExportHref = function (format) {
+            const params = new URLSearchParams();
+            params.set('format', format);
+
+            const dateRangeValue = dateRange ? String(dateRange.value || 'week') : 'week';
+            params.set('date_range', dateRangeValue);
+
+            const dateFromValue = dateFrom ? String(dateFrom.value || '') : '';
+            const dateToValue = dateTo ? String(dateTo.value || '') : '';
+            if (dateFromValue !== '') {
+                params.set('date_from', dateFromValue);
+            }
+            if (dateToValue !== '') {
+                params.set('date_to', dateToValue);
+            }
+
+            const statusValue = statusFilter ? String(statusFilter.value || 'all') : 'all';
+            if (statusValue !== 'all') {
+                params.set('status', statusValue);
+            }
+
+            const packageValue = packageFilter ? String(packageFilter.value || 'all') : 'all';
+            if (packageValue !== '' && packageValue !== 'all') {
+                params.set('package_id', packageValue);
+            }
+
+            const searchValue = paymentSearch ? String(paymentSearch.value || '').trim() : '';
+            if (searchValue !== '') {
+                params.set('search', searchValue);
+            }
+
+            return exportUrl + '?' + params.toString();
+        };
+
+        const syncExportLinks = function () {
+            csvLink.href = buildExportHref('csv');
+            pdfLink.href = buildExportHref('pdf');
+        };
+
+        [dateRange, dateFrom, dateTo, statusFilter, packageFilter, paymentSearch].forEach(function (field) {
+            if (!field) {
+                return;
+            }
+
+            const eventName = field === paymentSearch ? 'input' : 'change';
+            field.addEventListener(eventName, syncExportLinks);
+        });
+
+        syncExportLinks();
+
+        window.exportPayments = function (format) {
+            if (format === 'pdf') {
+                window.location.href = pdfLink.href;
+                return;
+            }
+
+            window.location.href = csvLink.href;
+        };
+    });
+</script>
 @endpush
