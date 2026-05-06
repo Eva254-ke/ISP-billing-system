@@ -58,20 +58,33 @@ class RadiusDisconnectService
         $payload = $this->buildPayload($attributes);
         $username = $attributes['User-Name'] ?? trim((string) $session->username);
 
+        // Determine source IP for RADIUS disconnect
+        $sourceIp = $this->resolveSourceIp($router);
+        $commandArgs = [
+            $binary,
+            '-x',
+            '-r',
+            '1',
+            '-t',
+            (string) $timeout,
+        ];
+        
+        // Add source IP binding if available
+        if ($sourceIp !== null) {
+            $commandArgs[] = '-S';
+            $commandArgs[] = $sourceIp;
+        }
+        
+        $commandArgs = array_merge($commandArgs, [
+            "{$nasIp}:{$port}",
+            'disconnect',
+            $secret,
+        ]);
+
         $result = Process::path(base_path())
             ->timeout($timeout + 5)
             ->input($payload)
-            ->run([
-                $binary,
-                '-x',
-                '-r',
-                '1',
-                '-t',
-                (string) $timeout,
-                "{$nasIp}:{$port}",
-                'disconnect',
-                $secret,
-            ]);
+            ->run($commandArgs);
 
         $combinedOutput = trim($result->output() . "\n" . $result->errorOutput());
         $success = $result->successful() && !$this->looksLikeNak($combinedOutput);
@@ -111,13 +124,47 @@ class RadiusDisconnectService
             'error' => $error,
         ]);
 
+        // Try fallback MikroTik API disconnect if enabled
+        $fallbackResult = ['success' => false, 'error' => 'Fallback disabled'];
+        if (config('radius.disconnect_fallback_to_api', true)) {
+            $fallbackResult = $this->attemptMikrotikDisconnect($session, $router);
+        }
+        
+        if ($fallbackResult['success']) {
+            Log::channel('radius')->info('Fallback MikroTik disconnect succeeded', [
+                'session_id' => $session->id,
+                'username' => $username,
+                'nas_ip' => $nasIp,
+                'fallback_method' => 'mikrotik_api',
+            ]);
+            
+            return [
+                'success' => true,
+                'error' => null,
+                'nas_ip' => $nasIp,
+                'port' => $port,
+                'used_accounting_record' => $accountingRecord !== null,
+                'attributes' => $attributes,
+                'fallback_used' => 'mikrotik_api',
+            ];
+        }
+
+        Log::channel('radius')->warning('Both RADIUS and MikroTik disconnect failed', [
+            'session_id' => $session->id,
+            'username' => $username,
+            'nas_ip' => $nasIp,
+            'radius_error' => $error,
+            'mikrotik_error' => $fallbackResult['error'] ?? 'Unknown',
+        ]);
+
         return [
             'success' => false,
-            'error' => $error,
+            'error' => $error . ' | MikroTik fallback: ' . ($fallbackResult['error'] ?? 'Unknown'),
             'nas_ip' => $nasIp,
             'port' => $port,
             'used_accounting_record' => $accountingRecord !== null,
             'attributes' => $attributes,
+            'fallback_attempted' => true,
         ];
     }
 
@@ -195,6 +242,66 @@ class RadiusDisconnectService
         return $this->normalizeIpAddress($router?->ip_address);
     }
 
+    private function resolveSourceIp(?Router $router): ?string
+    {
+        // Try configured source IP first
+        $sourceIp = trim((string) config('radius.disconnect_source_ip', ''));
+        if ($sourceIp !== '' && filter_var($sourceIp, FILTER_VALIDATE_IP)) {
+            return $sourceIp;
+        }
+
+        // Try to get the server's IP that can reach the NAS
+        $serverIp = trim((string) config('radius.server_ip', ''));
+        if ($serverIp !== '' && filter_var($serverIp, FILTER_VALIDATE_IP)) {
+            return $serverIp;
+        }
+
+        // Fallback: try to determine the best source IP based on NAS IP
+        $nasIp = $this->normalizeIpAddress($router?->ip_address);
+        if ($nasIp !== null) {
+            // If NAS is private, use a private source IP
+            if (filter_var($nasIp, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) {
+                // Public NAS - use public server IP or first available interface
+                return $this->getServerPublicIp() ?? null;
+            } else {
+                // Private NAS - use appropriate private network IP
+                return $this->getServerPrivateIp($nasIp) ?? null;
+            }
+        }
+
+        return null;
+    }
+
+    private function getServerPublicIp(): ?string
+    {
+        // Try to get the server's public IP from configuration or interface
+        $publicIp = trim((string) env('SERVER_PUBLIC_IP', ''));
+        if ($publicIp !== '' && filter_var($publicIp, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) {
+            return $publicIp;
+        }
+
+        // Fallback: try to detect from network interfaces
+        // This is a simple implementation - you might want to improve this
+        return null;
+    }
+
+    private function getServerPrivateIp(string $targetNetwork): ?string
+    {
+        // Simple logic to determine which private IP to use based on target
+        // You might want to enhance this based on your network topology
+        if (str_starts_with($targetNetwork, '192.168.')) {
+            return '192.168.1.1'; // Adjust based on your network
+        }
+        if (str_starts_with($targetNetwork, '10.')) {
+            return '10.0.0.1'; // Adjust based on your network
+        }
+        if (str_starts_with($targetNetwork, '172.')) {
+            return '172.16.0.1'; // Adjust based on your network
+        }
+        
+        return null;
+    }
+
     private function resolveSharedSecret(?Router $router): string
     {
         $routerSecret = trim((string) ($router?->radius_secret ?? ''));
@@ -241,6 +348,49 @@ class RadiusDisconnectService
         }
 
         return false;
+    }
+
+    /**
+     * Attempt MikroTik API disconnect as fallback
+     */
+    private function attemptMikrotikDisconnect(UserSession $session, ?Router $router): array
+    {
+        if (!$router) {
+            return ['success' => false, 'error' => 'Router not available for MikroTik fallback'];
+        }
+
+        try {
+            $mikrotikService = new \App\Services\MikroTik\MikroTikService();
+            
+            // Try to disconnect by MAC address first
+            if ($session->mac_address) {
+                $result = $mikrotikService->removeHotspotUser($router, $session->mac_address);
+                if ($result) {
+                    return ['success' => true, 'method' => 'mac_address'];
+                }
+            }
+
+            // Try to disconnect by IP address
+            if ($session->ip_address) {
+                $result = $mikrotikService->removeHotspotUserByIp($router, $session->ip_address);
+                if ($result) {
+                    return ['success' => true, 'method' => 'ip_address'];
+                }
+            }
+
+            // Try to disconnect by username
+            if ($session->username) {
+                $result = $mikrotikService->removeHotspotUserByUsername($router, $session->username);
+                if ($result) {
+                    return ['success' => true, 'method' => 'username'];
+                }
+            }
+
+            return ['success' => false, 'error' => 'No valid identifier for MikroTik disconnect'];
+
+        } catch (\Throwable $e) {
+            return ['success' => false, 'error' => 'MikroTik API error: ' . $e->getMessage()];
+        }
     }
 
     /**

@@ -28,6 +28,42 @@ class RadiusAccountingService
     }
 
     /**
+     * Find active RADIUS session by MAC address
+     */
+    public function findActiveSessionByMac(string $macAddress, int $tenantId): ?array
+    {
+        $normalizedMac = $this->identityResolver->normalizeMacAddress($macAddress);
+        if ($normalizedMac === null) {
+            return null;
+        }
+
+        return $this->findBestOpenSession(
+            usernames: [],
+            acctSessionIds: [],
+            macAddress: $normalizedMac,
+            ipAddress: null
+        );
+    }
+
+    /**
+     * Find active RADIUS session by IP address
+     */
+    public function findActiveSessionByIp(string $ipAddress, int $tenantId): ?array
+    {
+        $normalizedIp = $this->normalizeIpAddress($ipAddress);
+        if ($normalizedIp === null) {
+            return null;
+        }
+
+        return $this->findBestOpenSession(
+            usernames: [],
+            acctSessionIds: [],
+            macAddress: null,
+            ipAddress: $normalizedIp
+        );
+    }
+
+    /**
      * @return array<string, mixed>|null
      */
     public function findOpenSessionForSession(UserSession $session): ?array

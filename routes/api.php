@@ -154,6 +154,15 @@ Route::middleware(['throttle:api'])->group(function () {
      */
     Route::get('/user', function (Request $request) {
         $user = $request->user()->load('tenant');
+        
+        if (!$user->tenant) {
+            return response()->json([
+                'success' => false,
+                'message' => 'User tenant not found',
+                'data' => null,
+            ], 404);
+        }
+        
         $tenant = $user->tenant->loadCount(['routers', 'packages', 'userSessions']);
         
         return response()->json([

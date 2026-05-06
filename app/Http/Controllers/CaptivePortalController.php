@@ -87,9 +87,50 @@ class CaptivePortalController extends Controller
             allowPhoneOnlyFallback: false
         );
 
+        // Log session detection for debugging
+        Log::channel('captive')->info('Session detection attempt', [
+            'tenant_id' => $tenant->id,
+            'phone' => $phone,
+            'client_mac' => $clientMac,
+            'client_ip' => $clientIp,
+            'active_session_found' => $activeSession !== null,
+            'session_id' => $activeSession?->id,
+            'session_status' => $activeSession?->status,
+            'session_expires_at' => $activeSession?->expires_at,
+        ]);
+
         if ($activeSession && !$phone && !empty($activeSession->phone)) {
             $phone = (string) $activeSession->phone;
             session(['captive_phone' => $phone]);
+        }
+
+        // If active session found, automatically redirect to continue browsing
+        if ($activeSession) {
+            $activePayment = $activeSession->payment()->first();
+            if ($activePayment) {
+                session([
+                    'captive_tenant_id' => $tenant->id,
+                    'captive_payment_id' => $activePayment->id,
+                ]);
+
+                if (!empty($activeSession->phone)) {
+                    session(['captive_phone' => (string) $activeSession->phone]);
+                }
+
+                // Verify session is still active and redirect to continue browsing
+                $verifiedSession = $this->resolveVerifiedActiveSession($activeSession, $activePayment);
+                if ($verifiedSession) {
+                    $continueBrowsingUrl = $this->resolveContinueBrowsingUrl($activePayment, $request);
+                    return redirect($continueBrowsingUrl);
+                }
+                
+                // If session verification fails, show status page
+                return redirect()->route('wifi.status', $this->buildStatusRouteParameters(
+                    phone: (string) ($activeSession->phone ?? $phone),
+                    payment: $activePayment,
+                    tenantId: (int) $tenant->id
+                ))->with('message', 'We found your session. Checking connection status.');
+            }
         }
 
         if ($showReconnectScreen) {
@@ -134,6 +175,30 @@ class CaptivePortalController extends Controller
                     session(['captive_phone' => $resumePhone]);
                 }
 
+                // Automatically activate access for recent payments in reconnect flow
+                if (in_array($resumablePayment->status, ['completed', 'confirmed'], true)) {
+                    try {
+                        $this->activatePaidAccess($resumablePayment);
+                        
+                        // Check if activation was successful
+                        $activeSession = $this->resolveConnectedSession(
+                            $resumablePayment,
+                            $clientMac,
+                            $clientIp
+                        );
+                        
+                        if ($activeSession) {
+                            $continueBrowsingUrl = $this->resolveContinueBrowsingUrl($resumablePayment, $request);
+                            return redirect($continueBrowsingUrl);
+                        }
+                    } catch (\Throwable $e) {
+                        Log::warning('Auto-activation failed for recent payment in reconnect, falling back to status', [
+                            'payment_id' => $resumablePayment->id,
+                            'error' => $e->getMessage(),
+                        ]);
+                    }
+                }
+
                 return redirect()->route('wifi.status', $this->buildStatusRouteParameters(
                     phone: $resumePhone !== '' ? $resumePhone : (string) $resumablePayment->phone,
                     payment: $resumablePayment,
@@ -164,6 +229,30 @@ class CaptivePortalController extends Controller
                 }
 
                 session(['captive_payment_id' => $resumablePayment->id]);
+
+                // Automatically activate access for recent payments
+                if (in_array($resumablePayment->status, ['completed', 'confirmed'], true)) {
+                    try {
+                        $this->activatePaidAccess($resumablePayment);
+                        
+                        // Check if activation was successful
+                        $activeSession = $this->resolveConnectedSession(
+                            $resumablePayment,
+                            $clientContext['mac'] ?? null,
+                            $clientContext['ip'] ?? null
+                        );
+                        
+                        if ($activeSession) {
+                            $continueBrowsingUrl = $this->resolveContinueBrowsingUrl($resumablePayment, $request);
+                            return redirect($continueBrowsingUrl);
+                        }
+                    } catch (\Throwable $e) {
+                        Log::warning('Auto-activation failed for recent payment, falling back to status', [
+                            'payment_id' => $resumablePayment->id,
+                            'error' => $e->getMessage(),
+                        ]);
+                    }
+                }
 
                 return redirect()->route('wifi.status', $this->buildStatusRouteParameters(
                     phone: $resumePhone !== '' ? $resumePhone : (string) $resumablePayment->phone,
@@ -202,7 +291,6 @@ class CaptivePortalController extends Controller
         $request->validate([
             'phone' => ['required', 'regex:' . self::KENYA_PHONE_REGEX],
             'package_id' => ['required', 'exists:packages,id'],
-            'customer_name' => ['nullable', 'string', 'max:120'],
         ]);
 
         $phone = $this->normalizePhoneForStorage((string) $request->phone);
@@ -643,6 +731,62 @@ class CaptivePortalController extends Controller
             return null;
         }
 
+        // In pure RADIUS mode, prioritize RADIUS accounting records
+        if ((bool) config('radius.pure_radius', false)) {
+            try {
+                $radiusAccountingService = app(RadiusAccountingService::class);
+                
+                // Search RADIUS accounting directly for active sessions
+                $activeRadiusSession = null;
+                
+                if ($clientMac) {
+                    $activeRadiusSession = $radiusAccountingService->findActiveSessionByMac($clientMac, $tenantId);
+                }
+                
+                if (!$activeRadiusSession && $clientIp) {
+                    $activeRadiusSession = $radiusAccountingService->findActiveSessionByIp($clientIp, $tenantId);
+                }
+                
+                if ($activeRadiusSession) {
+                    // Find corresponding UserSession and return it
+                    $userSession = UserSession::query()
+                        ->where('tenant_id', $tenantId)
+                        ->where('username', $activeRadiusSession['username'])
+                        ->where('status', 'active')
+                        ->orderByDesc('last_activity_at')
+                        ->first();
+                        
+                    if ($userSession) {
+                        // Update MAC/IP if changed
+                        if ($clientMac && $userSession->mac_address !== $clientMac) {
+                            $userSession->update(['mac_address' => $clientMac]);
+                        }
+                        if ($clientIp && $userSession->ip_address !== $clientIp) {
+                            $userSession->update(['ip_address' => $clientIp]);
+                        }
+                        
+                        Log::channel('radius')->info('Active session found via RADIUS accounting', [
+                            'tenant_id' => $tenantId,
+                            'username' => $activeRadiusSession['username'],
+                            'session_id' => $userSession->id,
+                            'client_mac' => $clientMac,
+                            'client_ip' => $clientIp,
+                        ]);
+                        
+                        return $userSession;
+                    }
+                }
+            } catch (\Throwable $e) {
+                Log::warning('RADIUS accounting lookup failed', [
+                    'tenant_id' => $tenantId,
+                    'client_mac' => $clientMac,
+                    'client_ip' => $clientIp,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
+        // Fallback to local database lookup
         $candidates = UserSession::query()
             ->where('tenant_id', $tenantId)
             ->active()
@@ -663,6 +807,59 @@ class CaptivePortalController extends Controller
             $verified = $this->resolveVerifiedActiveSession($candidate, allowRouterFallback: false);
             if ($verified) {
                 return $verified;
+            }
+        }
+
+        // Fallback: try to find session by phone if MAC/IP didn't match
+        if ($phone) {
+            $phoneCandidates = UserSession::query()
+                ->where('tenant_id', $tenantId)
+                ->where('phone', $phone)
+                ->active()
+                ->where('last_activity_at', '>=', now()->subHours(2)) // Recent activity
+                ->orderByDesc('last_activity_at')
+                ->orderByDesc('id')
+                ->limit(3)
+                ->get();
+
+            foreach ($phoneCandidates as $candidate) {
+                // Update MAC/IP if they've changed
+                if ($clientMac !== null && $candidate->mac_address !== $clientMac) {
+                    $candidate->update(['mac_address' => $clientMac]);
+                }
+                if ($clientIp !== null && $candidate->ip_address !== $clientIp) {
+                    $candidate->update(['ip_address' => $clientIp]);
+                }
+
+                $verified = $this->resolveVerifiedActiveSession($candidate, allowRouterFallback: false);
+                if ($verified) {
+                    return $verified;
+                }
+            }
+        }
+
+        // Final fallback: check recent sessions from same device (within last 30 minutes)
+        if ($clientMac || $clientIp) {
+            $recentCandidates = UserSession::query()
+                ->where('tenant_id', $tenantId)
+                ->active()
+                ->where('last_activity_at', '>=', now()->subMinutes(30))
+                ->when($clientMac, fn ($q) => $q->where('mac_address', $clientMac))
+                ->when($clientIp, fn ($q) => $q->where('ip_address', $clientIp))
+                ->orderByDesc('last_activity_at')
+                ->orderByDesc('id')
+                ->limit(5)
+                ->get();
+
+            foreach ($recentCandidates as $candidate) {
+                $verified = $this->resolveVerifiedActiveSession($candidate, allowRouterFallback: true);
+                if ($verified) {
+                    // Update phone if not set
+                    if ($phone && !$candidate->phone) {
+                        $candidate->update(['phone' => $phone]);
+                    }
+                    return $verified;
+                }
             }
         }
 
@@ -1041,6 +1238,18 @@ class CaptivePortalController extends Controller
         if (in_array($payment->status, ['completed', 'confirmed'], true)) {
             try {
                 $this->activatePaidAccess($payment, $forceRadiusReauthorization);
+                
+                // Check if activation was successful and redirect to continue browsing
+                $activeSession = $this->resolveConnectedSession(
+                    $payment,
+                    $clientContext['mac'] ?? null,
+                    $clientContext['ip'] ?? null
+                );
+                
+                if ($activeSession) {
+                    $continueBrowsingUrl = $this->resolveContinueBrowsingUrl($payment, $request);
+                    return redirect($continueBrowsingUrl);
+                }
                 
             } catch (\Exception $e) {
                 Log::error('MikroTik activation failed', [
@@ -2673,7 +2882,10 @@ class CaptivePortalController extends Controller
     {
         $macInput = '';
         foreach ([
+            // RouterOS hotspot parameters (priority order)
             (string) $request->input('mac', ''),
+            (string) $request->server('HTTP_X_FORWARDED_FOR'), // Some proxies pass MAC
+            (string) $request->server('HTTP_CLIENT_MAC'),
             (string) $request->input('client-mac', ''),
             (string) $request->input('mac-address', ''),
             (string) $request->input('mac_address', ''),
@@ -3668,13 +3880,7 @@ class CaptivePortalController extends Controller
             return null;
         }
 
-        if (
-            $session->last_synced_at instanceof Carbon
-            && $session->last_synced_at->gte(now()->subSeconds(self::ACTIVE_SESSION_TRUST_WINDOW_SECONDS))
-        ) {
-            return $session;
-        }
-
+        // In pure RADIUS mode, always sync with RADIUS accounting as authoritative source
         if ((bool) config('radius.enabled', false)) {
             try {
                 $record = app(RadiusAccountingService::class)->syncActiveSession($session);
@@ -3685,6 +3891,7 @@ class CaptivePortalController extends Controller
                         $this->markPaymentActivatedFromRadius($payment, $session);
                     }
 
+                    // In pure RADIUS, if accounting record exists, session is active
                     return $session;
                 }
             } catch (\Throwable $e) {
@@ -3697,7 +3904,8 @@ class CaptivePortalController extends Controller
             }
         }
 
-        if ($allowRouterFallback) {
+        // Only use RouterOS fallback if not in pure RADIUS mode
+        if ($allowRouterFallback && !(bool) config('radius.pure_radius', false)) {
             try {
                 if (app(MikroTikService::class)->syncSessionUsage($session)) {
                     return $session->fresh() ?? $session;
@@ -3709,6 +3917,16 @@ class CaptivePortalController extends Controller
                     'username' => $session->username,
                     'error' => $e->getMessage(),
                 ]);
+            }
+        }
+
+        // In pure RADIUS mode, trust recent sync without RouterOS dependency
+        if ((bool) config('radius.pure_radius', false)) {
+            if (
+                $session->last_synced_at instanceof Carbon
+                && $session->last_synced_at->gte(now()->subSeconds(self::ACTIVE_SESSION_TRUST_WINDOW_SECONDS))
+            ) {
+                return $session;
             }
         }
 

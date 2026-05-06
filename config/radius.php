@@ -24,6 +24,9 @@ return [
     'disconnect_timeout' => max(1, (int) env('RADIUS_DISCONNECT_TIMEOUT', 5)),
     'disconnect_secret' => env('RADIUS_DISCONNECT_SECRET', env('RADIUS_SHARED_SECRET', '')),
     'disconnect_binary' => env('RADIUS_DISCONNECT_BINARY', 'radclient'),
+    'disconnect_fallback_to_api' => env('RADIUS_DISCONNECT_FALLBACK_TO_API', true),
+    'disconnect_source_ip' => env('RADIUS_DISCONNECT_SOURCE_IP', ''),
+    'disconnect_retry_count' => max(1, (int) env('RADIUS_DISCONNECT_RETRY_COUNT', 2)),
 
     // FreeRADIUS SQL connection name from config/database.php
     'db_connection' => env('RADIUS_DB_CONNECTION', 'radius'),

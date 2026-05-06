@@ -265,19 +265,6 @@
                         @endforeach
 
                         <div class="cp-field">
-                            <label for="cpCustomerName">Your Name</label>
-                            <input
-                                id="cpCustomerName"
-                                type="text"
-                                name="customer_name"
-                                placeholder="Evans"
-                                value="{{ old('customer_name', '') }}"
-                                required
-                                maxlength="120"
-                                autocomplete="name">
-                        </div>
-
-                        <div class="cp-field">
                             <label for="cpPhone">Safaricom M-Pesa Number</label>
                             <input
                                 id="cpPhone"
