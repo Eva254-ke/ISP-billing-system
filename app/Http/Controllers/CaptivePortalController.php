@@ -740,11 +740,11 @@ class CaptivePortalController extends Controller
                 $activeRadiusSession = null;
                 
                 if ($clientMac) {
-                    $activeRadiusSession = $radiusAccountingService->findActiveSessionByMac($clientMac, $tenantId);
+                    $activeRadiusSession = $radiusAccountingService->findActiveSessionByMac($clientMac);
                 }
                 
                 if (!$activeRadiusSession && $clientIp) {
-                    $activeRadiusSession = $radiusAccountingService->findActiveSessionByIp($clientIp, $tenantId);
+                    $activeRadiusSession = $radiusAccountingService->findActiveSessionByIp($clientIp);
                 }
                 
                 if ($activeRadiusSession) {

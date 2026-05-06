@@ -30,7 +30,7 @@ class RadiusAccountingService
     /**
      * Find active RADIUS session by MAC address
      */
-    public function findActiveSessionByMac(string $macAddress, int $tenantId): ?array
+    public function findActiveSessionByMac(string $macAddress): ?array
     {
         $normalizedMac = $this->identityResolver->normalizeMacAddress($macAddress);
         if ($normalizedMac === null) {
@@ -48,7 +48,7 @@ class RadiusAccountingService
     /**
      * Find active RADIUS session by IP address
      */
-    public function findActiveSessionByIp(string $ipAddress, int $tenantId): ?array
+    public function findActiveSessionByIp(string $ipAddress): ?array
     {
         $normalizedIp = $this->normalizeIpAddress($ipAddress);
         if ($normalizedIp === null) {
