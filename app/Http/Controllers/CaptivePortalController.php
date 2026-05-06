@@ -87,6 +87,22 @@ class CaptivePortalController extends Controller
             allowPhoneOnlyFallback: false
         );
 
+        // IMMEDIATE REDIRECT: If active session found, redirect immediately
+        if ($activeSession) {
+            Log::channel('captive')->info('Active session found - immediate redirect', [
+                'session_id' => $activeSession->id,
+                'phone' => $activeSession->phone,
+                'mac' => $clientMac,
+                'ip' => $clientIp,
+                'expires_at' => $activeSession->expires_at,
+            ]);
+            
+            $activePayment = $activeSession->payment()->first();
+            $continueBrowsingUrl = $this->resolveContinueBrowsingUrl($activePayment, $request);
+            
+            return redirect($continueBrowsingUrl);
+        }
+
         // Log session detection for debugging
         Log::channel('captive')->info('Session detection attempt', [
             'tenant_id' => $tenant->id,
@@ -106,30 +122,48 @@ class CaptivePortalController extends Controller
 
         // If active session found, automatically redirect to continue browsing
         if ($activeSession) {
-            $activePayment = $activeSession->payment()->first();
-            if ($activePayment) {
-                session([
-                    'captive_tenant_id' => $tenant->id,
-                    'captive_payment_id' => $activePayment->id,
-                ]);
+            // Set session data immediately
+            session([
+                'captive_tenant_id' => $tenant->id,
+                'captive_payment_id' => $activeSession->payment_id ?? null,
+            ]);
 
-                if (!empty($activeSession->phone)) {
-                    session(['captive_phone' => (string) $activeSession->phone]);
-                }
+            if (!empty($activeSession->phone)) {
+                session(['captive_phone' => (string) $activeSession->phone]);
+            }
 
-                // Verify session is still active and redirect to continue browsing
-                $verifiedSession = $this->resolveVerifiedActiveSession($activeSession, $activePayment);
-                if ($verifiedSession) {
+            // Verify session is still active and redirect immediately
+            $verifiedSession = $this->resolveVerifiedActiveSession($activeSession);
+            if ($verifiedSession) {
+                $activePayment = $verifiedSession->payment()->first();
+                if ($activePayment) {
                     $continueBrowsingUrl = $this->resolveContinueBrowsingUrl($activePayment, $request);
+                    
+                    Log::channel('captive')->info('Active session auto-redirected', [
+                        'session_id' => $activeSession->id,
+                        'phone' => $activeSession->phone,
+                        'redirect_url' => $continueBrowsingUrl,
+                    ]);
+                    
                     return redirect($continueBrowsingUrl);
                 }
                 
-                // If session verification fails, show status page
-                return redirect()->route('wifi.status', $this->buildStatusRouteParameters(
-                    phone: (string) ($activeSession->phone ?? $phone),
-                    payment: $activePayment,
-                    tenantId: (int) $tenant->id
-                ))->with('message', 'We found your session. Checking connection status.');
+                // Even without payment, redirect to continue browsing
+                $continueBrowsingUrl = $this->resolveContinueBrowsingUrl(null, $request);
+                return redirect($continueBrowsingUrl);
+            }
+            
+            // If verification fails but session exists, still try to redirect
+            Log::channel('captive')->warning('Session verification failed, attempting redirect anyway', [
+                'session_id' => $activeSession->id,
+                'status' => $activeSession->status,
+                'expires_at' => $activeSession->expires_at,
+            ]);
+            
+            $activePayment = $activeSession->payment()->first();
+            if ($activePayment) {
+                $continueBrowsingUrl = $this->resolveContinueBrowsingUrl($activePayment, $request);
+                return redirect($continueBrowsingUrl);
             }
         }
 
