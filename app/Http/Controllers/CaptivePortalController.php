@@ -1863,6 +1863,11 @@ class CaptivePortalController extends Controller
                 continue;
             }
 
+            $provisionedExpiresAt = $this->parseFlexibleDateTime((string) ($radiusMetadata['expires_at'] ?? ''));
+            if ($provisionedExpiresAt instanceof Carbon && $provisionedExpiresAt->isPast()) {
+                continue;
+            }
+
             $provisionedUsername = trim((string) ($radiusMetadata['username'] ?? ''));
             if ($username === '' || $provisionedUsername === '' || $provisionedUsername === $username) {
                 return true;
@@ -4210,6 +4215,8 @@ class CaptivePortalController extends Controller
 
         $sessionCandidates = UserSession::query()
             ->where('payment_id', $payment->id)
+            ->whereIn('status', ['active', 'idle'])
+            ->notExpired()
             ->orderByDesc('last_activity_at')
             ->orderByDesc('id')
             ->get();
