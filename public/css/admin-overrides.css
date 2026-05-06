@@ -1,19 +1,17 @@
-/* Gmail-inspired admin shell overrides */
+/* Production-ready admin shell overrides */
 
 :root {
-    --header-height: 72px;
-    --sidebar-width: 280px;
-    --content-gap: 1.5rem;
-    --shell-bg: #f6f8fc;
-    --shell-card: #ffffff;
-    --shell-border: #e3e8f0;
-    --shell-text: #202124;
-    --shell-muted: #5f6368;
-    --shell-muted-soft: #9aa0a6;
-    --shell-hover: #eef2f7;
-    --shell-active: #d3e3fd;
-    --shell-active-text: #0b57d0;
-    --shell-shadow: 0 12px 30px rgba(30, 41, 59, 0.08);
+    --header-height: 64px;
+    --sidebar-width: 260px;
+    --content-gap: 1.25rem;
+    --shell-bg: #f1f5f9;
+    --shell-panel: #1e293b;
+    --shell-panel-deep: #172133;
+    --shell-panel-hover: rgba(255, 255, 255, 0.08);
+    --shell-panel-border: rgba(148, 163, 184, 0.18);
+    --shell-panel-text: rgba(255, 255, 255, 0.84);
+    --shell-panel-text-soft: rgba(255, 255, 255, 0.72);
+    --shell-shadow: 0 12px 30px rgba(15, 23, 42, 0.16);
 }
 
 html,
@@ -24,7 +22,7 @@ body {
 body {
     --shell-sidebar-width: var(--sidebar-width);
     background: var(--shell-bg);
-    color: var(--shell-text);
+    color: #0f172a;
     overflow: hidden;
 }
 
@@ -41,18 +39,24 @@ body.sidebar-collapse {
 }
 
 .main-header {
-    left: 0;
+    left: var(--shell-sidebar-width);
     right: 0;
     min-height: var(--header-height);
     height: var(--header-height);
-    padding: 0 1rem;
-    display: grid;
-    grid-template-columns: auto minmax(260px, 1fr) auto;
+    padding: 0 1.25rem;
+    display: flex;
     align-items: center;
+    justify-content: space-between;
     gap: 1rem;
-    background: var(--shell-bg);
-    border-bottom: none;
-    box-shadow: none;
+    background: rgba(255, 255, 255, 0.96);
+    border-bottom: 1px solid rgba(226, 232, 240, 0.96);
+    box-shadow: 0 12px 30px rgba(15, 23, 42, 0.06);
+    backdrop-filter: blur(14px);
+}
+
+body.sidebar-collapsed .main-header,
+body.sidebar-collapse .main-header {
+    left: 0;
 }
 
 .shell-header-start,
@@ -1185,4 +1189,85 @@ body.sidebar-collapse .content-wrapper {
         padding: 0.1rem 0 0.65rem;
         margin: 0 0 1rem;
     }
+}
+
+/* PRODUCTION FIXES - Ensure all buttons are visible */
+.btn {
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+    opacity: 1 !important;
+    visibility: visible !important;
+    transition: all 0.15s ease-in-out !important;
+    cursor: pointer !important;
+}
+
+.btn:hover {
+    opacity: 0.8 !important;
+    transform: translateY(-1px) !important;
+}
+
+.btn-primary {
+    background: linear-gradient(135deg, #2563eb 0%, #06b6d4 100%) !important;
+    border-color: #2563eb !important;
+    color: #ffffff !important;
+}
+
+.btn-success {
+    background: linear-gradient(135deg, #10b981 0%, #059669 100%) !important;
+    border-color: #10b981 !important;
+    color: #ffffff !important;
+}
+
+.btn-danger {
+    background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%) !important;
+    border-color: #ef4444 !important;
+    color: #ffffff !important;
+}
+
+.btn-warning {
+    background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%) !important;
+    border-color: #f59e0b !important;
+    color: #ffffff !important;
+}
+
+/* Fix modal visibility */
+.modal {
+    opacity: 1 !important;
+    visibility: visible !important;
+}
+
+.modal-content {
+    opacity: 1 !important;
+    visibility: visible !important;
+}
+
+/* Fix dropdown visibility */
+.dropdown-menu {
+    opacity: 1 !important;
+    visibility: visible !important;
+}
+
+/* Fix table action buttons */
+.table .btn-group {
+    opacity: 1 !important;
+    visibility: visible !important;
+}
+
+.table .btn {
+    opacity: 1 !important;
+    visibility: visible !important;
+    min-width: auto !important;
+}
+
+/* Fix refresh buttons */
+.btn-tool {
+    opacity: 1 !important;
+    visibility: visible !important;
+}
+
+/* Fix form buttons */
+.form-actions .btn {
+    opacity: 1 !important;
+    visibility: visible !important;
 }

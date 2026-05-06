@@ -29,13 +29,21 @@
         .card,
         .card-body,
         .input-group-text,
-        .btn,
         .form-control,
         .alert {
             box-shadow: none !important;
             backdrop-filter: none !important;
-            transition: none !important;
             background-image: none !important;
+        }
+        
+        /* Allow buttons to have transitions for better UX */
+        .btn {
+            transition: all 0.15s ease-in-out !important;
+        }
+        
+        /* Allow form inputs to have focus transitions */
+        .form-control:focus {
+            transition: border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out !important;
         }
 
         .card {

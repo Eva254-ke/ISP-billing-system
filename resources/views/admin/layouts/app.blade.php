@@ -48,10 +48,32 @@
         body.cb-admin-shell *::after {
             box-shadow: none !important;
             backdrop-filter: none !important;
-            transition: none !important;
-            animation: none !important;
             text-shadow: none !important;
             scroll-behavior: auto !important;
+        }
+        
+        /* Allow buttons and interactive elements to have transitions */
+        body.cb-admin-shell .btn,
+        body.cb-admin-shell .btn *,
+        body.cb-admin-shell .dropdown-menu,
+        body.cb-admin-shell .modal,
+        body.cb-admin-shell .modal *,
+        body.cb-admin-shell .nav-link,
+        body.cb-admin-shell .nav-link * {
+            transition: all 0.15s ease-in-out !important;
+        }
+        
+        /* Allow cards to have transitions */
+        body.cb-admin-shell .card,
+        body.cb-admin-shell .small-box {
+            transition: transform 0.15s ease-in-out !important;
+        }
+        
+        /* Allow animations for loading states */
+        body.cb-admin-shell .fa-spin,
+        body.cb-admin-shell .spinner,
+        body.cb-admin-shell .loading {
+            animation: inherit !important;
         }
 
         body.cb-admin-shell h1,
