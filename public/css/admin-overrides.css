@@ -1271,3 +1271,31 @@ body.sidebar-collapse .content-wrapper {
     opacity: 1 !important;
     visibility: visible !important;
 }
+
+/* CRITICAL: Force all interactive elements visible */
+.btn, .btn *, .btn-group, .btn-group *, .dropdown-menu, .dropdown-menu *, .modal, .modal *, .nav-link, .nav-link * {
+    opacity: 1 !important;
+    visibility: visible !important;
+    display: inline-flex !important;
+    pointer-events: auto !important;
+}
+
+/* Force table action buttons visible */
+.table .action-col, .table .action-col *, .table .btn-group, .table .btn-group * {
+    opacity: 1 !important;
+    visibility: visible !important;
+    display: block !important;
+}
+
+/* Fix any potential z-index issues */
+.btn, .btn-group, .dropdown-menu, .modal {
+    z-index: 1000 !important;
+    position: relative !important;
+}
+
+/* Override any hidden states */
+.btn[style*="display: none"], .btn[style*="opacity: 0"], .btn.hidden {
+    display: inline-flex !important;
+    opacity: 1 !important;
+    visibility: visible !important;
+}
