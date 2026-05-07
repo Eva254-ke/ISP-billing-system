@@ -672,7 +672,7 @@
             <div class="shell-header-end">
                 <ul class="navbar-nav align-items-center navbar-user-menu">
                     <li class="nav-item dropdown">
-                        <a class="nav-link dropdown-toggle js-user-dropdown-toggle" id="userMenuDropdown" data-bs-toggle="dropdown" href="#" role="button" aria-haspopup="true" aria-expanded="false">
+                        <a class="nav-link dropdown-toggle js-user-dropdown-toggle" id="userMenuDropdown" data-bs-toggle="dropdown" data-toggle="dropdown" href="#" role="button" aria-haspopup="true" aria-expanded="false">
                             <i class="far fa-user-circle me-1"></i>
                             <span class="d-none d-sm-inline">{{ $displayName }}</span>
                         </a>
