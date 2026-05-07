@@ -954,7 +954,7 @@ Thank you for choosing CloudBridge Networks.</textarea>
 
     <div class="card-footer">
         <button class="btn btn-success" onclick="saveAllSettings()">
-            <i class="fas fa-save me-1"></i>Save All Changes
+            <i class="fas fa-save me-1"></i>Save Changes
         </button>
         <button class="btn btn-outline-secondary ms-2" onclick="resetSettings()">
             <i class="fas fa-undo me-1"></i>Reset to Defaults

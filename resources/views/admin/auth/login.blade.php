@@ -56,6 +56,44 @@
         .btn-close {
             border-radius: 4px !important;
         }
+
+        body.login-page {
+            background: #eef2ff !important;
+            min-height: 100vh;
+        }
+
+        .login-box {
+            max-width: 420px;
+            margin: 3.5rem auto;
+        }
+
+        .login-card-body {
+            background: #ffffff !important;
+            border: 1px solid rgba(148, 163, 184, 0.25);
+            border-radius: 12px !important;
+        }
+
+        .login-card-body .btn-primary {
+            background: linear-gradient(135deg, #1d4ed8 0%, #2563eb 100%) !important;
+            border-color: #1d4ed8 !important;
+            box-shadow: 0 14px 36px rgba(37, 99, 235, 0.18) !important;
+            color: #ffffff !important;
+        }
+
+        body.login-page {
+            background: linear-gradient(180deg, #eef2ff 0%, #dbeafe 100%) !important;
+        }
+
+        .login-logo a {
+            color: #2563eb;
+            font-weight: 700;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #2563eb 0%, #06b6d4 100%) !important;
+            border: none !important;
+            color: #ffffff !important;
+        }
     </style>
 </head>
 <body class="hold-transition login-page">
