@@ -801,15 +801,25 @@ class MikroTikService
      */
     private function getClient(Router $router, bool $forceNew = false): ?Client
     {
-        if (!$forceNew) {
-            $cacheKey = "mikrotik_client:{$router->id}";
-            
-            return Cache::remember($cacheKey, self::CONNECTION_CACHE_TTL, function () use ($router) {
-                return $this->createClient($router);
-            });
+        if ($forceNew) {
+            return $this->createClient($router);
         }
-        
-        return $this->createClient($router);
+
+        $cacheKey = "mikrotik_client:{$router->id}";
+        $cachedClient = Cache::get($cacheKey);
+
+        if ($cachedClient instanceof Client) {
+            return $cachedClient;
+        }
+
+        $client = $this->createClient($router);
+        if ($client instanceof Client) {
+            Cache::put($cacheKey, $client, self::CONNECTION_CACHE_TTL);
+        } else {
+            Cache::forget($cacheKey);
+        }
+
+        return $client;
     }
 
     private function getRequiredClient(Router $router, bool $forceNew = false): Client
