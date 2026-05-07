@@ -118,6 +118,7 @@ jobs:
               if [ -n "${PREVIOUS_RELEASE}" ] && [ -d "${PREVIOUS_RELEASE}" ]; then
                 echo "Rolling back to: ${PREVIOUS_RELEASE}"
                 ln -sfn "${PREVIOUS_RELEASE}" "$CURRENT"
+                rm -rf "$APP_ROOT/public"
                 ln -sfn "${PREVIOUS_RELEASE}/public" "$APP_ROOT/public"
                 if systemctl cat cloudbridge-queue >/dev/null 2>&1; then
                   systemctl reload cloudbridge-queue || systemctl restart cloudbridge-queue
@@ -180,6 +181,7 @@ jobs:
             php artisan event:cache
 
             ln -sfn "$RELEASE" "$CURRENT"
+            rm -rf "$APP_ROOT/public"
             ln -sfn "$RELEASE/public" "$APP_ROOT/public"
 
             if systemctl cat cloudbridge-queue >/dev/null 2>&1; then
