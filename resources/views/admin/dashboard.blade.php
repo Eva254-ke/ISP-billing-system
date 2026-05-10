@@ -141,6 +141,7 @@
     $maxRevenue = (float) max(1, (float) $weeklyRevenueCollection->max('amount'));
     $routerSegments = collect($routerStatusBreakdown ?? [])->values();
     $routerTotal = (int) $routerSegments->sum('count');
+    $avgCpu = $stats['avg_cpu'] ?? null;
     $donutRadius = 42;
     $donutCircumference = 2 * pi() * $donutRadius;
 @endphp
@@ -303,8 +304,8 @@
                         </svg>
                         <div class="dashboard-donut__center">
                             <div>
-                                <strong>{{ number_format($routerTotal) }}</strong>
-                                <span>Routers tracked</span>
+                                <strong>{{ $avgCpu === null ? 'N/A' : number_format((int) $avgCpu) . '%' }}</strong>
+                                <span>CPU usage</span>
                             </div>
                         </div>
                     </div>

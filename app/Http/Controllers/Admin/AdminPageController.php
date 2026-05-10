@@ -77,6 +77,10 @@ class AdminPageController extends Controller
             $routerStatusCounts[$status]++;
         }
 
+        $routerCpuValues = $routerRows
+            ->pluck('cpu_usage')
+            ->filter(static fn ($value): bool => $value !== null && $value !== '');
+
         $stats = [
             'revenue_today' => (float) (clone $payments)
                 ->whereDate('created_at', now()->toDateString())
@@ -86,6 +90,7 @@ class AdminPageController extends Controller
             'packages_total' => (clone $packages)->count(),
             'routers_online' => $routerStatusCounts['online'],
             'routers_total' => $routerRows->count(),
+            'avg_cpu' => $routerCpuValues->isNotEmpty() ? (int) round((float) $routerCpuValues->avg()) : null,
             'revenue_week' => (float) (clone $payments)
                 ->where('created_at', '>=', now()->startOfWeek())
                 ->whereIn('status', $successStatuses)
