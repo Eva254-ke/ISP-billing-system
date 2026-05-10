@@ -225,6 +225,11 @@ class CaptivePortalController extends Controller
                             $continueBrowsingUrl = $this->resolveContinueBrowsingUrl($resumablePayment, $request);
                             return redirect($continueBrowsingUrl);
                         }
+
+                        $radiusLoginUrl = $this->buildDirectRadiusAutoLoginUrl($resumablePayment);
+                        if ($radiusLoginUrl !== null) {
+                            return redirect()->away($radiusLoginUrl);
+                        }
                     } catch (\Throwable $e) {
                         Log::warning('Auto-activation failed for recent payment in reconnect, falling back to status', [
                             'payment_id' => $resumablePayment->id,
@@ -279,6 +284,11 @@ class CaptivePortalController extends Controller
                         if ($activeSession) {
                             $continueBrowsingUrl = $this->resolveContinueBrowsingUrl($resumablePayment, $request);
                             return redirect($continueBrowsingUrl);
+                        }
+
+                        $radiusLoginUrl = $this->buildDirectRadiusAutoLoginUrl($resumablePayment);
+                        if ($radiusLoginUrl !== null) {
+                            return redirect()->away($radiusLoginUrl);
                         }
                     } catch (\Throwable $e) {
                         Log::warning('Auto-activation failed for recent payment, falling back to status', [
@@ -1315,6 +1325,11 @@ class CaptivePortalController extends Controller
         $radiusPendingReauth = (bool) $radiusPortalState['pending_reauth'];
         $radiusAutoLogin = $radiusPortalState['auto_login'];
         $radiusFallback = $radiusPortalState['fallback'];
+        $radiusLoginUrl = $this->buildRadiusAutoLoginRedirectUrl($radiusAutoLogin);
+        if (!$activeSession && $radiusLoginUrl !== null) {
+            return redirect()->away($radiusLoginUrl);
+        }
+
         $continueBrowsingUrl = $this->resolveContinueBrowsingUrl($payment, $request);
         $continueBrowsingAutoLogin = $this->buildContinueBrowsingAutoLoginPayload(
             payment: $payment,
@@ -3185,6 +3200,67 @@ class CaptivePortalController extends Controller
             'chap_id' => trim((string) ($hotspotContext['chap_id'] ?? '')),
             'chap_challenge' => trim((string) ($hotspotContext['chap_challenge'] ?? '')),
         ], static fn ($value) => is_string($value) && $value !== '');
+    }
+
+    private function buildDirectRadiusAutoLoginUrl(Payment $payment, ?UserSession $session = null): ?string
+    {
+        if (!(bool) config('radius.enabled', false)) {
+            return null;
+        }
+
+        $identity = $this->resolveRadiusIdentityForPayment($payment);
+        if (!$this->hasProvisionedRadiusAccess($payment, $session, $identity)) {
+            return null;
+        }
+
+        return $this->buildRadiusAutoLoginRedirectUrl(
+            $this->buildHotspotAutoLoginPayload($payment, $identity)
+        );
+    }
+
+    /**
+     * @param  array<string, string>|null  $payload
+     */
+    private function buildRadiusAutoLoginRedirectUrl(?array $payload): ?string
+    {
+        if (!$payload || empty($payload['action']) || !empty($payload['chap_id']) || !empty($payload['chap_challenge'])) {
+            return null;
+        }
+
+        $action = trim((string) $payload['action']);
+        if ($action === '' || !filter_var($action, FILTER_VALIDATE_URL)) {
+            return null;
+        }
+
+        $scheme = strtolower((string) parse_url($action, PHP_URL_SCHEME));
+        if (!in_array($scheme, ['http', 'https'], true)) {
+            return null;
+        }
+
+        $parts = parse_url($action);
+        if (!is_array($parts) || empty($parts['host'])) {
+            return null;
+        }
+
+        $query = [];
+        if (!empty($parts['query'])) {
+            parse_str((string) $parts['query'], $query);
+        }
+
+        foreach (['username', 'password', 'dst', 'popup'] as $key) {
+            if (!empty($payload[$key])) {
+                $query[$key] = (string) $payload[$key];
+            }
+        }
+
+        $port = isset($parts['port']) ? ':' . $parts['port'] : '';
+        $path = $parts['path'] ?? '';
+        $fragment = isset($parts['fragment']) ? '#' . $parts['fragment'] : '';
+        $queryString = http_build_query($query);
+
+        return $scheme . '://' . $parts['host'] . $port . $path
+            . ($queryString !== '' ? '?' . $queryString : '')
+            . $fragment;
     }
 
     private function buildContinueBrowsingAutoLoginPayload(

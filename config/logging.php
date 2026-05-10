@@ -146,6 +146,21 @@ return [
         // ──────────────────────────────────────────────────────────────────
         // 📡 MIKROTIK LOGS (Router API calls, session management)
         // ──────────────────────────────────────────────────────────────────
+        'captive' => [
+            'driver' => 'stack',
+            'channels' => ['captive_file'],
+            'ignore_exceptions' => true,
+        ],
+
+        'captive_file' => [
+            'driver' => 'daily',
+            'path' => storage_path('logs/captive.log'),
+            'level' => env('LOG_CAPTIVE_LEVEL', 'info'),
+            'days' => env('LOG_CAPTIVE_DAYS', 30),
+            'replace_placeholders' => true,
+            'processors' => [PsrLogMessageProcessor::class, UidProcessor::class],
+        ],
+
         'mikrotik' => [
             'driver' => 'stack',
             'channels' => ['mikrotik_file'],

@@ -4,6 +4,7 @@ namespace App\Console\Commands;
 
 use App\Models\Router;
 use App\Services\MikroTik\MikroTikService;
+use App\Services\Radius\RadiusAccountingService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Log;
 
@@ -20,7 +21,8 @@ class RouterHealthCheck extends Command
     protected $description = 'Check health status of all routers (online/offline, CPU, memory)';
 
     public function __construct(
-        protected MikroTikService $mikrotikService
+        protected MikroTikService $mikrotikService,
+        protected RadiusAccountingService $radiusAccountingService
     ) {
         parent::__construct();
     }
@@ -67,7 +69,7 @@ class RouterHealthCheck extends Command
                     $memory = (int) ($systemInfo['memory_usage'] ?? 0);
 
                     if ($cpu > 80 || $memory > 80) {
-                        $router->update(['status' => Router::STATUS_WARNING]);
+                        $router->markWarning('High resource usage');
                         $warning++;
 
                         Log::channel('mikrotik')->warning('Router resource warning', [
@@ -78,7 +80,7 @@ class RouterHealthCheck extends Command
 
                         $this->warn("   WARNING {$router->name} (CPU: {$cpu}%, RAM: {$memory}%)");
                     } else {
-                        $router->update(['status' => Router::STATUS_ONLINE]);
+                        $router->markOnline();
                         $online++;
 
                         $this->info("   OK {$router->name} (CPU: {$cpu}%, RAM: {$memory}%)");
@@ -102,7 +104,21 @@ class RouterHealthCheck extends Command
                     continue;
                 }
 
-                $router->update(['status' => Router::STATUS_OFFLINE]);
+                if ($this->hasRecentRadiusActivity($router)) {
+                    $router->markOnline();
+                    $online++;
+
+                    Log::channel('radius')->info('Router marked online from recent RADIUS accounting', [
+                        'router_id' => $router->id,
+                        'router' => $router->name,
+                        'ip' => $router->ip_address,
+                    ]);
+
+                    $this->info("   OK {$router->name} (recent RADIUS accounting)");
+                    continue;
+                }
+
+                $router->markOffline();
                 $offline++;
 
                 Log::channel('mikrotik')->error('Router offline', [
@@ -113,7 +129,7 @@ class RouterHealthCheck extends Command
 
                 $this->error("   OFFLINE {$router->name}");
             } catch (\Exception $e) {
-                $router->update(['status' => Router::STATUS_OFFLINE]);
+                $router->markOffline();
                 $offline++;
 
                 Log::channel('mikrotik')->error('Router health check failed', [
@@ -145,5 +161,28 @@ class RouterHealthCheck extends Command
         }
 
         return Command::SUCCESS;
+    }
+
+    private function hasRecentRadiusActivity(Router $router): bool
+    {
+        if (!(bool) config('radius.enabled', false)) {
+            return false;
+        }
+
+        if (!$router->radius_enabled && !(bool) config('radius.pure_radius', false)) {
+            return false;
+        }
+
+        try {
+            return $this->radiusAccountingService->findRecentRouterActivity($router) !== null;
+        } catch (\Throwable $e) {
+            Log::channel('radius')->warning('Router RADIUS activity lookup failed', [
+                'router_id' => $router->id,
+                'router' => $router->name,
+                'error' => $e->getMessage(),
+            ]);
+
+            return false;
+        }
     }
 }

@@ -2,6 +2,7 @@
 
 namespace App\Services\Radius;
 
+use App\Models\Router;
 use App\Models\UserSession;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -180,6 +181,53 @@ class RadiusAccountingService
     }
 
     /**
+     * @return array<string, mixed>|null
+     */
+    public function findRecentRouterActivity(Router $router, int $withinMinutes = 10): ?array
+    {
+        $connection = (string) config('radius.db_connection', 'radius');
+        $table = (string) config('radius.tables.radacct', 'radacct');
+        $cutoff = now()->subMinutes(max(1, $withinMinutes));
+        $nasIdentifiers = $this->routerNasIdentifiers($router);
+
+        if ($nasIdentifiers === []) {
+            return null;
+        }
+
+        $record = DB::connection($connection)
+            ->table($table)
+            ->where(function ($query) use ($cutoff): void {
+                $query->where('acctupdatetime', '>=', $cutoff)
+                    ->orWhere('acctstarttime', '>=', $cutoff);
+            })
+            ->where(function ($query) use ($nasIdentifiers): void {
+                $query->whereIn('nasipaddress', $nasIdentifiers);
+            })
+            ->orderByDesc('acctupdatetime')
+            ->orderByDesc('acctstarttime')
+            ->first();
+
+        if ($record) {
+            return (array) $record;
+        }
+
+        $usernames = $this->routerSessionUsernames($router);
+        if ($usernames === []) {
+            return null;
+        }
+
+        $record = DB::connection($connection)
+            ->table($table)
+            ->whereNull('acctstoptime')
+            ->whereIn('username', $usernames)
+            ->orderByDesc('acctupdatetime')
+            ->orderByDesc('acctstarttime')
+            ->first();
+
+        return $record ? (array) $record : null;
+    }
+
+    /**
      * @param  array<string>  $usernames
      * @param  array<string>  $acctSessionIds
      * @return array<string, mixed>|null
@@ -353,6 +401,50 @@ class RadiusAccountingService
         }
 
         return array_keys($normalized);
+    }
+
+    /**
+     * @return array<string>
+     */
+    private function routerNasIdentifiers(Router $router): array
+    {
+        $metadata = is_array($router->metadata) ? $router->metadata : [];
+        $radiusMetadata = is_array($metadata['radius'] ?? null) ? $metadata['radius'] : [];
+
+        return $this->uniqueNonEmptyStrings([
+            $this->normalizeIpAddress($router->ip_address),
+            $this->normalizeIpAddress($router->radius_nas_id),
+            $this->normalizeIpAddress($metadata['nas_ip_address'] ?? null),
+            $this->normalizeIpAddress($metadata['radius_nas_ip'] ?? null),
+            $this->normalizeIpAddress($radiusMetadata['nas_ip_address'] ?? null),
+        ]);
+    }
+
+    /**
+     * @return array<string>
+     */
+    private function routerSessionUsernames(Router $router): array
+    {
+        $sessions = UserSession::query()
+            ->where('router_id', $router->id)
+            ->whereIn('status', ['active', 'idle'])
+            ->orderByDesc('last_activity_at')
+            ->orderByDesc('id')
+            ->limit(50)
+            ->get(['username', 'metadata']);
+
+        $usernames = [];
+
+        foreach ($sessions as $session) {
+            $metadata = is_array($session->metadata) ? $session->metadata : [];
+            $radiusMetadata = is_array($metadata['radius'] ?? null) ? $metadata['radius'] : [];
+
+            $usernames[] = $session->username;
+            $usernames[] = $radiusMetadata['active_username'] ?? null;
+            $usernames[] = $radiusMetadata['username'] ?? null;
+        }
+
+        return $this->uniqueNonEmptyStrings($usernames);
     }
 
     /**

@@ -11,6 +11,7 @@ use App\Models\UserSession;
 use App\Models\Tenant;
 use App\Services\MikroTik\MikroTikService;
 use App\Services\Mpesa\DarajaService;
+use App\Services\Radius\RadiusAccountingService;
 use App\Services\Admin\AdminSettingsService;
 use App\Services\Admin\TenantBackupService;
 use Illuminate\Support\Facades\DB;
@@ -513,7 +514,7 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
         })->name('settings.mikrotik.test');
         
         // Router Status & Testing
-        Route::get('/routers/status', function (Request $request, MikroTikService $mikroTikService) use ($resolveTenant) {
+        Route::get('/routers/status', function (Request $request, MikroTikService $mikroTikService, RadiusAccountingService $radiusAccountingService) use ($resolveTenant) {
             $tenant = $resolveTenant();
             $live = $request->boolean('live', true);
 
@@ -551,6 +552,22 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
                             if ((int) $cpu >= Router::HEALTHY_CPU_THRESHOLD || (int) $memory >= Router::HEALTHY_MEMORY_THRESHOLD) {
                                 $router->markWarning('High resource usage');
                                 $status = Router::STATUS_WARNING;
+                            }
+                        } elseif ((bool) config('radius.enabled', false)
+                            && ($router->radius_enabled || (bool) config('radius.pure_radius', false))
+                        ) {
+                            try {
+                                if ($radiusAccountingService->findRecentRouterActivity($router) !== null) {
+                                    $router->markOnline();
+                                    $router->refresh();
+                                    $status = Router::STATUS_ONLINE;
+                                }
+                            } catch (\Throwable $e) {
+                                \Log::channel('radius')->warning('Admin router status RADIUS activity lookup failed', [
+                                    'router_id' => $router->id,
+                                    'router' => $router->name,
+                                    'error' => $e->getMessage(),
+                                ]);
                             }
                         }
                     }

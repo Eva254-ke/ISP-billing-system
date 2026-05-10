@@ -962,7 +962,6 @@ class Router extends Model
     {
         $this->persistRouterState([
             'status' => self::STATUS_OFFLINE,
-            'last_seen_at' => now(),
         ]);
     }
 
