@@ -490,7 +490,14 @@ class MikroTikService
                 // Router is reachable but MikroTik API auth/query failed.
                 $router->markWarning('Router reachable but API login failed');
             } else {
-                $router->markOffline();
+                // If RADIUS accounting shows recent user activity, the router is actually serving traffic
+                // even if the API health check failed (common with NAT/firewall between server and router API).
+                $hasRecentRadiusActivity = $this->hasRecentRadiusActivity($router);
+                if ($hasRecentRadiusActivity) {
+                    $router->markOnline();
+                } else {
+                    $router->markOffline();
+                }
             }
 
             $this->recordConnectivityMetadata($router, [
@@ -1110,7 +1117,36 @@ class MikroTikService
             'operation' => $operation,
             'error' => $lastException?->getMessage(),
         ]);
-        
+
         return null;
+    }
+
+    /**
+     * Check RADIUS accounting for recent user activity on this router.
+     * Used as a fallback so routers serving real traffic are not marked offline
+     * just because the MikroTik API health check failed (NAT/firewall mismatch).
+     */
+    private function hasRecentRadiusActivity(Router $router, int $withinMinutes = 10): bool
+    {
+        if (!(bool) config('radius.enabled', false)) {
+            return false;
+        }
+
+        if (!$router->radius_enabled && !(bool) config('radius.pure_radius', false)) {
+            return false;
+        }
+
+        try {
+            $radiusAccountingService = app(\App\Services\Radius\RadiusAccountingService::class);
+            return $radiusAccountingService->findRecentRouterActivity($router, $withinMinutes) !== null;
+        } catch (\Throwable $e) {
+            Log::channel('radius')->warning('Router RADIUS activity lookup failed during pingRouter', [
+                'router_id' => $router->id,
+                'router' => $router->name,
+                'error' => $e->getMessage(),
+            ]);
+
+            return false;
+        }
     }
 }

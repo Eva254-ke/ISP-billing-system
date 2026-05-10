@@ -283,11 +283,6 @@
                 </div>
             </article>
 
-            <article class="cp-card cp-card-compact">
-                <h3 class="cp-section-subtitle">Already paid?</h3>
-                <p class="cp-card-subtitle">Use your M-Pesa code or a voucher on the reconnect screen.</p>
-                <a href="{{ route('wifi.reconnect.form', $reconnectParams) }}" class="cp-btn cp-btn-soft cp-btn-block">Open Reconnect Screen</a>
-            </article>
         @endif
 
         <footer class="cp-footer">

@@ -60,11 +60,9 @@ class CaptivePortalController extends Controller
         $hotspotContext = $this->captureHotspotContext($request);
         $clientMac = $clientContext['mac'];
         $clientIp = $clientContext['ip'];
-        $mode = strtolower(trim((string) $request->query('mode', '')));
-        $showReconnectScreen = $mode === 'reconnect';
 
         if (!$tenant) {
-            return response()->view($showReconnectScreen ? 'captive.reconnect' : 'captive.packages', [
+            return response()->view('captive.packages', [
                 'packages' => collect(),
                 'activeSession' => null,
                 'phone' => $phone,
@@ -167,89 +165,6 @@ class CaptivePortalController extends Controller
             }
         }
 
-        if ($showReconnectScreen) {
-            if ($activeSession) {
-                $activePayment = $activeSession->payment()->first();
-                if ($activePayment) {
-                    session([
-                        'captive_tenant_id' => $tenant->id,
-                        'captive_payment_id' => $activePayment->id,
-                    ]);
-
-                    if (!empty($activeSession->phone)) {
-                        session(['captive_phone' => (string) $activeSession->phone]);
-                    }
-
-                    return redirect()->route('wifi.status', $this->buildStatusRouteParameters(
-                        phone: (string) ($activeSession->phone ?? $phone),
-                        payment: $activePayment,
-                        tenantId: (int) $tenant->id
-                    ))->with('message', 'We found your paid session. Reconnecting now.');
-                }
-            }
-
-            $resumablePayment = $this->resolvePackagesResumablePayment(
-                tenantId: (int) $tenant->id,
-                phone: $phone,
-                clientMac: $clientMac,
-                clientIp: $clientIp,
-                allowPhoneOnlyFallback: false
-            );
-
-            if ($resumablePayment) {
-                $resumePhone = $this->normalizePhoneForStorage((string) $resumablePayment->phone)
-                    ?? trim((string) $resumablePayment->phone);
-
-                session([
-                    'captive_tenant_id' => $tenant->id,
-                    'captive_payment_id' => $resumablePayment->id,
-                ]);
-
-                if ($resumePhone !== '') {
-                    session(['captive_phone' => $resumePhone]);
-                }
-
-                // Automatically activate access for recent payments in reconnect flow
-                if (in_array($resumablePayment->status, ['completed', 'confirmed'], true)) {
-                    try {
-                        $this->activatePaidAccess($resumablePayment);
-                        
-                        // Check if activation was successful
-                        $activeSession = $this->resolveConnectedSession(
-                            $resumablePayment,
-                            $clientMac,
-                            $clientIp
-                        );
-                        
-                        if ($activeSession) {
-                            $continueBrowsingUrl = $this->resolveContinueBrowsingUrl($resumablePayment, $request);
-                            return redirect($continueBrowsingUrl);
-                        }
-
-                        $radiusLoginUrl = $this->buildDirectRadiusAutoLoginUrl($resumablePayment);
-                        if ($radiusLoginUrl !== null) {
-                            return redirect()->away($radiusLoginUrl);
-                        }
-                    } catch (\Throwable $e) {
-                        Log::warning('Auto-activation failed for recent payment in reconnect, falling back to status', [
-                            'payment_id' => $resumablePayment->id,
-                            'error' => $e->getMessage(),
-                        ]);
-                    }
-                }
-
-                return redirect()->route('wifi.status', $this->buildStatusRouteParameters(
-                    phone: $resumePhone !== '' ? $resumePhone : (string) $resumablePayment->phone,
-                    payment: $resumablePayment,
-                    tenantId: (int) $tenant->id
-                ))->with('message', 'We found your recent payment. Reconnecting now.');
-            }
-
-            $voucherPrefix = $this->resolveReconnectVoucherPrefix($tenant);
-
-            return view('captive.reconnect', compact('phone', 'tenant', 'voucherPrefix', 'clientMac', 'clientIp', 'hotspotContext'));
-        }
-
         if (!$activeSession) {
             $resumablePayment = $this->resolvePackagesResumablePayment(
                 tenantId: (int) $tenant->id,
@@ -273,14 +188,13 @@ class CaptivePortalController extends Controller
                 if (in_array($resumablePayment->status, ['completed', 'confirmed'], true)) {
                     try {
                         $this->activatePaidAccess($resumablePayment);
-                        
-                        // Check if activation was successful
+
                         $activeSession = $this->resolveConnectedSession(
                             $resumablePayment,
                             $clientContext['mac'] ?? null,
                             $clientContext['ip'] ?? null
                         );
-                        
+
                         if ($activeSession) {
                             $continueBrowsingUrl = $this->resolveContinueBrowsingUrl($resumablePayment, $request);
                             return redirect($continueBrowsingUrl);
@@ -291,18 +205,12 @@ class CaptivePortalController extends Controller
                             return redirect()->away($radiusLoginUrl);
                         }
                     } catch (\Throwable $e) {
-                        Log::warning('Auto-activation failed for recent payment, falling back to status', [
+                        Log::warning('Auto-activation failed for recent payment, showing packages', [
                             'payment_id' => $resumablePayment->id,
                             'error' => $e->getMessage(),
                         ]);
                     }
                 }
-
-                return redirect()->route('wifi.status', $this->buildStatusRouteParameters(
-                    phone: $resumePhone !== '' ? $resumePhone : (string) $resumablePayment->phone,
-                    payment: $resumablePayment,
-                    tenantId: (int) $tenant->id
-                ))->with('message', 'We found your recent payment. Continuing connection.');
             }
         }
 
@@ -732,10 +640,6 @@ class CaptivePortalController extends Controller
         }
 
         if ($statusView === 'pending' && in_array(trim((string) ($metadata['daraja_last_status'] ?? '')), ['pending_verification', 'query_pending'], true)) {
-            $statusView = 'verifying';
-        }
-
-        if ($statusView === 'failed' && $this->paymentNeedsVerification($payment)) {
             $statusView = 'verifying';
         }
 
@@ -1321,6 +1225,16 @@ class CaptivePortalController extends Controller
         }
 
         $statusView = $this->deriveStatusView($payment, $activeSession);
+
+        // Never render the dead-end "under review / verifying" page.
+        if ($statusView === 'verifying') {
+            return redirect()->route('wifi.packages', $this->buildPackagesRouteParameters(
+                phone: $phone,
+                payment: $payment,
+                tenantId: (int) $payment->tenant_id
+            ))->with('message', 'Payment is still processing. If you were charged, access will activate automatically. Otherwise, select a package and try again.');
+        }
+
         $radiusPortalState = $this->resolveRadiusPortalState($payment, $statusView, $activeSession);
         $radiusPendingReauth = (bool) $radiusPortalState['pending_reauth'];
         $radiusAutoLogin = $radiusPortalState['auto_login'];

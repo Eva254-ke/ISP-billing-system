@@ -33,7 +33,7 @@
     <meta name="color-scheme" content="light dark">
     <meta name="theme-color" media="(prefers-color-scheme: light)" content="{{ $accentColor }}">
     <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#020617">
-    @if(in_array($statusView, ['pending', 'paid', 'verifying']))
+    @if(in_array($statusView, ['pending', 'paid']))
         <meta http-equiv="refresh" content="10">
     @endif
     <title>Connection Status - {{ $brandTitle }}</title>
@@ -86,7 +86,7 @@
         ], $routeContext), static fn ($value) => $value !== null && $value !== ''));
         $radiusAutoLogin = is_array($radiusAutoLogin ?? null) ? $radiusAutoLogin : null;
         $radiusPendingReauth = (bool) ($radiusPendingReauth ?? false);
-        $shouldAutoPoll = in_array($statusView, ['pending', 'paid', 'verifying'], true);
+        $shouldAutoPoll = in_array($statusView, ['pending', 'paid'], true);
         $packagesParams = array_filter(array_merge([
             'phone' => $displayPhone,
             'tenant_id' => $tenantId > 0 ? $tenantId : null,
@@ -127,7 +127,6 @@
         $statusLabel = match ($statusView) {
             'activated' => 'Connected',
             'paid' => 'Paid',
-            'verifying' => 'Verifying',
             'failed' => 'Failed',
             default => 'Pending',
         };
@@ -236,7 +235,6 @@
 
                 <div class="cp-actions">
                     <a href="{{ $statusRoute }}" class="cp-btn cp-btn-primary">Refresh Status</a>
-                    <a href="{{ route('wifi.reconnect.form', $packagesParams) }}" class="cp-btn cp-btn-soft">Reconnect Options</a>
                 </div>
 
             @elseif($statusView === 'paid')
@@ -295,32 +293,6 @@
                     <a href="{{ $statusRoute }}" class="cp-btn cp-btn-primary cp-btn-block">Check Status Now</a>
                 @endif
 
-            @elseif($statusView === 'verifying')
-                <div class="cp-status-head">
-                    <div>
-                        <span class="cp-status-pill warning">Payment under review</span>
-                        <h2 class="cp-section-title">We are verifying your payment</h2>
-                        <p class="cp-card-subtitle">If M-Pesa already deducted money, do not initiate a second payment. We are still checking for confirmation.</p>
-                    </div>
-                    <div class="cp-spinner" aria-hidden="true"></div>
-                </div>
-
-                <div class="cp-flow cp-flow-compact">
-                    <div class="cp-flow-step is-complete">Package selected</div>
-                    <div class="cp-flow-step is-current">Payment verification</div>
-                    <div class="cp-flow-step">Internet activation</div>
-                </div>
-
-                <div class="cp-panel">
-                    <h3>What you should do</h3>
-                    <p>Wait for automatic confirmation, tap recheck if you have already been charged, or reconnect using the M-Pesa SMS code.</p>
-                </div>
-
-                <div class="cp-actions">
-                    <a href="{{ route('wifi.status', array_filter(['phone' => $phone, 'tenant_id' => $tenantId > 0 ? $tenantId : null, 'payment' => $payment->id, 'recheck' => 1], static fn ($value) => $value !== null && $value !== '')) }}" class="cp-btn cp-btn-primary">Recheck Payment</a>
-                    <a href="{{ route('wifi.reconnect.form', $packagesParams) }}" class="cp-btn cp-btn-soft">Reconnect Options</a>
-                </div>
-
             @elseif($statusView === 'activated')
                 <span class="cp-status-pill success">Connected</span>
                 <h2 class="cp-section-title">You are connected to the internet</h2>
@@ -370,9 +342,7 @@
                 </div>
 
                 <div class="cp-actions">
-                    <a href="{{ route('wifi.status', array_filter(['phone' => $phone, 'tenant_id' => $tenantId > 0 ? $tenantId : null, 'payment' => $payment->id, 'recheck' => 1], static fn ($value) => $value !== null && $value !== '')) }}" class="cp-btn cp-btn-outline">I Was Charged, Recheck</a>
                     <a href="{{ route('wifi.packages', $packagesParams) }}" class="cp-btn cp-btn-primary">Try Payment Again</a>
-                    <a href="{{ route('wifi.reconnect.form', $packagesParams) }}" class="cp-btn cp-btn-soft">Reconnect Options</a>
                 </div>
 
             @else
