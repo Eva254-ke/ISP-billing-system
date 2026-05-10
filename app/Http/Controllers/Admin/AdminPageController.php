@@ -133,12 +133,20 @@ class AdminPageController extends Controller
         }
 
         $rows = $routers->orderBy('name')->get();
+        $cpuValues = $rows
+            ->pluck('cpu_usage')
+            ->filter(static fn ($value): bool => $value !== null && $value !== '');
+        $memoryValues = $rows
+            ->pluck('memory_usage')
+            ->filter(static fn ($value): bool => $value !== null && $value !== '');
 
         $stats = [
             'online' => $rows->filter(fn ($router) => in_array((string) $router->status, ['online', 'warning'], true))->count(),
             'offline' => $rows->where('status', 'offline')->count(),
             'total_users' => (int) $rows->sum(fn ($router) => (int) ($router->active_sessions ?? 0)),
             'total' => $rows->count(),
+            'avg_cpu' => $cpuValues->isNotEmpty() ? (int) round((float) $cpuValues->avg()) : null,
+            'avg_memory' => $memoryValues->isNotEmpty() ? (int) round((float) $memoryValues->avg()) : null,
         ];
 
         return view('admin.routers.index', [

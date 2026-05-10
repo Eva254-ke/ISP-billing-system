@@ -47,8 +47,8 @@ class RouterHealthCheck extends Command
                     $router->name,
                     $router->ip_address,
                     $router->status,
-                    $router->cpu_usage . '%',
-                    $router->memory_usage . '%',
+                    $router->cpu_usage === null ? 'N/A' : $router->cpu_usage . '%',
+                    $router->memory_usage === null ? 'N/A' : $router->memory_usage . '%',
                     $router->uptime_formatted,
                 ];
             })

@@ -34,19 +34,19 @@
     <div class="col-md-3">
         <div class="small-box bg-primary">
             <div class="inner">
-                <h3>{{ number_format((int) ($stats['total_users'] ?? 0)) }}</h3>
-                <p>Total Users</p>
+                <h3>{{ is_null($stats['avg_cpu'] ?? null) ? 'N/A' : number_format((int) $stats['avg_cpu']) . '%' }}</h3>
+                <p>CPU Usage</p>
             </div>
-            <div class="icon"><i class="fas fa-users"></i></div>
+            <div class="icon"><i class="fas fa-microchip"></i></div>
         </div>
     </div>
     <div class="col-md-3">
         <div class="small-box bg-warning">
             <div class="inner">
-                <h3>{{ number_format((int) ($stats['total'] ?? 0)) }}</h3>
-                <p>Total Routers</p>
+                <h3>{{ is_null($stats['avg_memory'] ?? null) ? 'N/A' : number_format((int) $stats['avg_memory']) . '%' }}</h3>
+                <p>Memory Usage</p>
             </div>
-            <div class="icon"><i class="fas fa-server"></i></div>
+            <div class="icon"><i class="fas fa-memory"></i></div>
         </div>
     </div>
 </div>
@@ -122,7 +122,7 @@
                         <td>{{ number_format((int) ($router->active_sessions ?? 0)) }}</td>
                         <td>
                             @if(is_null($cpu) && is_null($memory))
-                                <span class="text-muted">-- / --</span>
+                                <span class="text-muted">Unavailable</span>
                             @else
                                 <div class="progress progress-xs" style="height: 6px;">
                                     <div class="progress-bar {{ $progressWidth >= 80 ? 'bg-danger' : 'bg-success' }}" style="width: {{ $progressWidth }}%"></div>
@@ -316,7 +316,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     <td>${Number(row.users || 0).toLocaleString()}</td>
                     <td>
                         ${(row.cpu == null && row.memory == null)
-                            ? '<span class="text-muted">-- / --</span>'
+                            ? '<span class="text-muted">Unavailable</span>'
                             : `<div class="progress progress-xs" style="height: 6px;"><div class="progress-bar ${utilization >= 80 ? 'bg-danger' : 'bg-success'}" style="width: ${utilization}%"></div></div><small class="text-muted">${row.cpu ?? '--'}% / ${row.memory ?? '--'}%</small>`}
                     </td>
                     <td>${escapeHtml(lastSeen)}</td>
@@ -336,13 +336,17 @@ document.addEventListener('DOMContentLoaded', function () {
     function renderStats(rows) {
         const online = rows.filter(row => ['online', 'warning'].includes(String(row.status || '').toLowerCase())).length;
         const offline = rows.length - online;
-        const users = rows.reduce((sum, row) => sum + Number(row.users || 0), 0);
+        const cpuValues = rows.map(row => row.cpu).filter(value => value !== null && value !== undefined && value !== '');
+        const memoryValues = rows.map(row => row.memory).filter(value => value !== null && value !== undefined && value !== '');
+        const avg = values => values.length
+            ? `${Math.round(values.reduce((sum, value) => sum + Number(value || 0), 0) / values.length)}%`
+            : 'N/A';
 
         if (statsBoxes.length >= 4) {
             statsBoxes[0].textContent = online.toLocaleString();
             statsBoxes[1].textContent = offline.toLocaleString();
-            statsBoxes[2].textContent = users.toLocaleString();
-            statsBoxes[3].textContent = rows.length.toLocaleString();
+            statsBoxes[2].textContent = avg(cpuValues);
+            statsBoxes[3].textContent = avg(memoryValues);
         }
 
         if (footerCount) {

@@ -527,7 +527,7 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
                 ->orderBy('name')
                 ->limit(100)
                 ->get()
-                ->map(function (Router $router) use ($live, $mikroTikService) {
+                ->map(function (Router $router) use ($live, $mikroTikService, $radiusAccountingService) {
                     $status = (string) ($router->status ?? Router::STATUS_OFFLINE);
                     $cpu = $router->cpu_usage;
                     $memory = $router->memory_usage;
@@ -582,6 +582,7 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
                         'users' => (int) ($router->active_sessions ?? 0),
                         'cpu' => $cpu,
                         'memory' => $memory,
+                        'resource_source' => ($cpu !== null || $memory !== null) ? ($isOnline ? 'router_api' : 'cached') : 'unavailable',
                         'last_seen_at' => $router->last_seen_at?->toIso8601String(),
                     ];
                 });
