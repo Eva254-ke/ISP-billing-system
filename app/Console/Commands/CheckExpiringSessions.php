@@ -59,6 +59,8 @@ class CheckExpiringSessions extends Command
         $disconnected = 0;
 
         foreach ($expiring as $session) {
+            $this->refreshRadiusTimingBeforeExpiryDecision($session);
+            $session->refresh();
             $minutesRemaining = now()->diffInMinutes($session->expires_at, false);
 
             // ──────────────────────────────────────────────────────────────
@@ -188,6 +190,35 @@ class CheckExpiringSessions extends Command
         $this->line("   Orphaned cleaned: {$orphaned->count()}");
 
         return Command::SUCCESS;
+    }
+
+    private function refreshRadiusTimingBeforeExpiryDecision(UserSession $session): void
+    {
+        if (!(bool) config('radius.enabled', false)) {
+            return;
+        }
+
+        if (!$session->expires_at || $session->expires_at->gt(now()->addMinutes(5))) {
+            return;
+        }
+
+        try {
+            $record = $this->radiusAccountingService->syncActiveSession($session);
+            if ($record !== null) {
+                Log::channel('radius')->info('Refreshed RADIUS session timing before expiry decision', [
+                    'session_id' => $session->id,
+                    'username' => $session->username,
+                    'acct_session_id' => $record['acctsessionid'] ?? null,
+                    'expires_at' => $session->fresh()?->expires_at?->toIso8601String(),
+                ]);
+            }
+        } catch (\Throwable $e) {
+            Log::channel('radius')->warning('RADIUS timing refresh failed before expiry decision', [
+                'session_id' => $session->id,
+                'username' => $session->username,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
     /**

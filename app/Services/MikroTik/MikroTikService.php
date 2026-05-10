@@ -455,7 +455,9 @@ class MikroTikService
             
             // Simple system resource query to test connection
             $query = new Query('/system/resource/print');
-            $client->query($query)->read();
+            $info = $client->query($query)->read() ?? [];
+            $data = is_array($info[0] ?? null) ? $info[0] : [];
+            $this->persistRouterResourceMetrics($router, $data);
             
             // Update router status
             $router->markOnline();
@@ -558,12 +560,7 @@ class MikroTikService
             $memoryUsage = $this->extractMemoryUsagePercent($data);
             
             // Update router health metrics
-            $router->update([
-                'cpu_usage' => $cpuLoad,
-                'memory_usage' => $memoryUsage,
-                'uptime_seconds' => $this->parseUptime($data['uptime'] ?? '0'),
-                'last_sync_at' => now(),
-            ]);
+            $this->persistRouterResourceMetrics($router, $data);
             
             return [
                 'cpu_load' => $cpuLoad,
@@ -609,6 +606,36 @@ class MikroTikService
 
         $usedPercent = (int) round((($total - $free) / $total) * 100);
         return max(0, min(100, $usedPercent));
+    }
+
+    private function persistRouterResourceMetrics(Router $router, array $data): void
+    {
+        if ($data === []) {
+            return;
+        }
+
+        $updates = [];
+        $cpuLoad = $this->toPercent($data['cpu-load'] ?? null);
+        $memoryUsage = $this->extractMemoryUsagePercent($data);
+
+        if ($cpuLoad !== null) {
+            $updates['cpu_usage'] = $cpuLoad;
+        }
+
+        if ($memoryUsage !== null) {
+            $updates['memory_usage'] = $memoryUsage;
+        }
+
+        if (isset($data['uptime'])) {
+            $updates['uptime_seconds'] = $this->parseUptime((string) $data['uptime']);
+        }
+
+        if ($updates === []) {
+            return;
+        }
+
+        $updates['last_sync_at'] = now();
+        $router->update($updates);
     }
 
     /**

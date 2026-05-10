@@ -528,6 +528,7 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
                 ->limit(100)
                 ->get()
                 ->map(function (Router $router) use ($live, $mikroTikService, $radiusAccountingService) {
+                    $isOnline = in_array((string) ($router->status ?? Router::STATUS_OFFLINE), [Router::STATUS_ONLINE, Router::STATUS_WARNING], true);
                     $status = (string) ($router->status ?? Router::STATUS_OFFLINE);
                     $cpu = $router->cpu_usage;
                     $memory = $router->memory_usage;

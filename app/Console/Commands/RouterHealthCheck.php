@@ -65,10 +65,13 @@ class RouterHealthCheck extends Command
 
                 if ($isOnline) {
                     $systemInfo = $this->mikrotikService->getRouterSystemInfo($router);
-                    $cpu = (int) ($systemInfo['cpu_load'] ?? 0);
-                    $memory = (int) ($systemInfo['memory_usage'] ?? 0);
+                    $router->refresh();
+                    $cpu = $systemInfo['cpu_load'] ?? $router->cpu_usage;
+                    $memory = $systemInfo['memory_usage'] ?? $router->memory_usage;
+                    $cpuLabel = $cpu === null ? 'N/A' : ((int) $cpu) . '%';
+                    $memoryLabel = $memory === null ? 'N/A' : ((int) $memory) . '%';
 
-                    if ($cpu > 80 || $memory > 80) {
+                    if (($cpu !== null && (int) $cpu > 80) || ($memory !== null && (int) $memory > 80)) {
                         $router->markWarning('High resource usage');
                         $warning++;
 
@@ -78,12 +81,12 @@ class RouterHealthCheck extends Command
                             'memory' => $memory,
                         ]);
 
-                        $this->warn("   WARNING {$router->name} (CPU: {$cpu}%, RAM: {$memory}%)");
+                        $this->warn("   WARNING {$router->name} (CPU: {$cpuLabel}, RAM: {$memoryLabel})");
                     } else {
                         $router->markOnline();
                         $online++;
 
-                        $this->info("   OK {$router->name} (CPU: {$cpu}%, RAM: {$memory}%)");
+                        $this->info("   OK {$router->name} (CPU: {$cpuLabel}, RAM: {$memoryLabel})");
                     }
 
                     continue;
