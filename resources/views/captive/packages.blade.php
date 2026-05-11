@@ -285,12 +285,19 @@
 
         @endif
 
+        <article class="cp-card cp-card-compact">
+            <h3 class="cp-section-subtitle">Already paid?</h3>
+            <p class="cp-card-subtitle">Enter your M-Pesa code or redeem a voucher to connect instantly.</p>
+            <a href="{{ route('wifi.reconnect.form', $reconnectParams) }}" class="cp-btn cp-btn-soft cp-btn-block">Enter M-Pesa Code / Voucher</a>
+        </article>
+
         <footer class="cp-footer">
             <p><a class="cp-link-support" href="{{ $supportTelHref }}">{{ $supportLabel }}</a></p>
             @if($termsUrl !== '')
                 <p><a class="cp-link-support" href="{{ $termsUrl }}" target="_blank" rel="noopener">Terms and conditions</a></p>
             @endif
             <p>{{ $companyName }}</p>
+            <p>Built by Engineer Omwenga Evans</p>
         </footer>
     </main>
 

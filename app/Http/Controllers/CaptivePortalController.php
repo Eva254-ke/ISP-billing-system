@@ -1266,6 +1266,38 @@ class CaptivePortalController extends Controller
     }
     
     /**
+     * Show reconnect screen (M-Pesa code / voucher entry)
+     */
+    public function reconnectForm(Request $request)
+    {
+        $tenant = $this->resolveTenant($request);
+        $phoneInput = session('captive_phone') ?? $request->query('phone');
+        $phone = $phoneInput !== null
+            ? ($this->normalizePhoneForStorage((string) $phoneInput) ?? trim((string) $phoneInput))
+            : null;
+        $clientContext = $this->resolveClientContext($request);
+        $hotspotContext = $this->captureHotspotContext($request);
+        $clientMac = $clientContext['mac'];
+        $clientIp = $clientContext['ip'];
+
+        if (!$tenant) {
+            return response()->view('captive.reconnect', [
+                'phone' => $phone,
+                'tenant' => null,
+                'voucherPrefix' => 'CB-WIFI',
+                'clientMac' => $clientMac,
+                'clientIp' => $clientIp,
+                'hotspotContext' => $hotspotContext,
+                'tenantResolutionError' => 'Tenant portal not resolved. Use your tenant domain or include tenant_id in the URL.',
+            ], 400);
+        }
+
+        $voucherPrefix = $this->resolveReconnectVoucherPrefix($tenant);
+
+        return view('captive.reconnect', compact('phone', 'tenant', 'voucherPrefix', 'clientMac', 'clientIp', 'hotspotContext'));
+    }
+
+    /**
      * Reconnect with M-Pesa transaction code
      */
     public function reconnect(Request $request)

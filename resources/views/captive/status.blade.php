@@ -407,6 +407,7 @@
                 <p><a class="cp-link-support" href="{{ $termsUrl }}" target="_blank" rel="noopener">Terms and conditions</a></p>
             @endif
             <p>{{ $companyName }}</p>
+            <p>Built by Engineer Omwenga Evans</p>
         </footer>
     </main>
 
