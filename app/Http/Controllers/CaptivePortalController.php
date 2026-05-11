@@ -94,10 +94,24 @@ class CaptivePortalController extends Controller
                 'ip' => $clientIp,
                 'expires_at' => $activeSession->expires_at,
             ]);
-            
+
             $activePayment = $activeSession->payment()->first();
+            if (
+                $activePayment
+                && (bool) config('radius.enabled', false)
+                && $this->requestHasHotspotLoginChallenge($request, (int) $tenant->id)
+            ) {
+                $radiusLoginUrl = $this->buildDirectRadiusAutoLoginUrl($activePayment, $activeSession);
+                if ($radiusLoginUrl !== null) {
+                    return redirect()->away($radiusLoginUrl);
+                }
+
+                // If no RADIUS auto-login URL (e.g. CHAP challenge), fall through to
+                // normal continue-browsing redirect to avoid a packages->status loop.
+            }
+
             $continueBrowsingUrl = $this->resolveContinueBrowsingUrl($activePayment, $request);
-            
+
             return redirect($continueBrowsingUrl);
         }
 
@@ -211,6 +225,15 @@ class CaptivePortalController extends Controller
                         ]);
                     }
                 }
+
+                return redirect()->route('wifi.status', $this->buildStatusRouteParameters(
+                    phone: $resumePhone,
+                    payment: $resumablePayment,
+                    tenantId: (int) $resumablePayment->tenant_id
+                ))->with('message', in_array((string) $resumablePayment->status, ['completed', 'confirmed'], true)
+                    ? 'Payment confirmed. Connecting your device now.'
+                    : 'Payment request already in progress. Complete the M-Pesa prompt and wait for confirmation.'
+                );
             }
         }
 
@@ -914,7 +937,17 @@ class CaptivePortalController extends Controller
         ?string $clientIp = null
     ): bool
     {
-        if ($this->hasClientContext($clientMac, $clientIp)
+        $session = $session ?? UserSession::query()
+            ->where('payment_id', $payment->id)
+            ->latest('id')
+            ->first();
+
+        // When RADIUS is enabled, skip strict MAC/IP check for cross-router moves.
+        // RADIUS accounting will be the authoritative source during activation.
+        $radiusEnabled = (bool) config('radius.enabled', false);
+        if (
+            !$radiusEnabled
+            && $this->hasClientContext($clientMac, $clientIp)
             && !$this->paymentMatchesClientContext($payment, $clientMac, $clientIp, $session)
         ) {
             return false;
@@ -944,11 +977,11 @@ class CaptivePortalController extends Controller
                 || $this->sessionMatchesClientContext($session, $clientMac, $clientIp);
         }
 
+        // In RADIUS mode, allow resuming any valid payment even when MAC/IP
+        // mismatch indicates the user moved to a different router.
         if (
-            (bool) config('radius.enabled', false)
-            && (bool) config('radius.pure_radius', false)
-            && $this->hasClientContext($clientMac, $clientIp)
-            && $this->paymentMatchesClientContext($payment, $clientMac, $clientIp, $session)
+            $radiusEnabled
+            && $this->paymentCanStillAuthorizeAccess($payment, $session)
         ) {
             return true;
         }
@@ -1186,19 +1219,20 @@ class CaptivePortalController extends Controller
         if (in_array($payment->status, ['completed', 'confirmed'], true)) {
             try {
                 $this->activatePaidAccess($payment, $forceRadiusReauthorization);
-                
-                // Check if activation was successful and redirect to continue browsing
-                $activeSession = $this->resolveConnectedSession(
-                    $payment,
-                    $clientContext['mac'] ?? null,
-                    $clientContext['ip'] ?? null
-                );
-                
-                if ($activeSession) {
-                    $continueBrowsingUrl = $this->resolveContinueBrowsingUrl($payment, $request);
-                    return redirect($continueBrowsingUrl);
+
+                if (!$forceRadiusReauthorization) {
+                    // Check if activation was successful and redirect to continue browsing.
+                    $activeSession = $this->resolveConnectedSession(
+                        $payment,
+                        $clientContext['mac'] ?? null,
+                        $clientContext['ip'] ?? null
+                    );
+
+                    if ($activeSession) {
+                        $continueBrowsingUrl = $this->resolveContinueBrowsingUrl($payment, $request);
+                        return redirect($continueBrowsingUrl);
+                    }
                 }
-                
             } catch (\Exception $e) {
                 Log::error('MikroTik activation failed', [
                     'payment_id' => $payment->id,
@@ -1212,6 +1246,7 @@ class CaptivePortalController extends Controller
             $clientContext['mac'] ?? null,
             $clientContext['ip'] ?? null
         );
+
         $latestSession = $activeSession
             ?? UserSession::query()->where('payment_id', $payment->id)->latest('id')->first();
 
@@ -1242,6 +1277,14 @@ class CaptivePortalController extends Controller
         $radiusLoginUrl = $this->buildRadiusAutoLoginRedirectUrl($radiusAutoLogin);
         if (!$activeSession && $radiusLoginUrl !== null) {
             return redirect()->away($radiusLoginUrl);
+        }
+
+        if ($statusView === 'paid' && !$radiusAutoLogin && !$radiusPendingReauth) {
+            return redirect()->route('wifi.packages', $this->buildPackagesRouteParameters(
+                phone: $phone,
+                payment: $payment,
+                tenantId: (int) $payment->tenant_id
+            ))->with('message', 'Your payment is confirmed. Reopen this hotspot page to finish sign-in, or choose a package if you need a new session.');
         }
 
         $continueBrowsingUrl = $this->resolveContinueBrowsingUrl($payment, $request);
@@ -3828,6 +3871,27 @@ class CaptivePortalController extends Controller
             }
         }
 
+        // When RADIUS is enabled, allow phone-only fallback even with client context
+        // so users can move between routers without getting stuck
+        if ((bool) config('radius.enabled', false)) {
+            $radiusFallbackSession = (clone $baseQuery)->first();
+
+            if ($radiusFallbackSession) {
+                $verifiedSession = $this->resolveVerifiedActiveSession($radiusFallbackSession, allowRouterFallback: false);
+                if ($verifiedSession) {
+                    Log::channel('captive')->info('RADIUS phone-only session resolved across routers', [
+                        'session_id' => $verifiedSession->id,
+                        'phone' => $phone,
+                        'session_mac' => $verifiedSession->mac_address,
+                        'client_mac' => $clientMac,
+                        'session_ip' => $verifiedSession->ip_address,
+                        'client_ip' => $clientIp,
+                    ]);
+                    return $verifiedSession;
+                }
+            }
+        }
+
         if ($this->hasClientContext($clientMac, $clientIp)) {
             return null;
         }
@@ -3941,27 +4005,52 @@ class CaptivePortalController extends Controller
             return null;
         }
 
-        // In pure RADIUS mode, always sync with RADIUS accounting as authoritative source
+        // In RADIUS mode, always sync with RADIUS accounting as authoritative source.
+        // If the accounting record is missing, trust very recent activity to cover
+        // the brief gap when a user moves between routers (old router sends Stop
+        // before new router sends Start).
         if ((bool) config('radius.enabled', false)) {
+            $radiusRecord = null;
+            $radiusSyncError = null;
+
             try {
-                $record = app(RadiusAccountingService::class)->syncActiveSession($session);
-                if ($record !== null) {
-                    $session = $session->fresh() ?? $session;
-
-                    if ($payment) {
-                        $this->markPaymentActivatedFromRadius($payment, $session);
-                    }
-
-                    // In pure RADIUS, if accounting record exists, session is active
-                    return $session;
-                }
+                $radiusRecord = app(RadiusAccountingService::class)->syncActiveSession($session);
             } catch (\Throwable $e) {
+                $radiusSyncError = $e->getMessage();
                 Log::warning('RADIUS verification failed while checking active portal session', [
                     'session_id' => $session->id,
                     'payment_id' => $payment?->id,
                     'username' => $session->username,
                     'error' => $e->getMessage(),
                 ]);
+            }
+
+            if ($radiusRecord !== null) {
+                $session = $session->fresh() ?? $session;
+
+                if ($payment) {
+                    $this->markPaymentActivatedFromRadius($payment, $session);
+                }
+
+                return $session;
+            }
+
+            // Cross-router grace: if the session was active very recently and is not
+            // expired, assume the accounting gap is transient (user moved routers).
+            $crossRouterGraceSeconds = 180;
+            $hasRecentActivity = $session->last_activity_at instanceof Carbon
+                && $session->last_activity_at->gte(now()->subSeconds($crossRouterGraceSeconds));
+
+            if ($hasRecentActivity && !$session->is_expired) {
+                Log::channel('captive')->info('Trusting recent session despite missing RADIUS accounting', [
+                    'session_id' => $session->id,
+                    'payment_id' => $payment?->id,
+                    'username' => $session->username,
+                    'last_activity_at' => $session->last_activity_at->toIso8601String(),
+                    'radius_sync_error' => $radiusSyncError,
+                ]);
+
+                return $session;
             }
         }
 
