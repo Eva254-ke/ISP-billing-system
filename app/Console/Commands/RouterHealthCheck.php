@@ -5,6 +5,7 @@ namespace App\Console\Commands;
 use App\Models\Router;
 use App\Services\MikroTik\MikroTikService;
 use App\Services\Radius\RadiusAccountingService;
+use App\Services\Notifications\WhatsAppNotificationService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Log;
 
@@ -20,9 +21,15 @@ class RouterHealthCheck extends Command
      */
     protected $description = 'Check health status of all routers (online/offline, CPU, memory)';
 
+    /**
+     * Minimum minutes between repeat offline alerts for the same router.
+     */
+    private const OFFLINE_ALERT_COOLDOWN_MINUTES = 30;
+
     public function __construct(
         protected MikroTikService $mikrotikService,
-        protected RadiusAccountingService $radiusAccountingService
+        protected RadiusAccountingService $radiusAccountingService,
+        protected WhatsAppNotificationService $whatsappService,
     ) {
         parent::__construct();
     }
@@ -83,10 +90,15 @@ class RouterHealthCheck extends Command
 
                         $this->warn("   WARNING {$router->name} (CPU: {$cpuLabel}, RAM: {$memoryLabel})");
                     } else {
+                        $wasOffline = $router->status === Router::STATUS_OFFLINE;
                         $router->markOnline();
                         $online++;
 
                         $this->info("   OK {$router->name} (CPU: {$cpuLabel}, RAM: {$memoryLabel})");
+
+                        if ($wasOffline) {
+                            $this->notifyRouterOnline($router);
+                        }
                     }
 
                     continue;
@@ -131,6 +143,7 @@ class RouterHealthCheck extends Command
                 ]);
 
                 $this->error("   OFFLINE {$router->name}");
+                $this->notifyRouterOffline($router);
             } catch (\Exception $e) {
                 $router->markOffline();
                 $offline++;
@@ -187,5 +200,112 @@ class RouterHealthCheck extends Command
 
             return false;
         }
+    }
+
+    private function notifyRouterOffline(Router $router): void
+    {
+        if (!$this->shouldSendOfflineAlert($router)) {
+            return;
+        }
+
+        $adminPhone = $this->resolveAdminPhone($router);
+        if (!$adminPhone) {
+            return;
+        }
+
+        $sent = $this->whatsappService->sendRouterOfflineAlert(
+            $adminPhone,
+            $router->name,
+            $router->location
+        );
+
+        if ($sent) {
+            $this->recordAlertSent($router, 'offline');
+        }
+    }
+
+    private function notifyRouterOnline(Router $router): void
+    {
+        $metadata = is_array($router->metadata) ? $router->metadata : [];
+        $alertSent = (bool) ($metadata['last_offline_alert_sent'] ?? false);
+
+        if (!$alertSent) {
+            return;
+        }
+
+        $adminPhone = $this->resolveAdminPhone($router);
+        if (!$adminPhone) {
+            return;
+        }
+
+        $sent = $this->whatsappService->sendRouterOnlineAlert(
+            $adminPhone,
+            $router->name,
+            $router->location
+        );
+
+        if ($sent) {
+            $this->recordAlertSent($router, 'online');
+        }
+    }
+
+    private function shouldSendOfflineAlert(Router $router): bool
+    {
+        $metadata = is_array($router->metadata) ? $router->metadata : [];
+        $lastAlertAt = $metadata['last_offline_alert_at'] ?? null;
+
+        if ($lastAlertAt === null) {
+            return true;
+        }
+
+        try {
+            $lastAlert = \Illuminate\Support\Carbon::parse($lastAlertAt);
+            if ($lastAlert->diffInMinutes(now()) >= self::OFFLINE_ALERT_COOLDOWN_MINUTES) {
+                return true;
+            }
+        } catch (\Throwable $e) {
+            return true;
+        }
+
+        return false;
+    }
+
+    private function recordAlertSent(Router $router, string $type): void
+    {
+        $metadata = is_array($router->metadata) ? $router->metadata : [];
+
+        if ($type === 'offline') {
+            $metadata['last_offline_alert_sent'] = true;
+            $metadata['last_offline_alert_at'] = now()->toIso8601String();
+        } elseif ($type === 'online') {
+            $metadata['last_online_alert_sent'] = true;
+            $metadata['last_online_alert_at'] = now()->toIso8601String();
+            $metadata['last_offline_alert_sent'] = false;
+        }
+
+        try {
+            $router->update(['metadata' => $metadata]);
+        } catch (\Throwable $e) {
+            Log::channel('notification')->warning('Failed to persist router alert metadata', [
+                'router_id' => $router->id,
+                'type' => $type,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    private function resolveAdminPhone(Router $router): ?string
+    {
+        $tenant = $router->tenant;
+
+        if (!$tenant) {
+            return null;
+        }
+
+        $phone = $tenant->contact_phone
+            ?: $tenant->personal_phone
+            ?: $tenant->captive_portal_support_phone;
+
+        return $phone ? preg_replace('/[^0-9]/', '', $phone) : null;
     }
 }

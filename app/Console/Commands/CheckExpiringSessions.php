@@ -6,6 +6,7 @@ use App\Models\UserSession;
 use App\Services\MikroTik\SessionManager;
 use App\Services\MikroTik\MikroTikService;
 use App\Services\Radius\RadiusAccountingService;
+use App\Services\Notifications\WhatsAppNotificationService;
 use App\Jobs\SyncSessionUsage;
 use App\Jobs\DisconnectSession;
 use Illuminate\Console\Command;
@@ -26,7 +27,8 @@ class CheckExpiringSessions extends Command
     public function __construct(
         protected SessionManager $sessionManager,
         protected MikroTikService $mikroTikService,
-        protected RadiusAccountingService $radiusAccountingService
+        protected RadiusAccountingService $radiusAccountingService,
+        protected WhatsAppNotificationService $whatsappService,
     ) {
         parent::__construct();
     }
@@ -64,11 +66,13 @@ class CheckExpiringSessions extends Command
             $minutesRemaining = now()->diffInMinutes($session->expires_at, false);
 
             // ──────────────────────────────────────────────────────────────
-            // EDGE CASE: Send warning SMS at T-10 minutes
+            // EDGE CASE: Send warning at T-10 minutes (deduplicated)
             // ──────────────────────────────────────────────────────────────
             if ($minutesRemaining <= 10 && $minutesRemaining > 0 && !$session->grace_period_active) {
-                $this->sendExpiryWarning($session, $minutesRemaining);
-                $warningsSent++;
+                if ($this->shouldSendExpiryWarning($session)) {
+                    $this->sendExpiryWarning($session, $minutesRemaining);
+                    $warningsSent++;
+                }
             }
 
             // ──────────────────────────────────────────────────────────────
@@ -222,7 +226,33 @@ class CheckExpiringSessions extends Command
     }
 
     /**
-     * Send expiry warning SMS to user
+     * Determine whether an expiry warning should be sent for this session.
+     * Prevents duplicate warnings within the same expiry window.
+     */
+    private function shouldSendExpiryWarning(UserSession $session): bool
+    {
+        $metadata = is_array($session->metadata) ? $session->metadata : [];
+        $lastWarningAt = $metadata['last_expiry_warning_at'] ?? null;
+
+        if ($lastWarningAt === null) {
+            return true;
+        }
+
+        try {
+            $lastWarning = \Illuminate\Support\Carbon::parse($lastWarningAt);
+            // Only warn once per 20-minute window to avoid spam
+            if ($lastWarning->diffInMinutes(now()) >= 20) {
+                return true;
+            }
+        } catch (\Throwable $e) {
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * Send expiry warning via WhatsApp to user
      */
     private function sendExpiryWarning(UserSession $session, int $minutesRemaining): void
     {
@@ -233,19 +263,41 @@ class CheckExpiringSessions extends Command
             return;
         }
 
-        $message = "Omwenga WiFi: Your session expires in {$minutesRemaining} minutes. Renew now to stay connected!";
+        $brand = $session->tenant?->name ?? 'WiFi';
 
-        Log::channel('notification')->info('Sending expiry warning SMS', [
+        Log::channel('notification')->info('Sending expiry warning via WhatsApp', [
             'session_id' => $session->id,
             'phone' => $session->phone,
             'minutes' => $minutesRemaining,
         ]);
 
-        // TODO: Integrate with SMS service (Africa's Talking)
-        // Example:
-        // SmsService::send($session->phone, $message);
+        $sent = $this->whatsappService->sendSessionExpiryWarning(
+            $session->phone,
+            $minutesRemaining,
+            $session->username ?? $session->phone,
+            $brand
+        );
 
-        // For now, just log
-        $this->line("   📱 Warning SMS would be sent to: {$session->phone}");
+        if ($sent) {
+            $this->recordExpiryWarningSent($session);
+        }
+
+        $this->line("   📱 WhatsApp expiry warning sent to: {$session->phone}");
+    }
+
+    private function recordExpiryWarningSent(UserSession $session): void
+    {
+        $metadata = is_array($session->metadata) ? $session->metadata : [];
+        $metadata['last_expiry_warning_at'] = now()->toIso8601String();
+        $metadata['expiry_warning_count'] = ($metadata['expiry_warning_count'] ?? 0) + 1;
+
+        try {
+            $session->update(['metadata' => $metadata]);
+        } catch (\Throwable $e) {
+            Log::channel('notification')->warning('Failed to persist expiry warning metadata', [
+                'session_id' => $session->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 }
