@@ -388,6 +388,18 @@ class DarajaService
         $desc = strtolower(trim($resultDesc));
 
         if (
+            str_contains($desc, 'insufficient')
+            || str_contains($desc, 'balance')
+            || str_contains($desc, 'cancel')
+            || str_contains($desc, 'declin')
+            || str_contains($desc, 'wrong pin')
+            || str_contains($desc, 'invalid')
+            || str_contains($desc, 'terminated')
+        ) {
+            return false;
+        }
+
+        if (
             str_contains($desc, 'still under process')
             || str_contains($desc, 'still under processing')
             || str_contains($desc, 'under process')
@@ -399,7 +411,7 @@ class DarajaService
             return true;
         }
 
-        return in_array($resultCode, [1], true);
+        return false;
     }
 
     private function requestAccessToken(): array

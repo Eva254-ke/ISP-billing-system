@@ -2320,6 +2320,10 @@ class CaptivePortalController extends Controller
     {
         $resultDesc = strtolower(trim($resultDesc));
 
+        if ($this->isDarajaQueryResultFinalFailure($resultCode, $resultDesc)) {
+            return false;
+        }
+
         if (
             str_contains($resultDesc, 'still under process')
             || str_contains($resultDesc, 'still under processing')
@@ -2335,7 +2339,26 @@ class CaptivePortalController extends Controller
             return true;
         }
 
-        return in_array($resultCode, [1, 2002], true);
+        return in_array($resultCode, [2002], true);
+    }
+
+    private function isDarajaQueryResultFinalFailure(?int $resultCode, string $resultDesc): bool
+    {
+        $resultDesc = strtolower(trim($resultDesc));
+
+        if (
+            str_contains($resultDesc, 'insufficient')
+            || str_contains($resultDesc, 'balance')
+            || str_contains($resultDesc, 'cancel')
+            || str_contains($resultDesc, 'declin')
+            || str_contains($resultDesc, 'wrong pin')
+            || str_contains($resultDesc, 'invalid')
+            || str_contains($resultDesc, 'terminated')
+        ) {
+            return true;
+        }
+
+        return $resultCode === 1;
     }
 
     private function activatePaidAccess(Payment $payment, bool $forceRadiusReauthorization = false): ?UserSession
