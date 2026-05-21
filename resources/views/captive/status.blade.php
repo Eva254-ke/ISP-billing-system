@@ -573,7 +573,7 @@
             return md5Hex(chapIdBinary + password + chapChallengeBinary);
         }
 
-        function hasRecentRadiusAutoLoginAttempt(windowMs = 60000) {
+        function hasRecentRadiusAutoLoginAttempt(windowMs = 12000) {
             try {
                 const lastAttemptAt = Number(sessionStorage.getItem(radiusAutoLoginKey) || 0);
                 return lastAttemptAt > 0 && (Date.now() - lastAttemptAt) < windowMs;

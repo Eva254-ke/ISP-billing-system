@@ -363,6 +363,19 @@ class SessionManager
     {
         $authorizationRevoked = $this->revokeRadiusAuthorization($session, $reason);
 
+        if (!(bool) config('radius.disconnect_on_terminate', false)) {
+            $session->markTerminated($reason);
+
+            Log::channel('radius')->info('Session terminated after revoking RADIUS authorization; disconnect packet skipped', [
+                'session_id' => $session->id,
+                'username' => $session->username,
+                'reason' => $reason,
+                'authorization_revoked' => $authorizationRevoked,
+            ]);
+
+            return true;
+        }
+
         $result = $this->resolveRadiusDisconnectService()->disconnect($session);
 
         if (!($result['success'] ?? false)) {

@@ -2714,6 +2714,10 @@ class CaptivePortalController extends Controller
                 (bool) ($existingActivationMetadata['waiting_for_hotspot_login'] ?? false)
                 && (string) ($existingActivationMetadata['method'] ?? '') === 'radius_hotspot_login'
             ) {
+                if ($this->hasFreshPendingRadiusAuthorization($session, $payment)) {
+                    return $session->fresh() ?? $session;
+                }
+
                 return $this->syncPendingRadiusAuthorizationWindowState($payment, $session);
             }
 
@@ -4347,6 +4351,30 @@ class CaptivePortalController extends Controller
         ]);
 
         return $session->fresh() ?? $session;
+    }
+
+    private function hasFreshPendingRadiusAuthorization(UserSession $session, Payment $payment): bool
+    {
+        $metadata = is_array($session->metadata) ? $session->metadata : [];
+        $activation = is_array($metadata['activation'] ?? null) ? $metadata['activation'] : [];
+        $radius = is_array($metadata['radius'] ?? null) ? $metadata['radius'] : [];
+
+        if (!((bool) ($radius['provisioned'] ?? false))) {
+            return false;
+        }
+
+        $authorizationExpiresAt = $this->parseFlexibleDateTime($activation['authorization_expires_at'] ?? null)
+            ?? $this->parseFlexibleDateTime($radius['authorization_expires_at'] ?? null)
+            ?? $this->parseFlexibleDateTime($radius['expires_at'] ?? null);
+
+        if (!$authorizationExpiresAt instanceof Carbon || !$authorizationExpiresAt->isFuture()) {
+            return false;
+        }
+
+        $paymentMetadata = is_array($payment->metadata) ? $payment->metadata : [];
+        $paymentRadius = is_array($paymentMetadata['radius'] ?? null) ? $paymentMetadata['radius'] : [];
+
+        return (string) ($paymentRadius['username'] ?? $radius['username'] ?? '') === (string) ($radius['username'] ?? '');
     }
 
     private function resolveConnectedSession(
