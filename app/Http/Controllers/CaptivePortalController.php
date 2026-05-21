@@ -1241,6 +1241,17 @@ class CaptivePortalController extends Controller
             }
         }
 
+        if ($this->deriveStatusView($payment, null) === 'failed') {
+            session()->forget('captive_payment_id');
+
+            return redirect()->route('wifi.packages', $this->buildPackagesRouteParameters(
+                phone: $phone,
+                payment: $payment,
+                tenantId: (int) $payment->tenant_id,
+                extra: ['payment_failed' => 1]
+            ))->with('message', 'Payment was not completed. Select a package and try again.');
+        }
+
         $activeSession = $this->resolveConnectedSession(
             $payment,
             $clientContext['mac'] ?? null,
@@ -1260,6 +1271,17 @@ class CaptivePortalController extends Controller
         }
 
         $statusView = $this->deriveStatusView($payment, $activeSession);
+
+        if ($statusView === 'failed') {
+            session()->forget('captive_payment_id');
+
+            return redirect()->route('wifi.packages', $this->buildPackagesRouteParameters(
+                phone: $phone,
+                payment: $payment,
+                tenantId: (int) $payment->tenant_id,
+                extra: ['payment_failed' => 1]
+            ))->with('message', 'Payment was not completed. Select a package and try again.');
+        }
 
         // Never render the dead-end "under review / verifying" page.
         if ($statusView === 'verifying') {
@@ -1769,6 +1791,29 @@ class CaptivePortalController extends Controller
         $this->reconcileDarajaPaymentIfNeeded($payment, $request->boolean('recheck'));
         $payment = $payment->fresh();
 
+        if ($this->deriveStatusView($payment, null) === 'failed') {
+            session()->forget('captive_payment_id');
+
+            return response()->json([
+                'status' => 'failed',
+                'payment_id' => $payment->id,
+                'session_active' => false,
+                'expires_at' => null,
+                'radius_auto_login' => null,
+                'radius_pending_reauth' => false,
+                'redirect_url' => route('wifi.packages', $this->buildPackagesRouteParameters(
+                    phone: $phone,
+                    payment: $payment,
+                    tenantId: (int) $payment->tenant_id,
+                    extra: ['payment_failed' => 1]
+                )),
+                'package' => $payment->package ? [
+                    'name' => $payment->package->name,
+                    'duration_minutes' => $payment->package->duration_in_minutes,
+                ] : null,
+            ]);
+        }
+
         $forceRadiusReauthorization = $this->requestHasHotspotLoginChallenge($request, (int) $payment->tenant_id);
 
         if (in_array($payment->status, ['completed', 'confirmed'], true)) {
@@ -1813,6 +1858,29 @@ class CaptivePortalController extends Controller
 
         $status = $this->deriveStatusView($payment, $session);
         $radiusPortalState = $this->resolveRadiusPortalState($payment, $status, $session);
+
+        if ($status === 'failed') {
+            session()->forget('captive_payment_id');
+
+            return response()->json([
+                'status' => 'failed',
+                'payment_id' => $payment->id,
+                'session_active' => false,
+                'expires_at' => null,
+                'radius_auto_login' => null,
+                'radius_pending_reauth' => false,
+                'redirect_url' => route('wifi.packages', $this->buildPackagesRouteParameters(
+                    phone: $phone,
+                    payment: $payment,
+                    tenantId: (int) $payment->tenant_id,
+                    extra: ['payment_failed' => 1]
+                )),
+                'package' => $payment->package ? [
+                    'name' => $payment->package->name,
+                    'duration_minutes' => $payment->package->duration_in_minutes,
+                ] : null,
+            ]);
+        }
 
         return response()->json([
             'status' => $status,

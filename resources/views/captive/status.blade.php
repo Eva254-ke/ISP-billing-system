@@ -331,20 +331,6 @@
                     <a href="{{ $continueBrowsingUrl }}" class="cp-btn cp-btn-primary cp-btn-block">Continue Browsing</a>
                 @endif
 
-            @elseif($statusView === 'failed')
-                <span class="cp-status-pill error">Payment not completed</span>
-                <h2 class="cp-section-title">This payment attempt did not go through</h2>
-                <p class="cp-card-subtitle">{{ $failureReason }}</p>
-
-                <div class="cp-panel">
-                    <h3>Safe next step</h3>
-                    <p>If M-Pesa already deducted money, recheck first or use the SMS transaction code. Only retry payment when you are sure this attempt failed.</p>
-                </div>
-
-                <div class="cp-actions">
-                    <a href="{{ route('wifi.packages', $packagesParams) }}" class="cp-btn cp-btn-primary">Try Payment Again</a>
-                </div>
-
             @else
                 <span class="cp-status-pill">Checking status</span>
                 <h2 class="cp-section-title">Status update in progress</h2>
