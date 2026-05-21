@@ -174,6 +174,10 @@ return [
         'server_ips' => explode(',', env('MIKROTIK_SERVER_IPS', '197.248.188.0/24,102.134.0.0/16')),
     ],
 
+    'router_metrics' => [
+        'token' => env('ROUTER_METRICS_TOKEN'),
+    ],
+
     /*
     |--------------------------------------------------------------------------
     | Cloudflare Services

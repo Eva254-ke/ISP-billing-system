@@ -137,7 +137,12 @@ Route::post('/mpesa/callback/{tenant?}', function (Request $request, ?int $tenan
 Route::post('/router-metrics/{router}', function (Request $request, CloudBridgeRouter $router) {
     $providedToken = trim((string) ($request->bearerToken() ?: $request->header('X-Router-Token', $request->input('token', ''))));
     $metadata = is_array($router->metadata) ? $router->metadata : [];
-    $expectedToken = trim((string) ($metadata['metrics_token'] ?? $router->radius_secret ?? ''));
+    $expectedToken = trim((string) (
+        $metadata['metrics_token']
+        ?? config('services.router_metrics.token')
+        ?? $router->radius_secret
+        ?? ''
+    ));
 
     if ($expectedToken === '' || !hash_equals($expectedToken, $providedToken)) {
         Log::channel('security')->warning('Router metrics push rejected', [
