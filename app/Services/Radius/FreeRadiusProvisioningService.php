@@ -37,9 +37,9 @@ class FreeRadiusProvisioningService
         $identityResolver = $this->resolveIdentityResolver();
         $normalizedCallingStationId = $identityResolver->normalizeMacAddress($callingStationId);
         $normalizedUsernameMac = $identityResolver->normalizeMacAddress($username);
-        $enforceSimultaneousUse = !(
-            $normalizedUsernameMac !== null
-            && ($normalizedCallingStationId === null || $normalizedCallingStationId === $normalizedUsernameMac)
+        $enforceSimultaneousUse = $this->shouldEnforceSimultaneousUse(
+            $normalizedUsernameMac,
+            $normalizedCallingStationId
         );
 
         $sessionTimeout = max(60, (int) $package->duration_in_minutes * 60);
@@ -145,13 +145,6 @@ class FreeRadiusProvisioningService
         $normalizedCallingStationId = $identityResolver->normalizeMacAddress($callingStationId);
         $normalizedUsernameMac = $identityResolver->normalizeMacAddress($username);
 
-        if (
-            $normalizedUsernameMac === null
-            || ($normalizedCallingStationId !== null && $normalizedCallingStationId !== $normalizedUsernameMac)
-        ) {
-            return false;
-        }
-
         $connection = (string) config('radius.db_connection', 'radius');
         $radcheck = (string) config('radius.tables.radcheck', 'radcheck');
         $cleartextPasswordAttribute = (string) config('radius.attributes.cleartext_password', 'Cleartext-Password');
@@ -180,11 +173,27 @@ class FreeRadiusProvisioningService
             return true;
         }
 
-        return $db
+        $hasSimultaneousUse = $db
             ->table($radcheck)
             ->where('username', $username)
             ->where('attribute', $simultaneousUseAttribute)
             ->exists();
+
+        return $this->shouldEnforceSimultaneousUse($normalizedUsernameMac, $normalizedCallingStationId)
+            ? !$hasSimultaneousUse
+            : $hasSimultaneousUse;
+    }
+
+    private function shouldEnforceSimultaneousUse(?string $normalizedUsernameMac, ?string $normalizedCallingStationId): bool
+    {
+        if (!(bool) config('radius.enforce_simultaneous_use', false)) {
+            return false;
+        }
+
+        return !(
+            $normalizedUsernameMac !== null
+            && ($normalizedCallingStationId === null || $normalizedCallingStationId === $normalizedUsernameMac)
+        );
     }
 
     public function revokeUser(string $username): void

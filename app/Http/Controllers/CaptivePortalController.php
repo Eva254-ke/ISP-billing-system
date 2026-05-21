@@ -57,7 +57,7 @@ class CaptivePortalController extends Controller
             ? ($this->normalizePhoneForStorage((string) $phoneInput) ?? trim((string) $phoneInput))
             : null;
         $clientContext = $this->resolveClientContext($request);
-        $hotspotContext = $this->captureHotspotContext($request);
+        $hotspotContext = $this->captureHotspotContext($request, (int) $tenant->id);
         $clientMac = $clientContext['mac'];
         $clientIp = $clientContext['ip'];
 
@@ -3184,7 +3184,7 @@ class CaptivePortalController extends Controller
             'action' => $action,
             'username' => $username,
             'password' => $password,
-            'dst' => trim((string) ($hotspotContext['dst'] ?? $hotspotContext['link_orig_esc'] ?? $hotspotContext['link_orig'] ?? '')),
+            'dst' => $this->resolveHotspotAutoLoginDestination($payment, $hotspotContext),
             'popup' => trim((string) ($hotspotContext['popup'] ?? 'true')),
             'chap_id' => trim((string) ($hotspotContext['chap_id'] ?? '')),
             'chap_challenge' => trim((string) ($hotspotContext['chap_challenge'] ?? '')),
@@ -3250,6 +3250,27 @@ class CaptivePortalController extends Controller
         return $scheme . '://' . $parts['host'] . $port . $path
             . ($queryString !== '' ? '?' . $queryString : '')
             . $fragment;
+    }
+
+    /**
+     * @param  array<string, string>  $hotspotContext
+     */
+    private function resolveHotspotAutoLoginDestination(Payment $payment, array $hotspotContext): string
+    {
+        foreach ([
+            (string) ($hotspotContext['dst'] ?? ''),
+            (string) ($hotspotContext['link_orig_esc'] ?? ''),
+            (string) ($hotspotContext['link_orig'] ?? ''),
+            (string) ($payment->tenant?->captive_portal_redirect_url ?? ''),
+            'https://www.google.com',
+        ] as $candidate) {
+            $resolved = $this->normalizeContinueBrowsingCandidate($candidate, $payment, request());
+            if ($resolved !== null) {
+                return $resolved;
+            }
+        }
+
+        return 'https://www.google.com';
     }
 
     private function buildContinueBrowsingAutoLoginPayload(

@@ -33,7 +33,7 @@
     <meta name="color-scheme" content="light dark">
     <meta name="theme-color" media="(prefers-color-scheme: light)" content="{{ $accentColor }}">
     <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#020617">
-    @if(in_array($statusView, ['pending', 'paid']))
+    @if($statusView === 'pending')
         <meta http-equiv="refresh" content="10">
     @endif
     <title>Connection Status - {{ $brandTitle }}</title>
@@ -573,7 +573,7 @@
             return md5Hex(chapIdBinary + password + chapChallengeBinary);
         }
 
-        function hasRecentRadiusAutoLoginAttempt(windowMs = 8000) {
+        function hasRecentRadiusAutoLoginAttempt(windowMs = 60000) {
             try {
                 const lastAttemptAt = Number(sessionStorage.getItem(radiusAutoLoginKey) || 0);
                 return lastAttemptAt > 0 && (Date.now() - lastAttemptAt) < windowMs;

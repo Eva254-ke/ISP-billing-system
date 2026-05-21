@@ -51,4 +51,8 @@ return [
     ],
 
     'simultaneous_use' => max(1, (int) env('RADIUS_SIMULTANEOUS_USE', 1)),
+    'enforce_simultaneous_use' => env(
+        'RADIUS_ENFORCE_SIMULTANEOUS_USE',
+        !((bool) env('RADIUS_PURE_RADIUS', env('RADIUS_ENABLED', false)))
+    ),
 ];
