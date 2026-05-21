@@ -52,6 +52,8 @@ body.sidebar-collapse {
     border-bottom: 1px solid rgba(226, 232, 240, 0.96);
     box-shadow: 0 12px 30px rgba(15, 23, 42, 0.06);
     backdrop-filter: blur(14px);
+    border-radius: 0 !important;
+    z-index: 1020 !important;
 }
 
 body.sidebar-collapsed .main-header,
@@ -217,6 +219,7 @@ body.sidebar-collapse .main-header {
     box-shadow: none;
     border-right: none;
     overflow: hidden;
+    z-index: 1040 !important;
 }
 
 body.sidebar-collapsed .main-sidebar,
@@ -786,6 +789,8 @@ body.sidebar-collapse {
     border-bottom: 1px solid rgba(226, 232, 240, 0.96);
     box-shadow: 0 12px 30px rgba(15, 23, 42, 0.06);
     backdrop-filter: blur(14px);
+    border-radius: 0 !important;
+    z-index: 1020 !important;
 }
 
 body.sidebar-collapsed .main-header,
@@ -898,20 +903,43 @@ body.sidebar-collapse .main-header {
 }
 
 .navbar-user-menu .dropdown-menu {
-    min-width: 240px;
-    padding: 0.45rem;
-    border: 1px solid rgba(226, 232, 240, 0.96);
-    border-radius: 1rem;
-    box-shadow: 0 18px 40px rgba(15, 23, 42, 0.14);
+    min-width: 280px;
+    padding: 0.5rem;
+    margin-top: 0.6rem;
+    border: 1px solid rgba(203, 213, 225, 0.95);
+    border-radius: 8px;
+    background: #ffffff;
+    box-shadow: 0 18px 36px rgba(15, 23, 42, 0.16);
+    z-index: 1080 !important;
 }
 
 .navbar-user-menu .dropdown-item,
 .navbar-user-menu .dropdown-item-text {
-    border-radius: 0.8rem;
+    border-radius: 6px;
 }
 
 .navbar-user-menu .dropdown-item {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    gap: 0.45rem;
     padding: 0.7rem 0.85rem;
+    color: #0f172a;
+    font-weight: 500;
+    background: transparent;
+    border: 0;
+    text-align: left;
+}
+
+.navbar-user-menu .dropdown-item:hover,
+.navbar-user-menu .dropdown-item:focus {
+    color: #0f172a;
+    background: #f1f5f9;
+}
+
+.navbar-user-menu .dropdown-divider {
+    margin: 0.45rem 0;
+    border-top-color: #e2e8f0;
 }
 
 .navbar-user-menu__summary {
@@ -942,6 +970,7 @@ body.sidebar-collapse .main-header {
     box-shadow: none;
     border-right: 1px solid rgba(15, 23, 42, 0.24);
     overflow: hidden;
+    z-index: 1040 !important;
 }
 
 body.sidebar-collapsed .main-sidebar,
@@ -1550,9 +1579,92 @@ input[type="reset"].btn-outline-danger {
     position: relative !important;
 }
 
+.modal {
+    position: fixed !important;
+    z-index: 1060 !important;
+}
+
+.modal-dialog {
+    position: relative !important;
+    z-index: 1061 !important;
+}
+
+.modal-backdrop {
+    z-index: 1050 !important;
+}
+
+.dropdown-menu {
+    position: absolute !important;
+    z-index: 1080 !important;
+}
+
 /* Override any hidden states */
 .btn[style*="display: none"], .btn[style*="opacity: 0"], .btn.hidden {
     display: inline-flex !important;
     opacity: 1 !important;
     visibility: visible !important;
+}
+
+/* Keep table actions aligned and fully visible across admin pages. */
+.table-responsive {
+    overflow-x: auto !important;
+    overflow-y: visible !important;
+}
+
+.dataTables_wrapper,
+.dataTables_scroll,
+.dataTables_scrollHead,
+.dataTables_scrollBody {
+    overflow-x: auto !important;
+}
+
+.dataTables_scrollBody {
+    overflow-y: visible !important;
+}
+
+.table.data-table {
+    min-width: 1080px;
+}
+
+.table .action-col {
+    display: table-cell !important;
+    min-width: 136px !important;
+    width: 136px !important;
+    max-width: 136px !important;
+    white-space: nowrap !important;
+    text-align: right !important;
+    vertical-align: middle !important;
+}
+
+.table th.action-col {
+    text-align: right !important;
+}
+
+.table td.action-col {
+    overflow: visible !important;
+}
+
+.table .action-col .btn-group,
+.table td .btn-group {
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: flex-end !important;
+    flex-wrap: nowrap !important;
+    gap: 0.35rem !important;
+    white-space: nowrap !important;
+}
+
+.table .action-col .btn-group *,
+.table td .btn-group * {
+    display: inline-flex !important;
+}
+
+.table .action-col .btn,
+.table td .btn-group .btn {
+    width: 2.25rem !important;
+    min-width: 2.25rem !important;
+    height: 2.25rem !important;
+    padding: 0 !important;
+    align-items: center !important;
+    justify-content: center !important;
 }

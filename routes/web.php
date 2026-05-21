@@ -3,6 +3,7 @@
 use Illuminate\Support\Facades\Route;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Hash;
 use App\Http\Controllers\Admin\AdminPageController;
 use App\Models\Router;
 use App\Models\Package;
@@ -18,6 +19,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rules\File as ValidationFile;
+use Illuminate\Validation\Rules\Password as PasswordRule;
 
 /*
 |--------------------------------------------------------------------------
@@ -146,6 +148,26 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
     // Dashboard
     // ----------------------------------------------------------------------------
     Route::get('/dashboard', [AdminPageController::class, 'dashboard'])->name('dashboard');
+
+    Route::post('/account/password', function (Request $request) {
+        $user = Auth::user();
+        abort_unless($user, 403);
+
+        $validated = $request->validate([
+            'current_password' => ['required', 'string'],
+            'password' => ['required', 'confirmed', PasswordRule::min(8)],
+        ]);
+
+        if (!Hash::check((string) $validated['current_password'], (string) $user->password)) {
+            return back()
+                ->withErrors(['current_password' => 'The current password is incorrect.'])
+                ->withInput();
+        }
+
+        $user->updatePassword((string) $validated['password']);
+
+        return back()->with('success', 'Password updated successfully.');
+    })->name('account.password.update');
     
     // ----------------------------------------------------------------------------
     // Routers Management (MikroTik)

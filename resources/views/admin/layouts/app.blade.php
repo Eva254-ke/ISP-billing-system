@@ -13,7 +13,7 @@
 
     <!-- Vite Assets -->
     @include('partials.vite-assets', ['entries' => ['resources/css/app.css', 'resources/js/app.js']])
-    <link rel="stylesheet" href="{{ asset('css/admin-overrides.css') }}?v=20260521-1">
+    <link rel="stylesheet" href="{{ asset('css/admin-overrides.css') }}?v=20260521-6">
     <!-- Font Awesome CDN fallback (prevents missing icons showing as squares if local build assets fail) -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" crossorigin="anonymous" referrerpolicy="no-referrer">
     @stack('styles')
@@ -134,6 +134,10 @@
         body.cb-admin-shell .main-footer,
         body.cb-admin-shell .sidebar-panel {
             border-radius: var(--cb-radius-card) !important;
+        }
+
+        body.cb-admin-shell .main-header {
+            border-radius: 0 !important;
         }
 
         body.cb-admin-shell .btn,
@@ -685,6 +689,13 @@
                                 @endif
                             </div>
                             <div class="dropdown-divider"></div>
+                            <a href="{{ route('admin.settings.account') }}" class="dropdown-item">
+                                <i class="fas fa-user-cog me-2"></i> Account Settings
+                            </a>
+                            <button type="button" class="dropdown-item" data-bs-toggle="modal" data-bs-target="#changePasswordModal" data-toggle="modal" data-target="#changePasswordModal">
+                                <i class="fas fa-key me-2"></i> Change Password
+                            </button>
+                            <div class="dropdown-divider"></div>
                             <a href="{{ route('logout') }}" class="dropdown-item"
                                onclick="event.preventDefault(); document.getElementById('logout-form').submit();">
                                 <i class="fas fa-sign-out-alt me-2"></i> Logout
@@ -792,6 +803,40 @@
             </div>
         </aside>
 
+        <div class="modal fade" id="changePasswordModal" tabindex="-1" aria-labelledby="changePasswordModalLabel" aria-hidden="true">
+            <div class="modal-dialog modal-dialog-centered">
+                <div class="modal-content">
+                    <form method="POST" action="{{ route('admin.account.password.update') }}">
+                        @csrf
+                        <div class="modal-header">
+                            <h5 class="modal-title" id="changePasswordModalLabel">Change Password</h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal" data-dismiss="modal" aria-label="Close"></button>
+                        </div>
+                        <div class="modal-body">
+                            <div class="mb-3">
+                                <label class="form-label" for="current_password">Current Password</label>
+                                <input type="password" class="form-control" id="current_password" name="current_password" autocomplete="current-password" required>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label" for="new_password">New Password</label>
+                                <input type="password" class="form-control" id="new_password" name="password" autocomplete="new-password" minlength="8" required>
+                            </div>
+                            <div class="mb-0">
+                                <label class="form-label" for="new_password_confirmation">Confirm New Password</label>
+                                <input type="password" class="form-control" id="new_password_confirmation" name="password_confirmation" autocomplete="new-password" minlength="8" required>
+                            </div>
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal" data-dismiss="modal">Cancel</button>
+                            <button type="submit" class="btn btn-primary">
+                                <i class="fas fa-save me-1"></i> Update Password
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+
         <!-- Content Wrapper -->
         <div class="content-wrapper" id="contentWrapper">
             <!-- Content Header -->
@@ -818,6 +863,18 @@
                     @if(session('error'))
                         <div class="alert alert-danger alert-dismissible fade show" role="alert">
                             {{ session('error') }}
+                            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                        </div>
+                    @endif
+
+                    @if($errors->any())
+                        <div class="alert alert-danger alert-dismissible fade show" role="alert">
+                            <strong>Please check the highlighted fields.</strong>
+                            <ul class="mb-0 mt-2">
+                                @foreach($errors->all() as $error)
+                                    <li>{{ $error }}</li>
+                                @endforeach
+                            </ul>
                             <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
                         </div>
                     @endif
@@ -1007,6 +1064,10 @@
                     }
                 });
             }
+
+            @if($errors->has('current_password') || $errors->has('password'))
+                showModal(document.getElementById('changePasswordModal'));
+            @endif
         });
     </script>
 
