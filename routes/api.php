@@ -4,6 +4,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Log;
 use App\Jobs\ProcessMpesaCallback;
+use App\Models\Router as CloudBridgeRouter;
 use App\Http\Controllers\Api\MikroTik\RouterController;
 use App\Http\Controllers\Api\MikroTik\SessionController;
 use App\Http\Controllers\Api\PaymentController;
@@ -132,6 +133,61 @@ Route::post('/mpesa/callback/{tenant?}', function (Request $request, ?int $tenan
     ->whereNumber('tenant')
     ->name('api.mpesa.callback')
     ->withoutMiddleware(['auth:sanctum', 'web', 'throttle:api']);
+
+Route::post('/router-metrics/{router}', function (Request $request, CloudBridgeRouter $router) {
+    $providedToken = trim((string) ($request->bearerToken() ?: $request->header('X-Router-Token', $request->input('token', ''))));
+    $metadata = is_array($router->metadata) ? $router->metadata : [];
+    $expectedToken = trim((string) ($metadata['metrics_token'] ?? $router->radius_secret ?? ''));
+
+    if ($expectedToken === '' || !hash_equals($expectedToken, $providedToken)) {
+        Log::channel('security')->warning('Router metrics push rejected', [
+            'router_id' => $router->id,
+            'ip' => $request->ip(),
+        ]);
+
+        return response()->json(['success' => false, 'message' => 'Unauthorized'], 401);
+    }
+
+    $validated = $request->validate([
+        'cpu' => ['nullable', 'integer', 'min:0', 'max:100'],
+        'memory' => ['nullable', 'integer', 'min:0', 'max:100'],
+        'active_sessions' => ['nullable', 'integer', 'min:0', 'max:100000'],
+        'uptime_seconds' => ['nullable', 'integer', 'min:0'],
+    ]);
+
+    $updates = [
+        'status' => CloudBridgeRouter::STATUS_ONLINE,
+        'last_seen_at' => now(),
+        'last_sync_at' => now(),
+        'metadata' => array_merge($metadata, [
+            'metrics_source' => 'router_push',
+            'metrics_last_received_at' => now()->toIso8601String(),
+            'metrics_remote_ip' => $request->ip(),
+        ]),
+    ];
+
+    if (array_key_exists('cpu', $validated)) {
+        $updates['cpu_usage'] = (int) $validated['cpu'];
+    }
+
+    if (array_key_exists('memory', $validated)) {
+        $updates['memory_usage'] = (int) $validated['memory'];
+    }
+
+    if (array_key_exists('active_sessions', $validated)) {
+        $updates['active_sessions'] = (int) $validated['active_sessions'];
+    }
+
+    if (array_key_exists('uptime_seconds', $validated)) {
+        $updates['uptime_seconds'] = (int) $validated['uptime_seconds'];
+    }
+
+    $router->update($updates);
+
+    return response()->json(['success' => true]);
+})
+    ->withoutMiddleware(['auth:sanctum', 'web', 'throttle:api'])
+    ->name('api.router-metrics.push');
 
 // ──────────────────────────────────────────────────────────────────────────
 // PROTECTED API ROUTES (Require Laravel Sanctum Authentication)

@@ -67,6 +67,25 @@ class RouterHealthCheck extends Command
             $this->line("Checking: {$router->name} ({$router->ip_address})...");
 
             try {
+                if ((bool) config('radius.pure_radius', false) && $this->hasRecentRadiusActivity($router)) {
+                    $router->markOnline();
+                    $router->refresh();
+                    $online++;
+
+                    $cpuLabel = $router->cpu_usage === null ? 'N/A' : ((int) $router->cpu_usage) . '%';
+                    $memoryLabel = $router->memory_usage === null ? 'N/A' : ((int) $router->memory_usage) . '%';
+
+                    Log::channel('radius')->info('Router marked online from recent RADIUS accounting', [
+                        'router_id' => $router->id,
+                        'router' => $router->name,
+                        'ip' => $router->ip_address,
+                        'resource_source' => is_array($router->metadata) ? ($router->metadata['metrics_source'] ?? 'cached') : 'cached',
+                    ]);
+
+                    $this->info("   OK {$router->name} (RADIUS accounting, CPU: {$cpuLabel}, RAM: {$memoryLabel})");
+                    continue;
+                }
+
                 $isOnline = $this->mikrotikService->pingRouter($router);
                 $router->refresh();
 

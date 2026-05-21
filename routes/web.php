@@ -532,7 +532,9 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
                         default => 'hotspot',
                     };
 
-                    if ($live) {
+                    $useRouterApiForLiveStatus = $live && !(bool) config('radius.pure_radius', false);
+
+                    if ($useRouterApiForLiveStatus) {
                         $isOnline = $mikroTikService->pingRouter($router);
                         $router->refresh();
                         $status = (string) ($router->status ?? ($isOnline ? Router::STATUS_ONLINE : Router::STATUS_OFFLINE));
@@ -563,7 +565,33 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
                                 ]);
                             }
                         }
+                    } elseif ($live
+                        && (bool) config('radius.enabled', false)
+                        && ($router->radius_enabled || (bool) config('radius.pure_radius', false))
+                    ) {
+                        try {
+                            if ($radiusAccountingService->findRecentRouterActivity($router) !== null) {
+                                $router->markOnline();
+                                $router->refresh();
+                                $status = Router::STATUS_ONLINE;
+                                $isOnline = true;
+                            }
+                        } catch (\Throwable $e) {
+                            \Log::channel('radius')->warning('Admin router status RADIUS activity lookup failed', [
+                                'router_id' => $router->id,
+                                'router' => $router->name,
+                                'error' => $e->getMessage(),
+                            ]);
+                        }
                     }
+
+                    $metadata = is_array($router->metadata) ? $router->metadata : [];
+                    $resourceSource = match (true) {
+                        $cpu === null && $memory === null => 'unavailable',
+                        ($metadata['metrics_source'] ?? null) === 'router_push' => 'router_push',
+                        $useRouterApiForLiveStatus && $isOnline => 'router_api',
+                        default => 'cached',
+                    };
 
                     return [
                         'id' => $router->id,
@@ -575,7 +603,7 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
                         'users' => (int) ($router->active_sessions ?? 0),
                         'cpu' => $cpu,
                         'memory' => $memory,
-                        'resource_source' => ($cpu !== null || $memory !== null) ? ($isOnline ? 'router_api' : 'cached') : 'unavailable',
+                        'resource_source' => $resourceSource,
                         'last_seen_at' => $router->last_seen_at?->toIso8601String(),
                     ];
                 });
