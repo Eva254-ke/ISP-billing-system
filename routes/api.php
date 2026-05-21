@@ -134,7 +134,9 @@ Route::post('/mpesa/callback/{tenant?}', function (Request $request, ?int $tenan
     ->name('api.mpesa.callback')
     ->withoutMiddleware(['auth:sanctum', 'web', 'throttle:api']);
 
-Route::post('/router-metrics/{router}', function (Request $request, CloudBridgeRouter $router) {
+Route::match(['get', 'post'], '/router-metrics/{router}', function (Request $request, $router) {
+    $router = CloudBridgeRouter::query()->findOrFail($router);
+
     $providedToken = trim((string) ($request->bearerToken() ?: $request->header('X-Router-Token', $request->input('token', ''))));
     $metadata = is_array($router->metadata) ? $router->metadata : [];
     $expectedToken = trim((string) (
@@ -153,12 +155,24 @@ Route::post('/router-metrics/{router}', function (Request $request, CloudBridgeR
         return response()->json(['success' => false, 'message' => 'Unauthorized'], 401);
     }
 
-    $validated = $request->validate([
+    $metricInput = collect($request->only(['cpu', 'memory', 'active_sessions', 'uptime_seconds']))
+        ->filter(fn ($value) => $value !== null && $value !== '')
+        ->all();
+
+    if ($metricInput === []) {
+        return response()->json([
+            'success' => true,
+            'message' => 'Router metrics endpoint reachable',
+            'router_id' => $router->id,
+        ]);
+    }
+
+    $validated = validator($metricInput, [
         'cpu' => ['nullable', 'integer', 'min:0', 'max:100'],
         'memory' => ['nullable', 'integer', 'min:0', 'max:100'],
         'active_sessions' => ['nullable', 'integer', 'min:0', 'max:100000'],
         'uptime_seconds' => ['nullable', 'integer', 'min:0'],
-    ]);
+    ])->validate();
 
     $updates = [
         'status' => CloudBridgeRouter::STATUS_ONLINE,
