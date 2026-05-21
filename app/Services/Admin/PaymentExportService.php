@@ -75,14 +75,13 @@ class PaymentExportService
     public function csvRows(Collection $payments): array
     {
         $rows = [
-            ['date', 'phone', 'customer', 'package', 'amount', 'currency', 'status', 'receipt'],
+            ['date', 'phone', 'package', 'amount', 'currency', 'status', 'receipt'],
         ];
 
         foreach ($payments as $payment) {
             $rows[] = [
                 (string) $payment->created_at?->toDateTimeString(),
                 (string) ($payment->phone ?: $payment->mpesa_phone ?: ''),
-                $payment->display_customer_name,
                 (string) ($payment->package_name ?: $payment->package?->name ?: ''),
                 number_format((float) $payment->amount, 2, '.', ''),
                 (string) ($payment->currency ?: 'KES'),
@@ -102,7 +101,6 @@ class PaymentExportService
         $rows = $payments->map(function (Payment $payment): string {
             $date = $payment->created_at?->format('Y-m-d H:i') ?: '-';
             $phone = $payment->phone ?: $payment->mpesa_phone ?: '-';
-            $payer = $payment->display_customer_name;
             $package = $payment->package_name ?: $payment->package?->name ?: '-';
             $amount = ($payment->currency ?: 'KES') . ' ' . number_format((float) $payment->amount, 2);
             $status = ucfirst((string) ($payment->status ?: '-'));
@@ -111,7 +109,6 @@ class PaymentExportService
             return implode(' ', [
                 str_pad($this->truncate($date, 16), 16),
                 str_pad($this->truncate($phone, 13), 13),
-                str_pad($this->truncate($payer, 16), 16),
                 str_pad($this->truncate($package, 14), 14),
                 str_pad($this->truncate($amount, 12), 12),
                 str_pad($this->truncate($status, 10), 10),
@@ -138,7 +135,7 @@ class PaymentExportService
             ),
         ];
 
-        $tableHeader = 'DATE             PHONE         PAYER            PACKAGE        AMOUNT       STATUS     RECEIPT';
+        $tableHeader = 'DATE             PHONE         PACKAGE        AMOUNT       STATUS     RECEIPT';
         $divider = str_repeat('-', strlen($tableHeader));
 
         $chunks = [];
@@ -225,7 +222,6 @@ class PaymentExportService
             $query->where(function (Builder $inner) use ($search): void {
                 $inner->where('phone', 'like', '%' . $search . '%')
                     ->orWhere('mpesa_phone', 'like', '%' . $search . '%')
-                    ->orWhere('customer_name', 'like', '%' . $search . '%')
                     ->orWhere('reference', 'like', '%' . $search . '%')
                     ->orWhere('mpesa_receipt_number', 'like', '%' . $search . '%')
                     ->orWhere('mpesa_checkout_request_id', 'like', '%' . $search . '%')

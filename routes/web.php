@@ -1450,7 +1450,6 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
                     return [
                         'id' => $payment->id,
                         'phone' => $payment->phone ?: $payment->mpesa_phone,
-                        'customer_name' => $payment->display_customer_name,
                         'package_name' => $payment->package_name ?: $payment->package?->name,
                         'package_id' => $payment->package_id,
                         'amount' => (float) $payment->amount,
@@ -1496,7 +1495,6 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
                     'reference' => $reference,
                     'status' => strtolower((string) ($payment->status ?? 'unknown')),
                     'phone' => $payment->phone ?: $payment->mpesa_phone,
-                    'customer_name' => $payment->display_customer_name,
                     'package_name' => $payment->package_name ?: $payment->package?->name,
                     'amount' => (float) $payment->amount,
                     'currency' => $payment->currency ?: 'KES',

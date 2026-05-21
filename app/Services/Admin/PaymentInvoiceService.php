@@ -77,7 +77,7 @@ class PaymentInvoiceService
             'invoice_email' => (string) ($billing['invoice_email'] ?? ''),
             'invoice_footer_note' => (string) ($billing['invoice_footer_note'] ?? ''),
             'receipt_enabled' => (bool) ($billing['receipt_enabled'] ?? false),
-            'customer_name' => $payment->display_customer_name,
+            'customer_phone' => (string) ($payment->phone ?: $payment->mpesa_phone ?: ''),
             'line_description' => (string) ($payment->package_name ?: ($payment->package?->name ?: 'Internet access payment')),
             'reference' => (string) ($payment->mpesa_receipt_number ?: ($payment->mpesa_checkout_request_id ?: ($payment->reference ?: 'PAY-' . $payment->id))),
         ];

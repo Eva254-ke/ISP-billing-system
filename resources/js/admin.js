@@ -377,7 +377,6 @@ document.addEventListener('DOMContentLoaded', function () {
 
             return [
                 row.phone,
-                row.customer_name,
                 row.package_name,
                 row.reference,
                 row.mpesa_receipt_number,
@@ -654,7 +653,6 @@ document.addEventListener('DOMContentLoaded', function () {
                         <td></td>
                         <td></td>
                         <td></td>
-                        <td></td>
                     </tr>
                 `;
                 return;
@@ -669,7 +667,6 @@ document.addEventListener('DOMContentLoaded', function () {
                         <td><input type="checkbox" class="payment-checkbox" value="${row.id || index + 1}"></td>
                         <td><div><strong>${parts.date}</strong></div><small class="text-muted">${parts.time}</small></td>
                         <td><code>${escapeHtml(row.phone || '-')}</code></td>
-                        <td>${escapeHtml(row.customer_name || '-')}</td>
                         <td><span class="badge bg-secondary">${escapeHtml(row.package_name || 'Package')}</span></td>
                         <td><strong>${money(row.amount || 0)}</strong></td>
                         <td><code class="text-primary">${escapeHtml(reference)}</code></td>
@@ -903,7 +900,6 @@ document.addEventListener('DOMContentLoaded', function () {
                 document.getElementById('detailDateTime').textContent = formatDateTime(row.created_at || row.initiated_at);
                 document.getElementById('detailAmount').textContent = money(row.amount || 0);
                 document.getElementById('detailPhone').textContent = row.phone || '-';
-                document.getElementById('detailCustomer').textContent = row.customer_name || '-';
                 document.getElementById('detailPackage').textContent = row.package_name || '-';
                 document.getElementById('detailResponse').textContent = JSON.stringify(row.callback_payload || {}, null, 2);
                 document.getElementById('detailRouter').textContent = row.router_label || '-';

@@ -298,9 +298,9 @@
 
             <section class="invoice-grid">
                 <div class="invoice-panel">
-                    <div class="invoice-panel__label">Bill To</div>
-                    <div class="invoice-panel__value">{{ $invoice['customer_name'] }}</div>
-                    <div class="text-muted">{{ $invoicePayment->phone ?: 'Phone not captured' }}</div>
+                    <div class="invoice-panel__label">Paid By</div>
+                    <div class="invoice-panel__value">{{ $invoice['customer_phone'] ?: 'Phone not captured' }}</div>
+                    <div class="text-muted">M-Pesa payer name is not provided by Daraja STK callbacks.</div>
                 </div>
                 <div class="invoice-panel">
                     <div class="invoice-panel__label">Billing Address</div>

@@ -303,16 +303,6 @@ class Payment extends Model
             }
         }
 
-        $phoneLabel = $this->normalizeCustomerName($this->phone ?: $this->mpesa_phone);
-        if ($phoneLabel !== null) {
-            return $phoneLabel;
-        }
-
-        $sessionUsername = $this->normalizeCustomerName($this->session?->username);
-        if ($sessionUsername !== null) {
-            return $sessionUsername;
-        }
-
         return 'Not captured';
     }
 

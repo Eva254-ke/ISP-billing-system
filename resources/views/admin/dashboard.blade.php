@@ -132,6 +132,20 @@
         color: #6b7280;
         font-size: 0.75rem;
     }
+
+    .dashboard-recent-payments th,
+    .dashboard-recent-payments td {
+        white-space: nowrap;
+        vertical-align: middle;
+    }
+
+    .dashboard-recent-payments .badge {
+        display: inline-flex;
+        min-width: 72px;
+        justify-content: center;
+        padding: 0.42rem 0.55rem;
+        white-space: nowrap;
+    }
 </style>
 @endpush
 
@@ -342,11 +356,11 @@
                 </div>
             </div>
             <div class="card-body table-responsive p-0">
-                <table class="table table-hover table-striped mb-0">
+                <table class="table table-hover table-striped mb-0 dashboard-recent-payments">
                     <thead>
                         <tr>
                             <th>Time</th>
-                            <th>Payer</th>
+                            <th>Phone</th>
                             <th>Package</th>
                             <th>Amount</th>
                             <th>Status</th>
@@ -366,12 +380,7 @@
                             @endphp
                             <tr>
                                 <td>{{ optional($payment->created_at)->format('h:i A') ?? '-' }}</td>
-                                <td>
-                                    <span class="dashboard-table-name">{{ $payment->display_customer_name }}</span>
-                                    @if($paymentPhone !== '' && $paymentPhone !== $payment->display_customer_name)
-                                        <span class="dashboard-table-subtext">{{ $paymentPhone }}</span>
-                                    @endif
-                                </td>
+                                <td><span class="dashboard-table-name">{{ $paymentPhone !== '' ? $paymentPhone : '-' }}</span></td>
                                 <td>{{ $payment->package_name ?? optional($payment->package)->name ?? '-' }}</td>
                                 <td>KES {{ number_format((float) ($payment->amount ?? 0), 0) }}</td>
                                 <td><span class="badge {{ $statusClass }}">{{ ucfirst($status) }}</span></td>

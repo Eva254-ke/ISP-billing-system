@@ -13,7 +13,7 @@
 
     <!-- Vite Assets -->
     @include('partials.vite-assets', ['entries' => ['resources/css/app.css', 'resources/js/app.js']])
-    <link rel="stylesheet" href="{{ asset('css/admin-overrides.css') }}?v=20260507-2">
+    <link rel="stylesheet" href="{{ asset('css/admin-overrides.css') }}?v=20260521-1">
     <!-- Font Awesome CDN fallback (prevents missing icons showing as squares if local build assets fail) -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" crossorigin="anonymous" referrerpolicy="no-referrer">
     @stack('styles')

@@ -138,7 +138,7 @@
         <h3 class="card-title">Transaction History</h3>
         <div class="card-tools">
             <div class="input-group input-group-sm" style="width: 250px;">
-                <input type="text" class="form-control" id="paymentSearch" placeholder="Search by phone, payer, ref...">
+                <input type="text" class="form-control" id="paymentSearch" placeholder="Search by phone or M-Pesa ref...">
                 <button type="button" class="btn btn-outline-secondary" onclick="searchPayments()">
                     <i class="fas fa-search"></i>
                 </button>
@@ -152,7 +152,6 @@
                     <th><input type="checkbox" id="selectAll"></th>
                     <th>Date & Time</th>
                     <th>Phone Number</th>
-                    <th>Payer</th>
                     <th>Package</th>
                     <th>Amount (KES)</th>
                     <th>M-Pesa Ref</th>
@@ -179,8 +178,7 @@
                             <div><strong>{{ optional($payment->created_at)->format('Y-m-d') }}</strong></div>
                             <small class="text-muted">{{ optional($payment->created_at)->format('H:i:s') }}</small>
                         </td>
-                        <td><code>{{ $payment->phone ?? '-' }}</code></td>
-                        <td>{{ $payment->display_customer_name }}</td>
+                        <td><code>{{ $payment->phone ?: $payment->mpesa_phone ?: '-' }}</code></td>
                         <td><span class="badge bg-secondary">{{ $payment->package_name ?? optional($payment->package)->name ?? '-' }}</span></td>
                         <td><strong>KES {{ number_format((float) ($payment->amount ?? 0), 0) }}</strong></td>
                         <td><code class="text-primary">{{ $reference }}</code></td>
@@ -208,7 +206,6 @@
                 @empty
                     <tr>
                         <td class="text-center text-muted py-4">No payments available.</td>
-                        <td></td>
                         <td></td>
                         <td></td>
                         <td></td>
@@ -288,13 +285,9 @@
                 </div>
                 
                 <div class="row mb-3">
-                    <div class="col-6">
+                    <div class="col-12">
                         <label class="form-label text-muted">Phone Number</label>
                         <p class="mb-0" id="detailPhone">-</p>
-                    </div>
-                    <div class="col-6">
-                        <label class="form-label text-muted">Payer Name</label>
-                        <p class="mb-0" id="detailCustomer">-</p>
                     </div>
                 </div>
                 
