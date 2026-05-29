@@ -2734,8 +2734,11 @@ class CaptivePortalController extends Controller
         $sessionMetadata = is_array($session->metadata) ? $session->metadata : [];
         $existingRadiusMetadata = is_array($sessionMetadata['radius'] ?? null) ? $sessionMetadata['radius'] : [];
         $radiusProvisioning = app(FreeRadiusProvisioningService::class);
+        $provisionedUntil = $this->parseFlexibleDateTime($existingRadiusMetadata['expires_at'] ?? null);
         $radiusProvisioned = (bool) ($existingRadiusMetadata['provisioned'] ?? false)
             && (string) ($existingRadiusMetadata['username'] ?? '') === $username
+            && $provisionedUntil !== null
+            && !$provisionedUntil->lt($expiresAt)
             && $expiresAt->isFuture()
             && !$radiusProvisioning->profileNeedsRefresh(
                 username: $username,
@@ -2801,10 +2804,10 @@ class CaptivePortalController extends Controller
                 ? (array) $session->metadata['activation']
                 : [];
 
-            if (
-                (bool) ($existingActivationMetadata['waiting_for_hotspot_login'] ?? false)
-                && (string) ($existingActivationMetadata['method'] ?? '') === 'radius_hotspot_login'
-            ) {
+            $alreadyAwaitingRadiusLogin = (bool) ($existingActivationMetadata['waiting_for_hotspot_login'] ?? false)
+                || (bool) ($existingActivationMetadata['waiting_for_reauth'] ?? false);
+
+            if ($alreadyAwaitingRadiusLogin) {
                 if ($this->hasFreshPendingRadiusAuthorization($session, $payment)) {
                     return $session->fresh() ?? $session;
                 }
