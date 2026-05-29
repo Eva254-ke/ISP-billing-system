@@ -2446,6 +2446,14 @@ class CaptivePortalController extends Controller
         $paymentClientContext = is_array($paymentMetadata['client_context'] ?? null) ? $paymentMetadata['client_context'] : [];
         $existingSession = $reusedExtensionSession
             ?? UserSession::query()->where('payment_id', $payment->id)->latest('id')->first();
+        if (
+            $existingSession
+            && $existingSession->terminated_at instanceof Carbon
+            && str_starts_with((string) $existingSession->termination_reason, 'expired')
+        ) {
+            return $existingSession->fresh() ?? $existingSession;
+        }
+
         $clientMac = $this->normalizeMacAddress((string) ($paymentClientContext['mac'] ?? ''))
             ?? $this->normalizeMacAddress((string) ($existingSession?->mac_address ?? ''));
         $clientIp = $this->normalizeClientIpAddress((string) ($paymentClientContext['ip'] ?? ''))
@@ -2734,12 +2742,13 @@ class CaptivePortalController extends Controller
         $sessionMetadata = is_array($session->metadata) ? $session->metadata : [];
         $existingRadiusMetadata = is_array($sessionMetadata['radius'] ?? null) ? $sessionMetadata['radius'] : [];
         $radiusProvisioning = app(FreeRadiusProvisioningService::class);
+        $radiusAccessExpiresAt = $this->resolveRadiusAccessExpiresAt($payment, $session, $defaultExpiresAt);
         $provisionedUntil = $this->parseFlexibleDateTime($existingRadiusMetadata['expires_at'] ?? null);
         $radiusProvisioned = (bool) ($existingRadiusMetadata['provisioned'] ?? false)
             && (string) ($existingRadiusMetadata['username'] ?? '') === $username
             && $provisionedUntil !== null
-            && !$provisionedUntil->lt($expiresAt)
-            && $expiresAt->isFuture()
+            && !$provisionedUntil->lt($radiusAccessExpiresAt)
+            && $radiusAccessExpiresAt->isFuture()
             && !$radiusProvisioning->profileNeedsRefresh(
                 username: $username,
                 callingStationId: $session->mac_address ?? $clientMac
@@ -2751,7 +2760,7 @@ class CaptivePortalController extends Controller
                     username: $username,
                     password: $password,
                     package: $payment->package,
-                    expiresAt: $expiresAt,
+                    expiresAt: $radiusAccessExpiresAt,
                     callingStationId: $session->mac_address ?? $clientMac
                 );
 
@@ -2759,7 +2768,7 @@ class CaptivePortalController extends Controller
                         'provisioned' => true,
                         'username' => $username,
                         'provisioned_at' => now()->toIso8601String(),
-                        'expires_at' => $expiresAt->toIso8601String(),
+                        'expires_at' => $radiusAccessExpiresAt->toIso8601String(),
                         'auth_hint' => 'password_equals_username',
                         'identity_type' => $identity['identity_type'],
                         'access_mode' => $identity['access_mode'],
@@ -4322,6 +4331,18 @@ class CaptivePortalController extends Controller
     private function resolvePaymentAccessExpiresAt(Payment $payment, ?UserSession $session = null): ?Carbon
     {
         if ($session) {
+            if (
+                in_array((string) $session->status, ['expired', 'terminated'], true)
+                || (
+                    $session->terminated_at instanceof Carbon
+                    && str_starts_with((string) $session->termination_reason, 'expired')
+                )
+            ) {
+                return $session->terminated_at instanceof Carbon
+                    ? $session->terminated_at->copy()
+                    : now()->copy()->subSecond();
+            }
+
             if ($this->sessionAwaitsRadiusLogin($session)) {
                 return $this->resolvePendingRadiusAuthorizationExpiresAt($payment, $session);
             }
@@ -4350,6 +4371,29 @@ class CaptivePortalController extends Controller
         }
 
         return null;
+    }
+
+    private function resolveRadiusAccessExpiresAt(Payment $payment, ?UserSession $session, Carbon $fallback): Carbon
+    {
+        if ($session && !$this->sessionAwaitsRadiusLogin($session) && $session->expires_at instanceof Carbon) {
+            return $session->expires_at->copy();
+        }
+
+        $durationMinutes = max(1, (int) ($payment->package?->duration_in_minutes ?? 0));
+
+        foreach ([
+            $payment->activated_at,
+            $payment->completed_at,
+            $payment->confirmed_at,
+            $payment->initiated_at,
+            $payment->created_at,
+        ] as $baseTime) {
+            if ($baseTime instanceof Carbon) {
+                return $baseTime->copy()->addMinutes($durationMinutes);
+            }
+        }
+
+        return $fallback->copy();
     }
 
     private function shouldRedirectToPackagesAfterExpiry(Payment $payment, ?UserSession $session = null): bool
