@@ -232,7 +232,9 @@ class CheckExpiringSessions extends Command
     private function shouldSendExpiryWarning(UserSession $session): bool
     {
         $metadata = is_array($session->metadata) ? $session->metadata : [];
-        $lastWarningAt = $metadata['last_expiry_warning_at'] ?? null;
+        $lastWarningAt = $metadata['last_expiry_warning_at']
+            ?? $metadata['last_expiry_warning_attempt_at']
+            ?? null;
 
         if ($lastWarningAt === null) {
             return true;
@@ -271,6 +273,8 @@ class CheckExpiringSessions extends Command
             'minutes' => $minutesRemaining,
         ]);
 
+        $this->recordExpiryWarningAttempt($session);
+
         $sent = $this->whatsappService->sendSessionExpiryWarning(
             $session->phone,
             $minutesRemaining,
@@ -287,6 +291,7 @@ class CheckExpiringSessions extends Command
 
     private function recordExpiryWarningSent(UserSession $session): void
     {
+        $session->refresh();
         $metadata = is_array($session->metadata) ? $session->metadata : [];
         $metadata['last_expiry_warning_at'] = now()->toIso8601String();
         $metadata['expiry_warning_count'] = ($metadata['expiry_warning_count'] ?? 0) + 1;
@@ -295,6 +300,21 @@ class CheckExpiringSessions extends Command
             $session->update(['metadata' => $metadata]);
         } catch (\Throwable $e) {
             Log::channel('notification')->warning('Failed to persist expiry warning metadata', [
+                'session_id' => $session->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    private function recordExpiryWarningAttempt(UserSession $session): void
+    {
+        $metadata = is_array($session->metadata) ? $session->metadata : [];
+        $metadata['last_expiry_warning_attempt_at'] = now()->toIso8601String();
+
+        try {
+            $session->update(['metadata' => $metadata]);
+        } catch (\Throwable $e) {
+            Log::channel('notification')->warning('Failed to persist expiry warning attempt metadata', [
                 'session_id' => $session->id,
                 'error' => $e->getMessage(),
             ]);

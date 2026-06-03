@@ -66,22 +66,17 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | WhatsApp Cloud API (Meta)
+    | WhatsApp Notifications
     |--------------------------------------------------------------------------
     |
-    | Direct Meta WhatsApp Business API for proactive notifications.
-    | Requires approved message templates for alerts sent outside the
-    | 24-hour customer-service window.
-    |
-    | Create templates in Meta Business Manager with these names:
-    |   - router_offline_alert  (params: router_name, location, time)
-    |   - router_online_alert   (params: router_name, location, time)
-    |   - session_expiry_warning (params: minutes, username, brand)
+    | Use ChatKazi for WhatsApp alerts by setting WHATSAPP_PROVIDER=chatkazi.
+    | ChatKazi sends text messages from a connected WhatsApp session.
     |
     */
 
     'whatsapp' => [
         'enabled' => env('WHATSAPP_ENABLED', false),
+        'provider' => env('WHATSAPP_PROVIDER', 'chatkazi'),
         'access_token' => env('WHATSAPP_ACCESS_TOKEN'),
         'phone_number_id' => env('WHATSAPP_PHONE_NUMBER_ID'),
         'api_version' => env('WHATSAPP_API_VERSION', 'v18.0'),
@@ -90,6 +85,15 @@ return [
             'router_online' => env('WHATSAPP_TEMPLATE_ROUTER_ONLINE', 'router_online_alert'),
             'session_expiry' => env('WHATSAPP_TEMPLATE_SESSION_EXPIRY', 'session_expiry_warning'),
         ],
+    ],
+
+    'chatkazi' => [
+        'enabled' => env('CHATKAZI_ENABLED', env('WHATSAPP_ENABLED', false)),
+        'base_url' => rtrim(env('CHATKAZI_BASE_URL', 'https://api.chatkazi.app/api/v1'), '/'),
+        'api_key' => env('CHATKAZI_API_KEY'),
+        'session_id' => env('CHATKAZI_SESSION_ID', 'default'),
+        'timeout' => (int) env('CHATKAZI_TIMEOUT', 15),
+        'connect_timeout' => (int) env('CHATKAZI_CONNECT_TIMEOUT', 5),
     ],
 
     /*

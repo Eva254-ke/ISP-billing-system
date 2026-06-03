@@ -6,40 +6,25 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
 /**
- * WhatsApp Cloud API (Meta) notification service.
+ * WhatsApp notification service.
  *
- * Requires:
- *   - Meta Business account
- *   - WhatsApp Business account
- *   - Verified phone number
- *   - Permanent access token
- *
- * For proactive notifications (router alerts, session expiry), you must use
- * approved message templates. Free-form text only works within the 24-hour
- * customer-service window.
- *
- * Create templates in the Meta Business Manager with these exact names:
- *   - router_offline_alert
- *   - router_online_alert
- *   - session_expiry_warning
- *
- * Template variables:
- *   - router_offline_alert: {{1}}=router_name, {{2}}=location, {{3}}=time
- *   - router_online_alert:  {{1}}=router_name, {{2}}=location, {{3}}=time
- *   - session_expiry_warning: {{1}}=minutes, {{2}}=username, {{3}}=brand
+ * ChatKazi is the default provider. The Meta Cloud API path is kept for
+ * backwards compatibility when WHATSAPP_PROVIDER=meta.
  */
 class WhatsAppNotificationService
 {
-    private const API_BASE = 'https://graph.facebook.com';
+    private const META_API_BASE = 'https://graph.facebook.com';
 
     private ?string $accessToken;
     private ?string $phoneNumberId;
     private ?string $apiVersion;
     private bool $enabled;
+    private string $provider;
 
     public function __construct()
     {
         $this->enabled = (bool) config('services.whatsapp.enabled', false);
+        $this->provider = strtolower((string) config('services.whatsapp.provider', 'chatkazi'));
         $this->accessToken = config('services.whatsapp.access_token');
         $this->phoneNumberId = config('services.whatsapp.phone_number_id');
         $this->apiVersion = config('services.whatsapp.api_version', 'v18.0');
@@ -89,6 +74,10 @@ class WhatsAppNotificationService
      */
     public function sendText(string $to, string $message, ?string $previewUrl = null): bool
     {
+        if ($this->provider === 'chatkazi') {
+            return $this->sendChatKaziText($to, $message);
+        }
+
         if (!$this->canSend()) {
             Log::channel('notification')->debug('WhatsApp not configured or disabled', [
                 'to' => $to,
@@ -122,6 +111,18 @@ class WhatsAppNotificationService
      */
     public function sendRouterOfflineAlert(string $adminPhone, string $routerName, ?string $location = null): bool
     {
+        if ($this->provider === 'chatkazi') {
+            return $this->sendText(
+                $adminPhone,
+                sprintf(
+                    "CloudBridge alert: router '%s'%s is offline as of %s.",
+                    $routerName,
+                    $location ? " ({$location})" : '',
+                    now()->format('Y-m-d H:i')
+                )
+            );
+        }
+
         $template = config('services.whatsapp.templates.router_offline', 'router_offline_alert');
 
         return $this->sendTemplate(
@@ -146,6 +147,18 @@ class WhatsAppNotificationService
      */
     public function sendRouterOnlineAlert(string $adminPhone, string $routerName, ?string $location = null): bool
     {
+        if ($this->provider === 'chatkazi') {
+            return $this->sendText(
+                $adminPhone,
+                sprintf(
+                    "CloudBridge alert: router '%s'%s is back online as of %s.",
+                    $routerName,
+                    $location ? " ({$location})" : '',
+                    now()->format('Y-m-d H:i')
+                )
+            );
+        }
+
         $template = config('services.whatsapp.templates.router_online', 'router_online_alert');
 
         return $this->sendTemplate(
@@ -174,6 +187,21 @@ class WhatsAppNotificationService
         string $username,
         string $brand = 'WiFi'
     ): bool {
+        if ($this->provider === 'chatkazi') {
+            $minutes = max(0, $minutesRemaining);
+
+            return $this->sendText(
+                $userPhone,
+                sprintf(
+                    '%s reminder: your WiFi session for %s expires in %d minute%s. Please renew to stay connected.',
+                    $brand,
+                    $username,
+                    $minutes,
+                    $minutes === 1 ? '' : 's'
+                )
+            );
+        }
+
         $template = config('services.whatsapp.templates.session_expiry', 'session_expiry_warning');
 
         return $this->sendTemplate(
@@ -203,6 +231,12 @@ class WhatsAppNotificationService
 
     private function canSend(): bool
     {
+        if ($this->provider === 'chatkazi') {
+            return (bool) config('services.chatkazi.enabled', $this->enabled)
+                && filled(config('services.chatkazi.base_url'))
+                && filled(config('services.chatkazi.api_key'));
+        }
+
         return $this->enabled
             && $this->accessToken !== null
             && $this->accessToken !== ''
@@ -227,14 +261,18 @@ class WhatsAppNotificationService
             return null;
         }
 
+        if (str_starts_with($normalized, '0') && strlen($normalized) === 10) {
+            $normalized = '254'.substr($normalized, 1);
+        }
+
         return $normalized;
     }
 
-    private function buildUrl(): string
+    private function buildMetaUrl(): string
     {
         return sprintf(
             '%s/%s/%s/messages',
-            self::API_BASE,
+            self::META_API_BASE,
             $this->apiVersion,
             $this->phoneNumberId
         );
@@ -242,7 +280,7 @@ class WhatsAppNotificationService
 
     private function dispatch(array $payload, string $to, string $context): bool
     {
-        $url = $this->buildUrl();
+        $url = $this->buildMetaUrl();
 
         try {
             $response = Http::withToken($this->accessToken, 'Bearer')
@@ -280,6 +318,75 @@ class WhatsAppNotificationService
             Log::channel('notification')->error('WhatsApp request exception', [
                 'to' => $to,
                 'context' => $context,
+                'error' => $e->getMessage(),
+            ]);
+
+            return false;
+        }
+    }
+
+    private function sendChatKaziText(string $to, string $message): bool
+    {
+        $originalTo = $to;
+
+        if (!$this->canSend()) {
+            Log::channel('notification')->debug('ChatKazi not configured or disabled', [
+                'to' => $to,
+            ]);
+
+            return false;
+        }
+
+        $to = $this->normalizePhone($to);
+
+        if ($to === null) {
+            Log::channel('notification')->warning('ChatKazi recipient phone is invalid', [
+                'to' => $originalTo,
+            ]);
+
+            return false;
+        }
+
+        $baseUrl = rtrim((string) config('services.chatkazi.base_url'), '/');
+        $apiKey = (string) config('services.chatkazi.api_key');
+        $sessionId = (string) config('services.chatkazi.session_id', 'default');
+
+        try {
+            $response = Http::timeout((int) config('services.chatkazi.timeout', 15))
+                ->connectTimeout((int) config('services.chatkazi.connect_timeout', 5))
+                ->withHeaders([
+                    'Accept' => 'application/json',
+                    'Content-Type' => 'application/json',
+                    'x-api-key' => $apiKey,
+                ])
+                ->post("{$baseUrl}/messages/text", [
+                    'sessionId' => $sessionId ?: 'default',
+                    'to' => $to,
+                    'text' => $message,
+                ]);
+
+            if ($response->successful()) {
+                Log::channel('notification')->info('ChatKazi message sent', [
+                    'to' => $to,
+                    'session_id' => $sessionId ?: 'default',
+                    'message_id' => $response->json('data.key.id'),
+                ]);
+
+                return true;
+            }
+
+            Log::channel('notification')->error('ChatKazi message failed', [
+                'to' => $to,
+                'status' => $response->status(),
+                'message' => $response->json('message'),
+                'error' => $response->json('error'),
+                'response' => $response->body(),
+            ]);
+
+            return false;
+        } catch (\Throwable $e) {
+            Log::channel('notification')->error('ChatKazi request exception', [
+                'to' => $to,
                 'error' => $e->getMessage(),
             ]);
 

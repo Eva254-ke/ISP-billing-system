@@ -232,6 +232,8 @@ class RouterHealthCheck extends Command
             return;
         }
 
+        $this->recordAlertAttempt($router, 'offline');
+
         $sent = $this->whatsappService->sendRouterOfflineAlert(
             $adminPhone,
             $router->name,
@@ -291,6 +293,7 @@ class RouterHealthCheck extends Command
 
     private function recordAlertSent(Router $router, string $type): void
     {
+        $router->refresh();
         $metadata = is_array($router->metadata) ? $router->metadata : [];
 
         if ($type === 'offline') {
@@ -306,6 +309,25 @@ class RouterHealthCheck extends Command
             $router->update(['metadata' => $metadata]);
         } catch (\Throwable $e) {
             Log::channel('notification')->warning('Failed to persist router alert metadata', [
+                'router_id' => $router->id,
+                'type' => $type,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    private function recordAlertAttempt(Router $router, string $type): void
+    {
+        $metadata = is_array($router->metadata) ? $router->metadata : [];
+
+        if ($type === 'offline') {
+            $metadata['last_offline_alert_at'] = now()->toIso8601String();
+        }
+
+        try {
+            $router->update(['metadata' => $metadata]);
+        } catch (\Throwable $e) {
+            Log::channel('notification')->warning('Failed to persist router alert attempt metadata', [
                 'router_id' => $router->id,
                 'type' => $type,
                 'error' => $e->getMessage(),
