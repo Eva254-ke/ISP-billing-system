@@ -251,10 +251,6 @@ class CheckExpiringSessions extends Command
             return true;
         }
 
-        $this->warn("   WhatsApp expiry warning failed for: {$session->phone}");
-
-        return false;
-
         try {
             $lastWarning = \Illuminate\Support\Carbon::parse($lastWarningAt);
             // Only warn once per 20-minute window to avoid spam

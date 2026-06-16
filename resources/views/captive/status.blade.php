@@ -371,7 +371,7 @@
             @endif
         </article>
 
-        @if($shouldAutoPoll || $radiusAutoLogin || $continueBrowsingAutoLogin)
+        @if($shouldAutoPoll || $radiusAutoLogin || $continueBrowsingAutoLogin || $statusView === 'activated')
             <form id="cpRadiusAutoLoginForm" method="POST" @if($formRadiusAutoLogin) action="{{ $formRadiusAutoLogin['action'] }}" @endif target="cpRadiusAutoLoginFrame" hidden>
                 @if($formRadiusAutoLogin)
                     <input type="hidden" name="username" value="{{ $formRadiusAutoLogin['username'] }}">
@@ -398,7 +398,7 @@
     </main>
 
     <script>
-        @if($shouldAutoPoll || $radiusAutoLogin || $continueBrowsingAutoLogin)
+        @if($shouldAutoPoll || $radiusAutoLogin || $continueBrowsingAutoLogin || $statusView === 'activated')
         let radiusAutoLogin = @json($radiusAutoLogin);
         let continueBrowsingAutoLogin = @json($continueBrowsingAutoLogin);
         const continueBrowsingUrl = @json($continueBrowsingUrl);
@@ -713,10 +713,22 @@
             }
         });
 
-        if (@json($shouldAutoPoll) && radiusAutoLogin && !hasRecentRadiusAutoLoginAttempt()) {
+        if (radiusAutoLogin && !hasRecentRadiusAutoLoginAttempt()) {
             setTimeout(() => {
                 submitRadiusAutoLogin();
             }, 150);
+        }
+
+        if (@json($statusView === 'activated')) {
+            setTimeout(() => {
+                if (continueBrowsingAutoLogin && submitRadiusAutoLogin(continueBrowsingAutoLogin)) {
+                    return;
+                }
+
+                if (continueBrowsingUrl) {
+                    window.location.replace(continueBrowsingUrl);
+                }
+            }, 450);
         }
         @endif
 

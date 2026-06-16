@@ -1149,11 +1149,7 @@ class CaptivePortalController extends Controller
                     );
 
                     if ($activeSession) {
-                        return redirect()->route('wifi.packages', $this->buildPackagesRouteParameters(
-                            phone: $phone,
-                            payment: $payment,
-                            tenantId: (int) $payment->tenant_id
-                        ));
+                        $payment = $payment->fresh() ?? $payment;
                     }
                 }
             } catch (\Exception $e) {
