@@ -10,6 +10,7 @@ use App\Services\Notifications\WhatsAppNotificationService;
 use App\Jobs\SyncSessionUsage;
 use App\Jobs\DisconnectSession;
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 
 class CheckExpiringSessions extends Command
@@ -63,15 +64,19 @@ class CheckExpiringSessions extends Command
         foreach ($expiring as $session) {
             $this->refreshRadiusTimingBeforeExpiryDecision($session);
             $session->refresh();
-            $minutesRemaining = now()->diffInMinutes($session->expires_at, false);
+            $secondsRemaining = $session->expires_at
+                ? now()->diffInSeconds($session->expires_at, false)
+                : 0;
+            $minutesRemaining = (int) ceil(max(0, $secondsRemaining) / 60);
 
             // ──────────────────────────────────────────────────────────────
             // EDGE CASE: Send warning at T-10 minutes (deduplicated)
             // ──────────────────────────────────────────────────────────────
             if ($minutesRemaining <= 10 && $minutesRemaining > 0 && !$session->grace_period_active) {
                 if ($this->shouldSendExpiryWarning($session)) {
-                    $this->sendExpiryWarning($session, $minutesRemaining);
-                    $warningsSent++;
+                    if ($this->sendExpiryWarning($session, $minutesRemaining)) {
+                        $warningsSent++;
+                    }
                 }
             }
 
@@ -236,9 +241,19 @@ class CheckExpiringSessions extends Command
             ?? $metadata['last_expiry_warning_attempt_at']
             ?? null;
 
+        $cacheKey = $this->expiryWarningCacheKey($session);
+
+        if (Cache::has($cacheKey)) {
+            return false;
+        }
+
         if ($lastWarningAt === null) {
             return true;
         }
+
+        $this->warn("   WhatsApp expiry warning failed for: {$session->phone}");
+
+        return false;
 
         try {
             $lastWarning = \Illuminate\Support\Carbon::parse($lastWarningAt);
@@ -256,13 +271,13 @@ class CheckExpiringSessions extends Command
     /**
      * Send expiry warning via WhatsApp to user
      */
-    private function sendExpiryWarning(UserSession $session, int $minutesRemaining): void
+    private function sendExpiryWarning(UserSession $session, int $minutesRemaining): bool
     {
         if (!$session->phone) {
             Log::channel('notification')->debug('No phone number for warning', [
                 'session_id' => $session->id,
             ]);
-            return;
+            return false;
         }
 
         $brand = $session->tenant?->name ?? 'WiFi';
@@ -284,6 +299,9 @@ class CheckExpiringSessions extends Command
 
         if ($sent) {
             $this->recordExpiryWarningSent($session);
+            $this->line("   WhatsApp expiry warning sent to: {$session->phone}");
+
+            return true;
         }
 
         $this->line("   📱 WhatsApp expiry warning sent to: {$session->phone}");
@@ -310,6 +328,7 @@ class CheckExpiringSessions extends Command
     {
         $metadata = is_array($session->metadata) ? $session->metadata : [];
         $metadata['last_expiry_warning_attempt_at'] = now()->toIso8601String();
+        Cache::put($this->expiryWarningCacheKey($session), true, now()->addMinutes(20));
 
         try {
             $session->update(['metadata' => $metadata]);
@@ -319,5 +338,12 @@ class CheckExpiringSessions extends Command
                 'error' => $e->getMessage(),
             ]);
         }
+    }
+
+    private function expiryWarningCacheKey(UserSession $session): string
+    {
+        $expiresAt = $session->expires_at?->timestamp ?? 'none';
+
+        return "session-expiry-warning:{$session->id}:{$expiresAt}";
     }
 }

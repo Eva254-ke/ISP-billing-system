@@ -57,7 +57,7 @@ class CaptivePortalController extends Controller
             ? ($this->normalizePhoneForStorage((string) $phoneInput) ?? trim((string) $phoneInput))
             : null;
         $clientContext = $this->resolveClientContext($request);
-        $hotspotContext = $this->captureHotspotContext($request, (int) $tenant->id);
+        $hotspotContext = $this->captureHotspotContext($request, $tenant ? (int) $tenant->id : null);
         $clientMac = $clientContext['mac'];
         $clientIp = $clientContext['ip'];
 
@@ -85,34 +85,24 @@ class CaptivePortalController extends Controller
             allowPhoneOnlyFallback: false
         );
 
-        // IMMEDIATE REDIRECT: If active session found, redirect immediately
         if ($activeSession) {
-            Log::channel('captive')->info('Active session found - immediate redirect', [
+            session([
+                'captive_tenant_id' => $tenant->id,
+                'captive_payment_id' => $activeSession->payment_id ?? null,
+            ]);
+
+            if (!empty($activeSession->phone)) {
+                $phone = (string) $activeSession->phone;
+                session(['captive_phone' => $phone]);
+            }
+
+            Log::channel('captive')->info('Active session found on packages page; rendering portal instead of redirecting', [
                 'session_id' => $activeSession->id,
                 'phone' => $activeSession->phone,
                 'mac' => $clientMac,
                 'ip' => $clientIp,
                 'expires_at' => $activeSession->expires_at,
             ]);
-
-            $activePayment = $activeSession->payment()->first();
-            if (
-                $activePayment
-                && (bool) config('radius.enabled', false)
-                && $this->requestHasHotspotLoginChallenge($request, (int) $tenant->id)
-            ) {
-                $radiusLoginUrl = $this->buildDirectRadiusAutoLoginUrl($activePayment, $activeSession);
-                if ($radiusLoginUrl !== null) {
-                    return redirect()->away($radiusLoginUrl);
-                }
-
-                // If no RADIUS auto-login URL (e.g. CHAP challenge), fall through to
-                // normal continue-browsing redirect to avoid a packages->status loop.
-            }
-
-            $continueBrowsingUrl = $this->resolveContinueBrowsingUrl($activePayment, $request);
-
-            return redirect($continueBrowsingUrl);
         }
 
         // Log session detection for debugging
@@ -126,58 +116,6 @@ class CaptivePortalController extends Controller
             'session_status' => $activeSession?->status,
             'session_expires_at' => $activeSession?->expires_at,
         ]);
-
-        if ($activeSession && !$phone && !empty($activeSession->phone)) {
-            $phone = (string) $activeSession->phone;
-            session(['captive_phone' => $phone]);
-        }
-
-        // If active session found, automatically redirect to continue browsing
-        if ($activeSession) {
-            // Set session data immediately
-            session([
-                'captive_tenant_id' => $tenant->id,
-                'captive_payment_id' => $activeSession->payment_id ?? null,
-            ]);
-
-            if (!empty($activeSession->phone)) {
-                session(['captive_phone' => (string) $activeSession->phone]);
-            }
-
-            // Verify session is still active and redirect immediately
-            $verifiedSession = $this->resolveVerifiedActiveSession($activeSession);
-            if ($verifiedSession) {
-                $activePayment = $verifiedSession->payment()->first();
-                if ($activePayment) {
-                    $continueBrowsingUrl = $this->resolveContinueBrowsingUrl($activePayment, $request);
-                    
-                    Log::channel('captive')->info('Active session auto-redirected', [
-                        'session_id' => $activeSession->id,
-                        'phone' => $activeSession->phone,
-                        'redirect_url' => $continueBrowsingUrl,
-                    ]);
-                    
-                    return redirect($continueBrowsingUrl);
-                }
-                
-                // Even without payment, redirect to continue browsing
-                $continueBrowsingUrl = $this->resolveContinueBrowsingUrl(null, $request);
-                return redirect($continueBrowsingUrl);
-            }
-            
-            // If verification fails but session exists, still try to redirect
-            Log::channel('captive')->warning('Session verification failed, attempting redirect anyway', [
-                'session_id' => $activeSession->id,
-                'status' => $activeSession->status,
-                'expires_at' => $activeSession->expires_at,
-            ]);
-            
-            $activePayment = $activeSession->payment()->first();
-            if ($activePayment) {
-                $continueBrowsingUrl = $this->resolveContinueBrowsingUrl($activePayment, $request);
-                return redirect($continueBrowsingUrl);
-            }
-        }
 
         if (!$activeSession) {
             $resumablePayment = $this->resolvePackagesResumablePayment(
@@ -209,14 +147,12 @@ class CaptivePortalController extends Controller
                             $clientContext['ip'] ?? null
                         );
 
-                        if ($activeSession) {
-                            $continueBrowsingUrl = $this->resolveContinueBrowsingUrl($resumablePayment, $request);
-                            return redirect($continueBrowsingUrl);
-                        }
-
-                        $radiusLoginUrl = $this->buildDirectRadiusAutoLoginUrl($resumablePayment);
-                        if ($radiusLoginUrl !== null) {
-                            return redirect()->away($radiusLoginUrl);
+                        if ($activeSession || $this->hasProvisionedRadiusAccess($resumablePayment)) {
+                            return redirect()->route('wifi.status', $this->buildStatusRouteParameters(
+                                phone: $resumePhone,
+                                payment: $resumablePayment,
+                                tenantId: (int) $resumablePayment->tenant_id
+                            ))->with('message', 'Payment confirmed. Connecting your device now.');
                         }
                     } catch (\Throwable $e) {
                         Log::warning('Auto-activation failed for recent payment, showing packages', [
@@ -1214,7 +1150,8 @@ class CaptivePortalController extends Controller
 
         $payment = $payment->fresh() ?? $payment;
 
-        $forceRadiusReauthorization = $this->requestHasHotspotLoginChallenge($request, (int) $payment->tenant_id);
+        $forceRadiusReauthorization = $this->requestHasHotspotLoginChallenge($request, (int) $payment->tenant_id)
+            || $this->paymentNeedsRadiusReauthorizationForClientContext($payment, $clientContext);
 
         if (in_array($payment->status, ['completed', 'confirmed'], true)) {
             try {
@@ -1296,18 +1233,6 @@ class CaptivePortalController extends Controller
         $radiusPendingReauth = (bool) $radiusPortalState['pending_reauth'];
         $radiusAutoLogin = $radiusPortalState['auto_login'];
         $radiusFallback = $radiusPortalState['fallback'];
-        $radiusLoginUrl = $this->buildRadiusAutoLoginRedirectUrl($radiusAutoLogin);
-        if (!$activeSession && $radiusLoginUrl !== null) {
-            return redirect()->away($radiusLoginUrl);
-        }
-
-        if ($statusView === 'paid' && !$radiusAutoLogin && !$radiusPendingReauth) {
-            return redirect()->route('wifi.packages', $this->buildPackagesRouteParameters(
-                phone: $phone,
-                payment: $payment,
-                tenantId: (int) $payment->tenant_id
-            ))->with('message', 'Your payment is confirmed. Reopen this hotspot page to finish sign-in, or choose a package if you need a new session.');
-        }
 
         $continueBrowsingUrl = $this->resolveContinueBrowsingUrl($payment, $request);
         $continueBrowsingAutoLogin = $this->buildContinueBrowsingAutoLoginPayload(
@@ -1814,7 +1739,8 @@ class CaptivePortalController extends Controller
             ]);
         }
 
-        $forceRadiusReauthorization = $this->requestHasHotspotLoginChallenge($request, (int) $payment->tenant_id);
+        $forceRadiusReauthorization = $this->requestHasHotspotLoginChallenge($request, (int) $payment->tenant_id)
+            || $this->paymentNeedsRadiusReauthorizationForClientContext($payment, $clientContext);
 
         if (in_array($payment->status, ['completed', 'confirmed'], true)) {
             try {
@@ -3794,6 +3720,37 @@ class CaptivePortalController extends Controller
         }
 
         return $payment;
+    }
+
+    private function paymentNeedsRadiusReauthorizationForClientContext(Payment $payment, array $clientContext): bool
+    {
+        if (!(bool) config('radius.enabled', false)) {
+            return false;
+        }
+
+        $clientMac = $this->normalizeMacAddress((string) ($clientContext['mac'] ?? ''));
+        if ($clientMac === null) {
+            return false;
+        }
+
+        $identity = $this->resolveRadiusIdentityForPayment($payment);
+        if (($identity['identity_type'] ?? null) !== 'mac') {
+            return false;
+        }
+
+        $session = UserSession::query()
+            ->where('payment_id', $payment->id)
+            ->latest('id')
+            ->first();
+
+        if (!$session instanceof UserSession) {
+            return false;
+        }
+
+        $storedUsernameMac = $this->normalizeMacAddress($this->resolveStoredRadiusUsername($session));
+        $sessionMac = $this->normalizeMacAddress((string) ($session->mac_address ?? ''));
+
+        return $storedUsernameMac !== $clientMac || $sessionMac !== $clientMac;
     }
 
     private function normalizeCustomerNameInput(?string $value): ?string

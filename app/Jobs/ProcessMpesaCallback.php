@@ -5,6 +5,7 @@ namespace App\Jobs;
 use App\Models\Payment;
 use App\Models\UserSession;
 use App\Services\MikroTik\SessionManager;
+use App\Services\Notifications\WhatsAppNotificationService;
 use App\Services\Radius\FreeRadiusProvisioningService;
 use App\Services\Radius\RadiusIdentityResolver;
 use Illuminate\Bus\Queueable;
@@ -35,8 +36,14 @@ class ProcessMpesaCallback implements ShouldQueue
         $this->onQueue('critical');
     }
 
-    public function handle(SessionManager $sessionManager, FreeRadiusProvisioningService $radiusProvisioning): void
+    public function handle(
+        SessionManager $sessionManager,
+        FreeRadiusProvisioningService $radiusProvisioning,
+        ?WhatsAppNotificationService $whatsappService = null
+    ): void
     {
+        $whatsappService ??= app(WhatsAppNotificationService::class);
+
         // ──────────────────────────────────────────────────────────────────
         // EDGE CASE #1: Missing CheckoutRequestID
         // ──────────────────────────────────────────────────────────────────
@@ -365,6 +372,13 @@ class ProcessMpesaCallback implements ShouldQueue
 
                     DB::commit();
                     $lock->release();
+
+                    $this->sendPaymentReceiptIfNeeded(
+                        $payment->fresh() ?? $payment,
+                        $session->fresh() ?? $session,
+                        $whatsappService
+                    );
+
                     return;
                 }
 
@@ -382,7 +396,8 @@ class ProcessMpesaCallback implements ShouldQueue
                     session: $session->fresh() ?? $session,
                     checkoutRequestId: $checkoutRequestId,
                     sessionManager: $sessionManager,
-                    radiusProvisioning: $radiusProvisioning
+                    radiusProvisioning: $radiusProvisioning,
+                    whatsappService: $whatsappService
                 );
 
                 return;
@@ -621,7 +636,8 @@ class ProcessMpesaCallback implements ShouldQueue
         UserSession $session,
         string $checkoutRequestId,
         SessionManager $sessionManager,
-        FreeRadiusProvisioningService $radiusProvisioning
+        FreeRadiusProvisioningService $radiusProvisioning,
+        WhatsAppNotificationService $whatsappService
     ): void {
         $activationContext = [
             'payment_id' => $payment->id,
@@ -636,7 +652,7 @@ class ProcessMpesaCallback implements ShouldQueue
         ];
 
         try {
-            (new ActivateSession($session->fresh() ?? $session))->handle($sessionManager, $radiusProvisioning);
+            (new ActivateSession($session->fresh() ?? $session))->handle($sessionManager, $radiusProvisioning, $whatsappService);
 
             $payment->refresh();
             $session->refresh();
@@ -703,6 +719,39 @@ class ProcessMpesaCallback implements ShouldQueue
         //     ->each(function ($user) {
         //         $user->notify(new \App\Notifications\MpesaCallbackFailed($this->callbackData));
         //     });
+    }
+
+    private function sendPaymentReceiptIfNeeded(
+        Payment $payment,
+        UserSession $session,
+        WhatsAppNotificationService $whatsappService
+    ): void {
+        $metadata = is_array($payment->metadata) ? $payment->metadata : [];
+
+        if (!empty($metadata['whatsapp_payment_receipt_sent_at'])) {
+            return;
+        }
+
+        $attemptedAt = now()->toIso8601String();
+        $sent = $whatsappService->sendPaymentReceipt($payment, $session);
+
+        $payment->refresh();
+        $metadata = is_array($payment->metadata) ? $payment->metadata : [];
+        $metadata['whatsapp_payment_receipt_attempted_at'] = $attemptedAt;
+
+        if ($sent) {
+            $metadata['whatsapp_payment_receipt_sent_at'] = now()->toIso8601String();
+        }
+
+        try {
+            $payment->update(['metadata' => $metadata]);
+        } catch (\Throwable $e) {
+            Log::channel('notification')->warning('Failed to persist payment WhatsApp receipt metadata', [
+                'payment_id' => $payment->id,
+                'session_id' => $session->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 }
 

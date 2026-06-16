@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Models\UserSession;
 use App\Services\MikroTik\SessionManager;
+use App\Services\Notifications\WhatsAppNotificationService;
 use App\Services\Radius\FreeRadiusProvisioningService;
 use App\Services\Radius\RadiusIdentityResolver;
 use Illuminate\Support\Carbon;
@@ -35,8 +36,14 @@ class ActivateSession implements ShouldQueue
         $this->onQueue('high');
     }
 
-    public function handle(SessionManager $sessionManager, FreeRadiusProvisioningService $radiusProvisioning): void
+    public function handle(
+        SessionManager $sessionManager,
+        FreeRadiusProvisioningService $radiusProvisioning,
+        ?WhatsAppNotificationService $whatsappService = null
+    ): void
     {
+        $whatsappService ??= app(WhatsAppNotificationService::class);
+
         Log::channel('mikrotik')->info('Activating session', [
             'session_id' => $this->session->id,
             'username' => $this->session->username,
@@ -87,6 +94,8 @@ class ActivateSession implements ShouldQueue
                         'session_id' => $freshSession->id,
                         'reconciliation_notes' => 'Payment confirmed. Completing hotspot login through RADIUS.',
                     ]);
+
+                    $this->sendPaymentReceiptIfNeeded($payment->fresh() ?? $payment, $freshSession, $whatsappService);
                 }
 
                 Log::channel('radius')->info('Pure RADIUS hotspot authorization prepared; RouterOS API login skipped', [
@@ -130,6 +139,8 @@ class ActivateSession implements ShouldQueue
                         'session_id' => $freshSession->id,
                         'reconciliation_notes' => 'Payment confirmed. Waiting for hotspot re-authentication via RADIUS.',
                     ]);
+
+                    $this->sendPaymentReceiptIfNeeded($payment->fresh() ?? $payment, $freshSession, $whatsappService);
                 }
 
                 Log::channel('radius')->info('RADIUS MAC authorization prepared; waiting for hotspot re-authentication', [
@@ -164,6 +175,12 @@ class ActivateSession implements ShouldQueue
                         'session_id' => $this->session->id,
                         'reconciliation_notes' => null,
                     ]);
+
+                    $this->sendPaymentReceiptIfNeeded(
+                        $payment->fresh() ?? $payment,
+                        $this->session->fresh() ?? $this->session,
+                        $whatsappService
+                    );
                 }
 
                 Log::channel('mikrotik')->info('Session activated', [
@@ -275,5 +292,38 @@ class ActivateSession implements ShouldQueue
         );
 
         return $preparedAt->copy()->addMinutes($windowMinutes);
+    }
+
+    private function sendPaymentReceiptIfNeeded(
+        \App\Models\Payment $payment,
+        UserSession $session,
+        WhatsAppNotificationService $whatsappService
+    ): void {
+        $metadata = is_array($payment->metadata) ? $payment->metadata : [];
+
+        if (!empty($metadata['whatsapp_payment_receipt_sent_at'])) {
+            return;
+        }
+
+        $attemptedAt = now()->toIso8601String();
+        $sent = $whatsappService->sendPaymentReceipt($payment, $session);
+
+        $payment->refresh();
+        $metadata = is_array($payment->metadata) ? $payment->metadata : [];
+        $metadata['whatsapp_payment_receipt_attempted_at'] = $attemptedAt;
+
+        if ($sent) {
+            $metadata['whatsapp_payment_receipt_sent_at'] = now()->toIso8601String();
+        }
+
+        try {
+            $payment->update(['metadata' => $metadata]);
+        } catch (\Throwable $e) {
+            Log::channel('notification')->warning('Failed to persist payment WhatsApp receipt metadata', [
+                'payment_id' => $payment->id,
+                'session_id' => $session->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 }

@@ -2,6 +2,8 @@
 
 namespace App\Services\Notifications;
 
+use App\Models\Payment;
+use App\Models\UserSession;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
@@ -219,6 +221,61 @@ class WhatsAppNotificationService
                 ],
             ]
         );
+    }
+
+    /**
+     * Payment receipt / access confirmation to user.
+     */
+    public function sendPaymentReceipt(Payment $payment, ?UserSession $session = null): bool
+    {
+        $to = $payment->phone ?: $payment->mpesa_phone ?: $session?->phone;
+
+        if (!$to) {
+            Log::channel('notification')->debug('No phone number for payment receipt', [
+                'payment_id' => $payment->id,
+                'session_id' => $session?->id,
+            ]);
+
+            return false;
+        }
+
+        $brand = $payment->tenant?->name ?? $session?->tenant?->name ?? 'CloudBridge WiFi';
+        $packageName = $payment->package_name ?: $payment->package?->name ?: $session?->package?->name ?: 'WiFi package';
+        $receipt = $payment->mpesa_receipt_number ?: $payment->reference ?: ('PAY-' . $payment->id);
+        $amount = number_format((float) $payment->amount, 0);
+        $expiry = $session?->expires_at;
+        $expiryText = $expiry ? $expiry->timezone(config('app.timezone'))->format('d M Y H:i') : null;
+        $isActive = $session && (string) $session->status === 'active';
+
+        if ($isActive && $expiryText) {
+            $message = sprintf(
+                '%s: payment of KES %s received for %s. Receipt: %s. Your WiFi is active until %s.',
+                $brand,
+                $amount,
+                $packageName,
+                $receipt,
+                $expiryText
+            );
+        } elseif ($expiryText) {
+            $message = sprintf(
+                '%s: payment of KES %s received for %s. Receipt: %s. Complete hotspot login to start using WiFi. Access is reserved until %s.',
+                $brand,
+                $amount,
+                $packageName,
+                $receipt,
+                $expiryText
+            );
+        } else {
+            $message = sprintf(
+                '%s: payment of KES %s received for %s. Receipt: %s. Your WiFi access is being prepared.',
+                $brand,
+                $amount,
+                $packageName,
+                $receipt
+            );
+        }
+
+        return $this->sendText($to, $message);
     }
 
     /**
