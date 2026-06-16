@@ -36,7 +36,7 @@
     @if($statusView === 'pending')
         <meta http-equiv="refresh" content="10">
     @endif
-    <title>Connection Status - {{ $brandTitle }}</title>
+    <title>Connecting - {{ $brandTitle }}</title>
     @php
         $captiveCssPath = public_path('css/captive-portal.css');
         $captiveCssVersion = file_exists($captiveCssPath) ? filemtime($captiveCssPath) : time();
@@ -175,7 +175,7 @@
                 @endif
                 <div class="cp-brand-text">
                     <h1>{{ $brandTitle }}</h1>
-                    <p>Connection progress</p>
+                    <p>Connecting automatically</p>
                 </div>
             </div>
             <div class="cp-support"><a class="cp-link-support" href="{{ $supportTelHref }}">{{ $supportLabel }}</a></div>
@@ -233,24 +233,18 @@
                     </p>
                 </div>
 
-                <div class="cp-actions">
-                    <a href="{{ $statusRoute }}" class="cp-btn cp-btn-soft">Still waiting? Check now</a>
-                </div>
-
             @elseif($statusView === 'paid')
                 <div class="cp-status-head">
                     <div>
                         <span class="cp-status-pill">Payment confirmed</span>
-                        <h2 class="cp-section-title">
-                            {{ $radiusAutoLogin ? 'Connecting you to WiFi' : ($radiusPendingReauth ? 'Waiting for device re-authentication' : 'Activating internet') }}
-                        </h2>
+                        <h2 class="cp-section-title">Connecting your device</h2>
                         <p class="cp-card-subtitle">
                             @if($radiusAutoLogin)
-                                Your payment is confirmed. We are signing this device into the hotspot automatically now.
+                                Your payment is confirmed. This device is being signed into the hotspot now.
                             @elseif($radiusPendingReauth)
-                                Your payment is confirmed. Keep this page open while the hotspot re-checks this device through RADIUS.
+                                Your payment is confirmed. The hotspot is re-authorizing this device now.
                             @else
-                                Your payment is confirmed. Activation usually takes a few seconds.
+                                Your payment is confirmed. Internet access is opening now.
                             @endif
                         </p>
                     </div>
@@ -263,40 +257,10 @@
                     <div class="cp-flow-step is-current">{{ $radiusPendingReauth ? 'Hotspot re-check' : 'Internet activation' }}</div>
                 </div>
 
-                @if($radiusPendingReauth)
-                    <div class="cp-panel">
-                        <h3>What to do now</h3>
-                        <p>Stay on this page for a few seconds. Access should open as soon as the hotspot sees your paid MAC address.</p>
-                    </div>
-                @endif
-
-                @if($radiusAutoLogin)
-                    <div class="cp-panel">
-                        <h3>Hotspot sign-in in progress</h3>
-                        <p>We are submitting your hotspot login now. If internet opens immediately, you can start browsing right away without waiting for router or accounting confirmation on this page.</p>
-                    </div>
-                @endif
-
-                @if(!empty($radiusFallback))
-                    <div class="cp-panel">
-                        <h3>Fallback credentials</h3>
-                        <p>Use only if activation delays: username <strong>{{ $radiusFallback['username'] }}</strong>, password is the same value.</p>
-                    </div>
-                @endif
-
-                @if($radiusAutoLogin)
-                    <div class="cp-actions">
-                        <button type="button" id="cpRadiusConnectButton" class="cp-btn cp-btn-soft">Retry Connect</button>
-                        <a href="{{ $statusRoute }}" class="cp-btn cp-btn-soft">Check Status</a>
-                    </div>
-                @else
-                    <a href="{{ $statusRoute }}" class="cp-btn cp-btn-soft cp-btn-block">Check Status</a>
-                @endif
-
             @elseif($statusView === 'activated')
                 <span class="cp-status-pill success">Connected</span>
                 <h2 class="cp-section-title">You are connected to the internet</h2>
-                <p class="cp-card-subtitle">Your package is active.</p>
+                <p class="cp-card-subtitle">Opening the internet now.</p>
 
                 <div class="cp-facts">
                     <div class="cp-fact">
@@ -326,49 +290,17 @@
                 <div class="cp-countdown" id="countdown">--:--:--</div>
 
                 @if($continueBrowsingAutoLogin)
-                    <button type="button" id="cpContinueBrowsingButton" class="cp-btn cp-btn-primary cp-btn-block">Continue Browsing</button>
+                    <button type="button" id="cpContinueBrowsingButton" class="cp-btn cp-btn-primary cp-btn-block">Open Internet</button>
                 @else
-                    <a href="{{ $continueBrowsingUrl }}" class="cp-btn cp-btn-primary cp-btn-block">Continue Browsing</a>
+                    <a href="{{ $continueBrowsingUrl }}" class="cp-btn cp-btn-primary cp-btn-block">Open Internet</a>
                 @endif
 
             @else
-                <span class="cp-status-pill">Checking status</span>
-                <h2 class="cp-section-title">Status update in progress</h2>
-                <p class="cp-card-subtitle">Current state: {{ $payment->status }}</p>
-
-                <a href="{{ $statusRoute }}" class="cp-btn cp-btn-soft cp-btn-block">Check Status</a>
+                <span class="cp-status-pill">Connecting</span>
+                <h2 class="cp-section-title">Opening internet access</h2>
+                <p class="cp-card-subtitle">Keep this page open for a moment.</p>
             @endif
 
-            @if($statusView !== 'activated')
-                <div class="cp-facts">
-                    <div class="cp-fact">
-                        <span>Status</span>
-                        <span>{{ $statusLabel }}</span>
-                    </div>
-                    <div class="cp-fact">
-                        <span>Phone</span>
-                        <span>{{ $displayPhone ?: 'Not captured' }}</span>
-                    </div>
-                    <div class="cp-fact">
-                        <span>Package</span>
-                        <span>{{ $payment->package->name ?? ($payment->package_name ?? 'N/A') }}</span>
-                    </div>
-                    <div class="cp-fact">
-                        <span>Amount</span>
-                        <span>{{ $payment->currency ?? 'KES' }} {{ number_format((float) $payment->amount, 2) }}</span>
-                    </div>
-                    <div class="cp-fact">
-                        <span>Reference</span>
-                        <span>{{ $payment->mpesa_receipt_number ?: $payment->mpesa_checkout_request_id }}</span>
-                    </div>
-                    @if($lastCheckedLabel)
-                        <div class="cp-fact">
-                            <span>Last checked</span>
-                            <span>{{ $lastCheckedLabel }}</span>
-                        </div>
-                    @endif
-                </div>
-            @endif
         </article>
 
         @if($shouldAutoPoll || $radiusAutoLogin || $continueBrowsingAutoLogin || $statusView === 'activated')

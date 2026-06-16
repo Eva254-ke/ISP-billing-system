@@ -2336,10 +2336,13 @@ class CaptivePortalController extends Controller
         $paymentClientContext = is_array($paymentMetadata['client_context'] ?? null) ? $paymentMetadata['client_context'] : [];
         $existingSession = $reusedExtensionSession
             ?? UserSession::query()->where('payment_id', $payment->id)->latest('id')->first();
-        if (
-            $existingSession
+        $existingSessionExpired = $existingSession
             && $existingSession->terminated_at instanceof Carbon
-            && str_starts_with((string) $existingSession->termination_reason, 'expired')
+            && str_starts_with((string) $existingSession->termination_reason, 'expired');
+        $paymentPackageExpiresAt = $this->resolvePaymentPackageExpiresAt($payment);
+        if (
+            $existingSessionExpired
+            && !($paymentPackageExpiresAt instanceof Carbon && $paymentPackageExpiresAt->isFuture())
         ) {
             return $existingSession->fresh() ?? $existingSession;
         }
@@ -2400,8 +2403,9 @@ class CaptivePortalController extends Controller
             $existingSession = $activeSession;
         }
 
-        $authorizationWindowSession = $reusedExtensionSession ?? $existingSession;
-        $defaultExpiresAt = $this->resolvePaymentAccessExpiresAt($payment, $authorizationWindowSession)
+        $authorizationWindowSession = $existingSessionExpired ? $reusedExtensionSession : ($reusedExtensionSession ?? $existingSession);
+        $defaultExpiresAt = $paymentPackageExpiresAt
+            ?? $this->resolvePaymentAccessExpiresAt($payment, $authorizationWindowSession)
             ?? now()->copy()->addMinutes($durationMinutes);
 
         if ($payment->is_extension && !$reusedExtensionSession) {
@@ -2617,6 +2621,12 @@ class CaptivePortalController extends Controller
             }
             $sessionUpdates['status'] = 'idle';
             $sessionUpdates['expires_at'] = $expiresAt;
+            if ($session->terminated_at !== null) {
+                $sessionUpdates['terminated_at'] = null;
+            }
+            if ($session->termination_reason !== null) {
+                $sessionUpdates['termination_reason'] = null;
+            }
         }
         if ($sessionUpdates !== []) {
             $session->update($sessionUpdates);
@@ -2730,7 +2740,7 @@ class CaptivePortalController extends Controller
 
             $session->update([
                 'status' => 'idle',
-                'expires_at' => $authorizationExpiresAt,
+                'expires_at' => $radiusAccessExpiresAt,
                 'metadata' => array_merge($session->metadata ?? [], [
                     'activation' => array_merge(
                         (array) (($session->metadata ?? [])['activation'] ?? []),
@@ -2780,7 +2790,7 @@ class CaptivePortalController extends Controller
 
             $session->update([
                 'status' => 'idle',
-                'expires_at' => $authorizationExpiresAt,
+                'expires_at' => $radiusAccessExpiresAt,
                 'metadata' => array_merge($session->metadata ?? [], [
                     'activation' => array_merge(
                         (array) (($session->metadata ?? [])['activation'] ?? []),
