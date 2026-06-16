@@ -479,10 +479,38 @@ class AdminPageController extends Controller
             ->when($tenant, fn ($query) => $query->where('tenant_id', $tenant->id));
 
         $sessions = (clone $baseSessions)
+            ->select('user_sessions.*')
+            ->addSelect([
+                'last_payment_at' => Payment::query()
+                    ->select('created_at')
+                    ->whereIn('status', ['confirmed', 'completed', 'activated'])
+                    ->where(function ($query) {
+                        $query->whereColumn('payments.session_id', 'user_sessions.id')
+                            ->orWhereColumn('payments.id', 'user_sessions.payment_id');
+                    })
+                    ->latest('created_at')
+                    ->limit(1),
+            ])
             ->with(['package', 'router'])
+            ->orderByDesc('last_payment_at')
             ->latest('created_at')
             ->limit(150)
-            ->get();
+            ->get()
+            ->each(function (UserSession $session): void {
+                $latestPayment = Payment::query()
+                    ->whereIn('status', ['confirmed', 'completed', 'activated'])
+                    ->where(function ($query) use ($session) {
+                        $query->where('session_id', $session->id);
+
+                        if ((int) ($session->payment_id ?? 0) > 0) {
+                            $query->orWhere('id', $session->payment_id);
+                        }
+                    })
+                    ->latest('created_at')
+                    ->first();
+
+                $session->setAttribute('last_payment_at', $latestPayment?->created_at);
+            });
 
         $stats = [
             'total' => (clone $baseSessions)->count(),

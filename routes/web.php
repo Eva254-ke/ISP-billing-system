@@ -1370,6 +1370,18 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
             $mode = $request->string('mode')->toString();
 
             $sessions = UserSession::query()
+                ->select('user_sessions.*')
+                ->addSelect([
+                    'last_payment_at' => Payment::query()
+                        ->select('created_at')
+                        ->whereIn('status', ['confirmed', 'completed', 'activated'])
+                        ->where(function ($query) {
+                            $query->whereColumn('payments.session_id', 'user_sessions.id')
+                                ->orWhereColumn('payments.id', 'user_sessions.payment_id');
+                        })
+                        ->latest('created_at')
+                        ->limit(1),
+                ])
                 ->when($tenant, fn ($query) => $query->where('tenant_id', $tenant->id))
                 ->when($mode === 'pppoe', fn ($query) => $query->where('username', 'like', 'pppoe%'))
                 ->when($mode === 'hotspot', fn ($query) => $query->where(function ($inner) {
@@ -1389,11 +1401,23 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
                     });
                 })
                 ->with(['package', 'router'])
+                ->orderByDesc('last_payment_at')
                 ->latest('created_at')
                 ->limit($limit)
                 ->get()
                 ->map(function (UserSession $session) {
                     $awaitingFirstLogin = $session->awaitsRadiusReauthentication();
+                    $latestPayment = Payment::query()
+                        ->whereIn('status', ['confirmed', 'completed', 'activated'])
+                        ->where(function ($query) use ($session) {
+                            $query->where('session_id', $session->id);
+
+                            if ((int) ($session->payment_id ?? 0) > 0) {
+                                $query->orWhere('id', $session->payment_id);
+                            }
+                        })
+                        ->latest('created_at')
+                        ->first();
 
                     return [
                         'id' => $session->id,
@@ -1414,6 +1438,9 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
                             ? null
                             : $session->expires_at?->toIso8601String(),
                         'started_at' => $session->started_at?->toIso8601String(),
+                        'last_payment_at' => $latestPayment?->created_at?->timezone(config('app.timezone'))->toIso8601String(),
+                        'last_payment_amount' => $latestPayment ? (float) $latestPayment->amount : null,
+                        'last_payment_reference' => $latestPayment?->mpesa_receipt_number,
                         'bytes_total' => (int) ($session->bytes_total ?? 0),
                     ];
                 });

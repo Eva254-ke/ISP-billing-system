@@ -4332,8 +4332,14 @@ class CaptivePortalController extends Controller
 
     private function resolveRadiusAccessExpiresAt(Payment $payment, ?UserSession $session, Carbon $fallback): Carbon
     {
-        if ($session && !$this->sessionAwaitsRadiusLogin($session) && $session->expires_at instanceof Carbon) {
-            return $session->expires_at->copy();
+        if ($session && $session->expires_at instanceof Carbon && $session->expires_at->isFuture()) {
+            if (!$this->sessionAwaitsRadiusLogin($session)) {
+                return $session->expires_at->copy();
+            }
+
+            if ($session->expires_at->gt($fallback)) {
+                return $session->expires_at->copy();
+            }
         }
 
         $durationMinutes = max(1, (int) ($payment->package?->duration_in_minutes ?? 0));

@@ -141,6 +141,7 @@
                         $expiryLabel = $awaitingFirstLogin
                             ? ($authorizationExpiresAt?->format('Y-m-d H:i') ?? '-')
                             : (optional($session->expires_at)->format('Y-m-d H:i') ?? '-');
+                        $lastPaymentLabel = optional($session->last_payment_at ?? $session->created_at)->format('Y-m-d H:i') ?? '-';
                     @endphp
                     <tr class="{{ $isOnline ? '' : 'text-muted' }}">
                         <td><input type="checkbox" class="customer-checkbox" value="{{ $session->id }}"></td>
@@ -162,7 +163,7 @@
                                 <div class="fw-semibold">{{ optional($session->expires_at)->format('Y-m-d H:i') ?? '-' }}</div>
                             @endif
                         </td>
-                        <td>{{ optional($session->created_at)->format('Y-m-d H:i') ?? '-' }}</td>
+                        <td>{{ $lastPaymentLabel }}</td>
                         <td>
                             <span class="status-dot {{ $isOnline ? 'online' : 'offline' }}"></span>
                             <span class="{{ $isOnline ? 'text-success' : 'text-muted' }}">{{ $isOnline ? 'Online' : 'Offline' }}</span>
@@ -179,7 +180,7 @@
                                         data-status="{{ ucfirst($status) }}"
                                         data-last-online="{{ optional($session->last_activity_at ?? $session->started_at)->diffForHumans() ?? '-' }}"
                                         data-expiry="{{ $expiryLabel }}"
-                                        data-last-payment="{{ optional($session->created_at)->format('Y-m-d H:i') ?? '-' }}"
+                                        data-last-payment="{{ $lastPaymentLabel }}"
                                         data-router="{{ optional($session->router)->name ?? '-' }}">
                                     <i class="fas fa-eye"></i>
                                 </button>
@@ -544,6 +545,7 @@ document.addEventListener('DOMContentLoaded', function() {
             const status = row.status || '-';
             const online = String(status).toLowerCase() === 'active';
             const lastOnline = row.started_at ? new Date(row.started_at).toLocaleString('en-KE') : '-';
+            const lastPayment = row.last_payment_at ? new Date(row.last_payment_at).toLocaleString('en-KE') : '-';
             const expiry = row.display_expires_at ? new Date(row.display_expires_at).toLocaleString('en-KE') : '-';
             const authorizationExpires = row.authorization_expires_at ? new Date(row.authorization_expires_at).toLocaleString('en-KE') : '-';
             const expiryDisplay = row.awaiting_first_login
@@ -562,11 +564,11 @@ document.addEventListener('DOMContentLoaded', function() {
                     <td>${badgeForStatus(status)}</td>
                     <td><div class="fw-semibold ${online ? 'text-success' : 'text-muted'}">${online ? 'Online' : 'Offline'}</div><div class="text-muted small">${lastOnline}</div></td>
                     <td>${expiryCell}</td>
-                    <td>${lastOnline}</td>
+                    <td>${lastPayment}</td>
                     <td><span class="status-dot ${online ? 'online' : 'offline'}"></span><span class="${online ? 'text-success' : 'text-muted'}">${online ? 'Online' : 'Offline'}</span></td>
                     <td class="action-col">
                         <div class="btn-group">
-                            <button type="button" class="btn btn-sm btn-outline-primary" onclick="viewCustomerDetails(this)" data-name="${username}" data-phone="${row.phone || '-'}" data-username="${username}" data-type="${type}" data-package="${packageName}" data-status="${status}" data-last-online="${lastOnline}" data-expiry="${expiryDisplay}" data-last-payment="${lastOnline}" data-router="${row.router || '-'}"><i class="fas fa-eye"></i></button>
+                            <button type="button" class="btn btn-sm btn-outline-primary" onclick="viewCustomerDetails(this)" data-name="${username}" data-phone="${row.phone || '-'}" data-username="${username}" data-type="${type}" data-package="${packageName}" data-status="${status}" data-last-online="${lastOnline}" data-expiry="${expiryDisplay}" data-last-payment="${lastPayment}" data-router="${row.router || '-'}"><i class="fas fa-eye"></i></button>
                             <button type="button" class="btn btn-sm btn-outline-warning" onclick="toggleCustomerStatus('${username}', 'suspend')"><i class="fas fa-user-slash"></i></button>
                             <button type="button" class="btn btn-sm btn-outline-secondary" onclick="resetCustomerPassword('${username}')"><i class="fas fa-key"></i></button>
                         </div>
