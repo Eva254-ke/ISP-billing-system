@@ -71,10 +71,14 @@
         $routePhone = preg_match('/^(?:0[17]\d{8}|(?:\+?254)[17]\d{8})$/', (string) old('phone', $phone ?? '')) === 1
             ? (string) old('phone', $phone ?? '')
             : null;
-        $reconnectParams = array_filter([
+        $routeContextParams = array_filter(array_merge([
+            'mac' => $clientMacValue !== '' ? $clientMacValue : null,
+            'ip' => $clientIpValue !== '' ? $clientIpValue : null,
+        ], $hotspotFieldValues), static fn ($value) => $value !== null && $value !== '');
+        $reconnectParams = array_filter(array_merge([
             'tenant_id' => $tenantId > 0 ? $tenantId : request()->query('tenant_id'),
             'phone' => $routePhone,
-        ], static fn ($value) => $value !== null && $value !== '');
+        ], $routeContextParams), static fn ($value) => $value !== null && $value !== '');
     @endphp
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>

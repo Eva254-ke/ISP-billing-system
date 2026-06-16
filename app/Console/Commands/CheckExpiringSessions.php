@@ -304,7 +304,9 @@ class CheckExpiringSessions extends Command
             return true;
         }
 
-        $this->line("   📱 WhatsApp expiry warning sent to: {$session->phone}");
+        $this->warn("   WhatsApp expiry warning failed for: {$session->phone}");
+
+        return false;
     }
 
     private function recordExpiryWarningSent(UserSession $session): void

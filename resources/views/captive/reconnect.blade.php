@@ -56,10 +56,6 @@
         $routePhone = preg_match('/^(?:0[17]\d{8}|(?:\+?254)[17]\d{8})$/', (string) old('phone', $phone ?? '')) === 1
             ? (string) old('phone', $phone ?? '')
             : '';
-        $packagesParams = array_filter([
-            'tenant_id' => $tenantId > 0 ? $tenantId : request()->query('tenant_id'),
-            'phone' => $routePhone !== '' ? $routePhone : null,
-        ], static fn ($value) => $value !== null && $value !== '');
         $clientMacValue = trim((string) old('mac', $clientMac ?? request()->query('mac', session('captive_client_mac', ''))));
         $clientIpValue = trim((string) old('ip', $clientIp ?? request()->query('ip', session('captive_client_ip', ''))));
         $hotspotContext = is_array($hotspotContext ?? null) ? $hotspotContext : [];
@@ -73,6 +69,14 @@
             'link-orig' => trim((string) old('link-orig', $hotspotContext['link_orig'] ?? '')),
             'link-orig-esc' => trim((string) old('link-orig-esc', $hotspotContext['link_orig_esc'] ?? '')),
         ];
+        $routeContextParams = array_filter(array_merge([
+            'mac' => $clientMacValue !== '' ? $clientMacValue : null,
+            'ip' => $clientIpValue !== '' ? $clientIpValue : null,
+        ], $hotspotFieldValues), static fn ($value) => $value !== null && $value !== '');
+        $packagesParams = array_filter(array_merge([
+            'tenant_id' => $tenantId > 0 ? $tenantId : request()->query('tenant_id'),
+            'phone' => $routePhone !== '' ? $routePhone : null,
+        ], $routeContextParams), static fn ($value) => $value !== null && $value !== '');
         $allowMpesaReconnect = (bool) ($tenant?->captive_portal_allow_mpese_code_reconnect ?? true);
         $allowVoucherRedemption = (bool) ($tenant?->captive_portal_allow_voucher_redemption ?? true);
         $voucherPrefixValue = \App\Models\Voucher::normalizePrefix($voucherPrefix ?? 'CB-WIFI') ?? 'CB-WIFI';

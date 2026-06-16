@@ -1424,8 +1424,15 @@ class CaptivePortalController extends Controller
                 ->withErrors(['Payment found but not yet confirmed. Wait 10-20 seconds, then reopen the portal or try reconnect again.'])
                 ->withInput();
         }
+
+        $clientContext = $this->resolvePaymentClientContext($payment, $clientContext);
+        $clientContextMeta = $this->buildClientContextMeta($clientContext, $request);
         
-        $activeSession = $this->resolveConnectedSession($payment)
+        $activeSession = $this->resolveConnectedSession(
+                $payment,
+                $clientContext['mac'] ?? null,
+                $clientContext['ip'] ?? null
+            )
             ?? $this->resolvePackagesActiveSession(
                 tenantId: $tenantId,
                 phone: $phone,
@@ -2327,17 +2334,12 @@ class CaptivePortalController extends Controller
             return $existingSession->fresh() ?? $existingSession;
         }
 
-        $clientMac = $this->normalizeMacAddress((string) ($paymentClientContext['mac'] ?? ''))
-            ?? $this->normalizeMacAddress((string) ($existingSession?->mac_address ?? ''));
-        $clientIp = $this->normalizeClientIpAddress((string) ($paymentClientContext['ip'] ?? ''))
-            ?? $this->normalizeClientIpAddress((string) ($existingSession?->ip_address ?? ''));
-        // Fallback to session-stored values if still missing
-        if ($clientMac === null) {
-            $clientMac = $this->normalizeMacAddress((string) session('captive_client_mac', ''));
-        }
-        if ($clientIp === null) {
-            $clientIp = $this->normalizeClientIpAddress((string) session('captive_client_ip', ''));
-        }
+        $clientContext = $this->resolvePaymentClientContext($payment, [
+            'mac' => $paymentClientContext['mac'] ?? null,
+            'ip' => $paymentClientContext['ip'] ?? null,
+        ], $existingSession);
+        $clientMac = $clientContext['mac'];
+        $clientIp = $clientContext['ip'];
         $radiusEnabled = (bool) config('radius.enabled', false);
         $identityResolver = app(RadiusIdentityResolver::class);
         $identity = $identityResolver->resolve(
@@ -3855,6 +3857,94 @@ class CaptivePortalController extends Controller
         }
 
         return $token;
+    }
+
+    private function resolvePaymentClientContext(
+        Payment $payment,
+        array $currentContext = [],
+        ?UserSession $preferredSession = null
+    ): array {
+        $clientMac = $this->normalizeMacAddress((string) ($currentContext['mac'] ?? ''));
+        $clientIp = $this->normalizeClientIpAddress((string) ($currentContext['ip'] ?? ''));
+
+        $metadata = is_array($payment->metadata) ? $payment->metadata : [];
+        $paymentClientContext = is_array($metadata['client_context'] ?? null) ? $metadata['client_context'] : [];
+
+        $contextSources = [
+            [
+                'mac' => $paymentClientContext['mac'] ?? null,
+                'ip' => $paymentClientContext['ip'] ?? null,
+            ],
+            [
+                'mac' => $preferredSession?->mac_address,
+                'ip' => $preferredSession?->ip_address,
+            ],
+        ];
+
+        $latestPaymentSession = UserSession::query()
+            ->where('payment_id', $payment->id)
+            ->orderByDesc('last_activity_at')
+            ->orderByDesc('id')
+            ->first();
+
+        if ($latestPaymentSession) {
+            $contextSources[] = [
+                'mac' => $latestPaymentSession->mac_address,
+                'ip' => $latestPaymentSession->ip_address,
+            ];
+        }
+
+        $contextSources[] = [
+            'mac' => session('captive_client_mac', ''),
+            'ip' => session('captive_client_ip', ''),
+        ];
+
+        $phone = $this->normalizePhoneForStorage((string) ($payment->phone ?? ''));
+        if ($phone !== null) {
+            $recentPhoneSession = UserSession::query()
+                ->where('tenant_id', $payment->tenant_id)
+                ->where('phone', $phone)
+                ->where(function ($query) {
+                    $query->whereNotNull('mac_address')
+                        ->orWhereNotNull('ip_address');
+                })
+                ->orderByRaw(
+                    "CASE WHEN status = ? THEN 0 WHEN status = ? THEN 1 WHEN status = ? THEN 2 ELSE 3 END",
+                    ['active', 'idle', 'expired']
+                )
+                ->orderByDesc('last_activity_at')
+                ->orderByDesc('id')
+                ->first();
+
+            if ($recentPhoneSession) {
+                $contextSources[] = [
+                    'mac' => $recentPhoneSession->mac_address,
+                    'ip' => $recentPhoneSession->ip_address,
+                ];
+            }
+        }
+
+        foreach ($contextSources as $source) {
+            $clientMac ??= $this->normalizeMacAddress((string) ($source['mac'] ?? ''));
+            $clientIp ??= $this->normalizeClientIpAddress((string) ($source['ip'] ?? ''));
+
+            if ($clientMac !== null && $clientIp !== null) {
+                break;
+            }
+        }
+
+        if ($clientMac !== null) {
+            session(['captive_client_mac' => $clientMac]);
+        }
+
+        if ($clientIp !== null) {
+            session(['captive_client_ip' => $clientIp]);
+        }
+
+        return [
+            'mac' => $clientMac,
+            'ip' => $clientIp,
+        ];
     }
 
     private function hasClientContext(?string $clientMac = null, ?string $clientIp = null): bool
