@@ -12,7 +12,7 @@ return [
     'portal_auto_login' => (bool) env('RADIUS_PORTAL_AUTO_LOGIN', true),
     // Allow some time for captive clients to re-open the hotspot portal and
     // complete the first RADIUS login before package time starts counting down.
-    'pending_login_window_minutes' => max(1, (int) env('RADIUS_PENDING_LOGIN_WINDOW_MINUTES', 360)),
+    'pending_login_window_minutes' => max(1, (int) env('RADIUS_PENDING_LOGIN_WINDOW_MINUTES', 10)),
 
     // Router RADIUS client target
     'server_ip' => env('RADIUS_SERVER_IP', '127.0.0.1'),

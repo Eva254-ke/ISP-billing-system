@@ -130,14 +130,13 @@ class CaptivePortalController extends Controller
                 $resumePhone = $this->normalizePhoneForStorage((string) $resumablePayment->phone)
                     ?? trim((string) $resumablePayment->phone);
 
-                if ($resumePhone !== '') {
-                    session(['captive_phone' => $resumePhone]);
-                }
-
-                session(['captive_payment_id' => $resumablePayment->id]);
-
-                // Automatically activate access for recent payments
                 if (in_array($resumablePayment->status, ['completed', 'confirmed'], true)) {
+                    if ($resumePhone !== '') {
+                        session(['captive_phone' => $resumePhone]);
+                    }
+
+                    session(['captive_payment_id' => $resumablePayment->id]);
+
                     try {
                         $this->activatePaidAccess($resumablePayment);
 
@@ -147,12 +146,8 @@ class CaptivePortalController extends Controller
                             $clientContext['ip'] ?? null
                         );
 
-                        if ($activeSession || $this->hasProvisionedRadiusAccess($resumablePayment)) {
-                            return redirect()->route('wifi.status', $this->buildStatusRouteParameters(
-                                phone: $resumePhone,
-                                payment: $resumablePayment,
-                                tenantId: (int) $resumablePayment->tenant_id
-                            ))->with('message', 'Payment confirmed. Connecting your device now.');
+                        if ($activeSession) {
+                            $resumablePayment = null;
                         }
                     } catch (\Throwable $e) {
                         Log::warning('Auto-activation failed for recent payment, showing packages', [
@@ -162,14 +157,9 @@ class CaptivePortalController extends Controller
                     }
                 }
 
-                return redirect()->route('wifi.status', $this->buildStatusRouteParameters(
-                    phone: $resumePhone,
-                    payment: $resumablePayment,
-                    tenantId: (int) $resumablePayment->tenant_id
-                ))->with('message', in_array((string) $resumablePayment->status, ['completed', 'confirmed'], true)
-                    ? 'Payment confirmed. Connecting your device now.'
-                    : 'Payment request already in progress. Complete the M-Pesa prompt and wait for confirmation.'
-                );
+                if (!$activeSession) {
+                    session()->forget('captive_payment_id');
+                }
             }
         }
 
@@ -253,7 +243,7 @@ class CaptivePortalController extends Controller
                 ))->with('message', 'A payment request is already being processed. Please wait for confirmation.');
             }
 
-            return back()->withErrors(['Payment request is being processed. Wait for the STK prompt, then check status.']);
+            return back()->withErrors(['Payment request is being processed. Wait for the STK prompt, then reopen the portal if you are not connected.']);
         }
 
         try {
@@ -1166,8 +1156,11 @@ class CaptivePortalController extends Controller
                     );
 
                     if ($activeSession) {
-                        $continueBrowsingUrl = $this->resolveContinueBrowsingUrl($payment, $request);
-                        return redirect($continueBrowsingUrl);
+                        return redirect()->route('wifi.packages', $this->buildPackagesRouteParameters(
+                            phone: $phone,
+                            payment: $payment,
+                            tenantId: (int) $payment->tenant_id
+                        ));
                     }
                 }
             } catch (\Exception $e) {
@@ -1209,6 +1202,14 @@ class CaptivePortalController extends Controller
 
         $statusView = $this->deriveStatusView($payment, $activeSession);
 
+        if ($activeSession) {
+            return redirect()->route('wifi.packages', $this->buildPackagesRouteParameters(
+                phone: $phone,
+                payment: $payment,
+                tenantId: (int) $payment->tenant_id
+            ));
+        }
+
         if ($statusView === 'failed') {
             session()->forget('captive_payment_id');
 
@@ -1228,6 +1229,15 @@ class CaptivePortalController extends Controller
                 tenantId: (int) $payment->tenant_id
             ))->with('message', 'Payment is still processing. If you were charged, access will activate automatically. Otherwise, select a package and try again.');
         }
+
+        return redirect()->route('wifi.packages', $this->buildPackagesRouteParameters(
+            phone: $phone,
+            payment: $payment,
+            tenantId: (int) $payment->tenant_id
+        ))->with('message', in_array($statusView, ['paid', 'pending'], true)
+            ? 'Payment is being processed. If you are already connected, continue browsing. If not, choose a package or use reconnect.'
+            : 'Choose a package or use reconnect to get online.'
+        );
 
         $radiusPortalState = $this->resolveRadiusPortalState($payment, $statusView, $activeSession);
         $radiusPendingReauth = (bool) $radiusPortalState['pending_reauth'];
@@ -1474,7 +1484,7 @@ class CaptivePortalController extends Controller
 
         if (!in_array((string) $payment->status, ['completed', 'confirmed'], true)) {
             return redirect()->back()
-                ->withErrors(['Payment found but not yet confirmed. Tap "Recheck Payment" on status screen in 10-20 seconds.'])
+                ->withErrors(['Payment found but not yet confirmed. Wait 10-20 seconds, then reopen the portal or try reconnect again.'])
                 ->withInput();
         }
         
@@ -4287,6 +4297,8 @@ class CaptivePortalController extends Controller
 
     private function resolvePaymentAccessExpiresAt(Payment $payment, ?UserSession $session = null): ?Carbon
     {
+        $paymentPackageExpiresAt = $this->resolvePaymentPackageExpiresAt($payment);
+
         if ($session) {
             if (
                 in_array((string) $session->status, ['expired', 'terminated'], true)
@@ -4301,7 +4313,8 @@ class CaptivePortalController extends Controller
             }
 
             if ($this->sessionAwaitsRadiusLogin($session)) {
-                return $this->resolvePendingRadiusAuthorizationExpiresAt($payment, $session);
+                return $paymentPackageExpiresAt
+                    ?? ($session->expires_at instanceof Carbon ? $session->expires_at->copy() : null);
             }
 
             if ($session->grace_period_active && $session->grace_period_ends_at instanceof Carbon) {
@@ -4313,6 +4326,11 @@ class CaptivePortalController extends Controller
             }
         }
 
+        return $paymentPackageExpiresAt;
+    }
+
+    private function resolvePaymentPackageExpiresAt(Payment $payment): ?Carbon
+    {
         $durationMinutes = max(1, (int) ($payment->package?->duration_in_minutes ?? 0));
 
         foreach ([
@@ -4383,10 +4401,7 @@ class CaptivePortalController extends Controller
         ?UserSession $session = null,
         ?Carbon $preparedAt = null
     ): Carbon {
-        $windowMinutes = max(
-            max(1, (int) config('radius.pending_login_window_minutes', 360)),
-            max(1, (int) ($payment->package?->duration_in_minutes ?? 0))
-        );
+        $windowMinutes = max(1, (int) config('radius.pending_login_window_minutes', 10));
 
         $baseTime = $preparedAt
             ?? ($session?->pendingRadiusAuthorizationExpiresAt()?->subMinutes($windowMinutes))
@@ -4424,6 +4439,8 @@ class CaptivePortalController extends Controller
             ?? ($payment->created_at?->copy())
             ?? now()->copy();
         $authorizationExpiresAt = $this->resolvePendingRadiusAuthorizationExpiresAt($payment, $session, $preparedAt);
+        $packageExpiresAt = $this->resolvePaymentPackageExpiresAt($payment)
+            ?? ($session->expires_at instanceof Carbon ? $session->expires_at->copy() : $authorizationExpiresAt->copy());
         $authorizationWindowMetadata = [
             'authorization_started_at' => $preparedAt->toIso8601String(),
             'authorization_expires_at' => $authorizationExpiresAt->toIso8601String(),
@@ -4437,7 +4454,7 @@ class CaptivePortalController extends Controller
         $sessionMetadata['activation'] = array_merge($activationMetadata, $authorizationWindowMetadata);
         $session->update([
             'status' => 'idle',
-            'expires_at' => $authorizationExpiresAt,
+            'expires_at' => $packageExpiresAt,
             'metadata' => $sessionMetadata,
         ]);
 

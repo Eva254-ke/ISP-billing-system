@@ -166,36 +166,7 @@
             <div class="cp-flash error">{{ $errors->first() }}</div>
         @endif
 
-        @if(isset($activeSession) && $activeSession)
-            @php
-                $statusPhone = $activeSession->phone ?? $phone;
-            @endphp
-            <article class="cp-card">
-                <span class="cp-status-pill success">Connected</span>
-                <h2 class="cp-section-title">You are already connected</h2>
-                <p class="cp-card-subtitle">This device still has time left.</p>
-
-                <div class="cp-facts">
-                    <div class="cp-fact">
-                        <span>Phone</span>
-                        <span>{{ $statusPhone ?: 'Not captured' }}</span>
-                    </div>
-                    <div class="cp-fact">
-                        <span>Expires</span>
-                        <span id="activeExpires">{{ $activeSession->expires_at?->format('H:i') ?? 'N/A' }}</span>
-                    </div>
-                    <div class="cp-fact">
-                        <span>Time Left</span>
-                        <span id="timeLeft">--:--:--</span>
-                    </div>
-                </div>
-
-                @if($statusPhone)
-                    <a href="{{ route('wifi.status', array_filter(['phone' => $statusPhone, 'tenant_id' => $tenantId > 0 ? $tenantId : null], static fn ($value) => $value !== null && $value !== '')) }}" class="cp-btn cp-btn-primary cp-btn-block">View Connection Status</a>
-                @endif
-            </article>
-        @else
-            <article class="cp-card">
+        <article class="cp-card">
                 <div class="cp-step" id="cpStep1">
                     <div class="cp-flow">
                         <div class="cp-flow-step is-current">1. Choose package</div>
@@ -282,8 +253,6 @@
                     </form>
                 </div>
             </article>
-
-        @endif
 
         <article class="cp-card cp-card-compact">
             <h3 class="cp-section-subtitle">Already paid?</h3>
@@ -374,28 +343,6 @@
             payButton.textContent = 'Sending M-Pesa prompt...';
         });
 
-        @if(isset($activeSession) && $activeSession)
-        const expiresAt = new Date('{{ $activeSession->expires_at?->toIso8601String() ?? $activeSession->expires_at }}').getTime();
-        function updateActiveCountdown() {
-            const node = document.getElementById('timeLeft');
-            if (!node || !expiresAt) return;
-
-            const diff = expiresAt - Date.now();
-            if (diff <= 0) {
-                node.textContent = 'Expired';
-                return;
-            }
-
-            const totalSeconds = Math.floor(diff / 1000);
-            const hours = Math.floor(totalSeconds / 3600);
-            const minutes = Math.floor((totalSeconds % 3600) / 60);
-            const seconds = totalSeconds % 60;
-            node.textContent = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-        }
-
-        updateActiveCountdown();
-        setInterval(updateActiveCountdown, 1000);
-        @endif
     </script>
 </body>
 </html>

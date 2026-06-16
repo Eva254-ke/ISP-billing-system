@@ -184,11 +184,6 @@ class UserSession extends Model
             return false;
         }
 
-        $pendingRadiusExpiry = $this->pendingRadiusAuthorizationExpiresAt();
-        if ($pendingRadiusExpiry instanceof Carbon && $pendingRadiusExpiry->isFuture()) {
-            return false;
-        }
-
         if ($this->isInGracePeriod || $this->hasPendingGraceWindow()) {
             return false;
         }
@@ -370,11 +365,6 @@ class UserSession extends Model
             return true;
         }
 
-        $pendingRadiusExpiry = $this->pendingRadiusAuthorizationExpiresAt();
-        if ($pendingRadiusExpiry instanceof Carbon && $pendingRadiusExpiry->isFuture()) {
-            return false;
-        }
-
         if (!$this->expires_at) {
             return false;
         }
@@ -462,10 +452,6 @@ class UserSession extends Model
 
     public function shouldActivateGracePeriod(): bool
     {
-        if ($this->awaitsRadiusReauthentication()) {
-            return false;
-        }
-
         if ($this->grace_period_active || !$this->expires_at || !$this->expires_at->isPast()) {
             return false;
         }
@@ -530,10 +516,7 @@ class UserSession extends Model
         $metadata = is_array($this->metadata) ? $this->metadata : [];
         $activationMetadata = is_array($metadata['activation'] ?? null) ? $metadata['activation'] : [];
         $radiusMetadata = is_array($metadata['radius'] ?? null) ? $metadata['radius'] : [];
-        $windowMinutes = max(
-            max(1, (int) config('radius.pending_login_window_minutes', 360)),
-            max(1, (int) ($this->package?->duration_in_minutes ?? 0))
-        );
+        $windowMinutes = max(1, (int) config('radius.pending_login_window_minutes', 10));
 
         $baseTime = $this->parseFlexibleDateTimeValue($activationMetadata['authorization_started_at'] ?? null)
             ?? $this->parseFlexibleDateTimeValue($activationMetadata['last_attempt_at'] ?? null)

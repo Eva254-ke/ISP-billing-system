@@ -83,7 +83,6 @@ class ActivateSession implements ShouldQueue
 
                 $freshSession->update([
                     'status' => 'idle',
-                    'expires_at' => $authorizationExpiresAt,
                     'last_synced_at' => now(),
                 ]);
 
@@ -128,7 +127,6 @@ class ActivateSession implements ShouldQueue
 
                 $freshSession->update([
                     'status' => 'idle',
-                    'expires_at' => $authorizationExpiresAt,
                     'last_synced_at' => now(),
                 ]);
 
@@ -286,10 +284,7 @@ class ActivateSession implements ShouldQueue
 
     private function resolvePendingRadiusAuthorizationExpiresAt(UserSession $session, Carbon $preparedAt): Carbon
     {
-        $windowMinutes = max(
-            max(1, (int) config('radius.pending_login_window_minutes', 360)),
-            max(1, (int) ($session->package?->duration_in_minutes ?? 0))
-        );
+        $windowMinutes = max(1, (int) config('radius.pending_login_window_minutes', 10));
 
         return $preparedAt->copy()->addMinutes($windowMinutes);
     }
