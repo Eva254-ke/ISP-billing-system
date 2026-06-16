@@ -86,23 +86,16 @@ class CaptivePortalController extends Controller
         );
 
         if ($activeSession) {
-            session([
-                'captive_tenant_id' => $tenant->id,
-                'captive_payment_id' => $activeSession->payment_id ?? null,
-            ]);
-
-            if (!empty($activeSession->phone)) {
-                $phone = (string) $activeSession->phone;
-                session(['captive_phone' => $phone]);
-            }
-
+            // Active session found on packages page; rendering portal instead of redirecting
             Log::channel('captive')->info('Active session found on packages page; rendering portal instead of redirecting', [
                 'session_id' => $activeSession->id,
                 'phone' => $activeSession->phone,
-                'mac' => $clientMac,
-                'ip' => $clientIp,
-                'expires_at' => $activeSession->expires_at,
             ]);
+            session([
+                'captive_payment_id' => $activeSession->payment_id,
+                'captive_phone' => $activeSession->phone,
+            ]);
+            // Continue to render packages view
         }
 
         // Log session detection for debugging
@@ -1200,69 +1193,13 @@ class CaptivePortalController extends Controller
             ))->with('message', 'Your previous session expired. Select a package to reconnect.');
         }
 
-        $statusView = $this->deriveStatusView($payment, $activeSession);
-
-        if ($activeSession) {
-            return redirect()->route('wifi.packages', $this->buildPackagesRouteParameters(
-                phone: $phone,
-                payment: $payment,
-                tenantId: (int) $payment->tenant_id
-            ));
-        }
-
-        if ($statusView === 'failed') {
-            session()->forget('captive_payment_id');
-
-            return redirect()->route('wifi.packages', $this->buildPackagesRouteParameters(
-                phone: $phone,
-                payment: $payment,
-                tenantId: (int) $payment->tenant_id,
-                extra: ['payment_failed' => 1]
-            ))->with('message', 'Payment was not completed. Select a package and try again.');
-        }
-
-        // Never render the dead-end "under review / verifying" page.
-        if ($statusView === 'verifying') {
-            return redirect()->route('wifi.packages', $this->buildPackagesRouteParameters(
-                phone: $phone,
-                payment: $payment,
-                tenantId: (int) $payment->tenant_id
-            ))->with('message', 'Payment is still processing. If you were charged, access will activate automatically. Otherwise, select a package and try again.');
-        }
-
-        return redirect()->route('wifi.packages', $this->buildPackagesRouteParameters(
+        // Redirect to packages page as the only captive portal pages needed
+        $redirectParams = $this->buildPackagesRouteParameters(
             phone: $phone,
             payment: $payment,
             tenantId: (int) $payment->tenant_id
-        ))->with('message', in_array($statusView, ['paid', 'pending'], true)
-            ? 'Payment is being processed. If you are already connected, continue browsing. If not, choose a package or use reconnect.'
-            : 'Choose a package or use reconnect to get online.'
         );
-
-        $radiusPortalState = $this->resolveRadiusPortalState($payment, $statusView, $activeSession);
-        $radiusPendingReauth = (bool) $radiusPortalState['pending_reauth'];
-        $radiusAutoLogin = $radiusPortalState['auto_login'];
-        $radiusFallback = $radiusPortalState['fallback'];
-
-        $continueBrowsingUrl = $this->resolveContinueBrowsingUrl($payment, $request);
-        $continueBrowsingAutoLogin = $this->buildContinueBrowsingAutoLoginPayload(
-            payment: $payment,
-            activeSession: $activeSession,
-            request: $request,
-            continueBrowsingUrl: $continueBrowsingUrl
-        );
-        
-        return view('captive.status', compact(
-            'payment',
-            'phone',
-            'activeSession',
-            'statusView',
-            'radiusFallback',
-            'radiusPendingReauth',
-            'radiusAutoLogin',
-            'continueBrowsingUrl',
-            'continueBrowsingAutoLogin'
-        ));
+        return redirect()->route('wifi.packages', $redirectParams);
     }
     
     /**
@@ -2394,6 +2331,13 @@ class CaptivePortalController extends Controller
             ?? $this->normalizeMacAddress((string) ($existingSession?->mac_address ?? ''));
         $clientIp = $this->normalizeClientIpAddress((string) ($paymentClientContext['ip'] ?? ''))
             ?? $this->normalizeClientIpAddress((string) ($existingSession?->ip_address ?? ''));
+        // Fallback to session-stored values if still missing
+        if ($clientMac === null) {
+            $clientMac = $this->normalizeMacAddress((string) session('captive_client_mac', ''));
+        }
+        if ($clientIp === null) {
+            $clientIp = $this->normalizeClientIpAddress((string) session('captive_client_ip', ''));
+        }
         $radiusEnabled = (bool) config('radius.enabled', false);
         $identityResolver = app(RadiusIdentityResolver::class);
         $identity = $identityResolver->resolve(
