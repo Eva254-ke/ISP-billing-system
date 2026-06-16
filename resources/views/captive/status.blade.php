@@ -234,7 +234,7 @@
                 </div>
 
                 <div class="cp-actions">
-                    <a href="{{ $statusRoute }}" class="cp-btn cp-btn-primary">Refresh Status</a>
+                    <a href="{{ $statusRoute }}" class="cp-btn cp-btn-soft">Still waiting? Check now</a>
                 </div>
 
             @elseif($statusView === 'paid')
@@ -246,9 +246,9 @@
                         </h2>
                         <p class="cp-card-subtitle">
                             @if($radiusAutoLogin)
-                                Your payment is confirmed. We are sending your hotspot login through RADIUS now.
+                                Your payment is confirmed. We are signing this device into the hotspot automatically now.
                             @elseif($radiusPendingReauth)
-                                Your payment is confirmed. Keep this page open and refresh or reconnect WiFi so the hotspot can re-check your device through RADIUS.
+                                Your payment is confirmed. Keep this page open while the hotspot re-checks this device through RADIUS.
                             @else
                                 Your payment is confirmed. Activation usually takes a few seconds.
                             @endif
@@ -266,7 +266,7 @@
                 @if($radiusPendingReauth)
                     <div class="cp-panel">
                         <h3>What to do now</h3>
-                        <p>Stay on this page for a few seconds, then refresh the captive page or briefly reconnect WiFi. Access should open as soon as the hotspot sees your paid MAC address.</p>
+                        <p>Stay on this page for a few seconds. Access should open as soon as the hotspot sees your paid MAC address.</p>
                     </div>
                 @endif
 
@@ -286,11 +286,11 @@
 
                 @if($radiusAutoLogin)
                     <div class="cp-actions">
-                        <button type="button" id="cpRadiusConnectButton" class="cp-btn cp-btn-primary">Connect Now</button>
-                        <a href="{{ $statusRoute }}" class="cp-btn cp-btn-soft">Check Status Now</a>
+                        <button type="button" id="cpRadiusConnectButton" class="cp-btn cp-btn-soft">Retry Connect</button>
+                        <a href="{{ $statusRoute }}" class="cp-btn cp-btn-soft">Check Status</a>
                     </div>
                 @else
-                    <a href="{{ $statusRoute }}" class="cp-btn cp-btn-primary cp-btn-block">Check Status Now</a>
+                    <a href="{{ $statusRoute }}" class="cp-btn cp-btn-soft cp-btn-block">Check Status</a>
                 @endif
 
             @elseif($statusView === 'activated')
@@ -336,7 +336,7 @@
                 <h2 class="cp-section-title">Status update in progress</h2>
                 <p class="cp-card-subtitle">Current state: {{ $payment->status }}</p>
 
-                <a href="{{ $statusRoute }}" class="cp-btn cp-btn-primary cp-btn-block">Refresh</a>
+                <a href="{{ $statusRoute }}" class="cp-btn cp-btn-soft cp-btn-block">Check Status</a>
             @endif
 
             @if($statusView !== 'activated')
