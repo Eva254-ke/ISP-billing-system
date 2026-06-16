@@ -1193,13 +1193,27 @@ class CaptivePortalController extends Controller
             ))->with('message', 'Your previous session expired. Select a package to reconnect.');
         }
 
-        // Redirect to packages page as the only captive portal pages needed
-        $redirectParams = $this->buildPackagesRouteParameters(
-            phone: $phone,
-            payment: $payment,
-            tenantId: (int) $payment->tenant_id
+        $statusView = $this->deriveStatusView($payment, $activeSession);
+        $radiusPortalState = $this->resolveRadiusPortalState($payment, $statusView, $activeSession);
+        $continueBrowsingUrl = $this->resolveContinueBrowsingUrl($payment, $request);
+        $continueBrowsingAutoLogin = $this->buildContinueBrowsingAutoLoginPayload(
+            $payment,
+            $activeSession,
+            $request,
+            $continueBrowsingUrl
         );
-        return redirect()->route('wifi.packages', $redirectParams);
+
+        return view('captive.status', [
+            'payment' => $payment,
+            'phone' => $phone,
+            'statusView' => $statusView,
+            'activeSession' => $activeSession,
+            'radiusAutoLogin' => $radiusPortalState['auto_login'],
+            'radiusPendingReauth' => (bool) $radiusPortalState['pending_reauth'],
+            'radiusFallback' => $radiusPortalState['fallback'],
+            'continueBrowsingUrl' => $continueBrowsingUrl,
+            'continueBrowsingAutoLogin' => $continueBrowsingAutoLogin,
+        ]);
     }
     
     /**
