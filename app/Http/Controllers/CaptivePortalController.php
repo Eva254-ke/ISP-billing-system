@@ -2719,10 +2719,6 @@ class CaptivePortalController extends Controller
                 || (bool) ($existingActivationMetadata['waiting_for_reauth'] ?? false);
 
             if ($alreadyAwaitingRadiusLogin) {
-                if ($this->hasFreshPendingRadiusAuthorization($session, $payment)) {
-                    return $session->fresh() ?? $session;
-                }
-
                 return $this->syncPendingRadiusAuthorizationWindowState($payment, $session);
             }
 
@@ -2750,6 +2746,7 @@ class CaptivePortalController extends Controller
             ]);
 
             $payment->update([
+                'session_id' => $session->id,
                 'metadata' => array_merge($payment->metadata ?? [], [
                     'activation' => array_merge(
                         (array) (($payment->metadata ?? [])['activation'] ?? []),
@@ -2800,6 +2797,7 @@ class CaptivePortalController extends Controller
             ]);
 
             $payment->update([
+                'session_id' => $session->id,
                 'metadata' => array_merge($payment->metadata ?? [], [
                     'activation' => array_merge(
                         (array) (($payment->metadata ?? [])['activation'] ?? []),
@@ -4519,6 +4517,7 @@ class CaptivePortalController extends Controller
 
         $paymentMetadata['activation'] = array_merge($paymentActivationMetadata, $authorizationWindowMetadata);
         $payment->update([
+            'session_id' => $session->id,
             'metadata' => $paymentMetadata,
         ]);
 

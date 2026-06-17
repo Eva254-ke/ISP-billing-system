@@ -90,7 +90,10 @@ class CaptivePortalPaymentStatusTest extends TestCase
     public function test_packages_redirects_to_status_for_recent_captive_payment_in_session(): void
     {
         $tenant = $this->createTenant();
-        $package = $this->createPackage($tenant);
+        $package = $this->createPackage($tenant, [
+            'duration_value' => 24,
+            'duration_unit' => 'hours',
+        ]);
         $payment = $this->createPayment($tenant, $package, [
             'status' => 'confirmed',
             'confirmed_at' => now(),
@@ -1214,6 +1217,20 @@ class CaptivePortalPaymentStatusTest extends TestCase
         $this->assertLessThanOrEqual(15, strlen((string) $payment->phone));
         $this->assertSame(Voucher::STATUS_USED, (string) $voucher->status);
         $this->assertNull($voucher->used_by_phone);
+
+        $session = UserSession::query()->where('payment_id', $payment->id)->firstOrFail();
+        $payment->refresh();
+
+        $this->assertSame($session->id, $payment->session_id);
+        $this->assertSame('idle', (string) $session->status);
+        $this->assertGreaterThan(
+            now()->addHours(23)->timestamp,
+            $session->expires_at->timestamp
+        );
+        $this->assertGreaterThan(
+            now()->addHours(23)->timestamp,
+            Carbon::parse((string) data_get($session->metadata, 'radius.expires_at'))->timestamp
+        );
     }
 
     public function test_voucher_redemption_accepts_suffix_only_when_prefix_is_supplied(): void
