@@ -2719,6 +2719,50 @@ class CaptivePortalController extends Controller
             }
         }
 
+        if ($radiusProvisioned && $radiusPureFlow) {
+            $preparedAt = now();
+            $activationMetadata = [
+                'authorization_started_at' => $preparedAt->toIso8601String(),
+                'authorization_expires_at' => $radiusAccessExpiresAt->toIso8601String(),
+                'last_attempt_at' => $preparedAt->toIso8601String(),
+                'method' => ($identity['identity_type'] ?? null) === 'mac' ? 'radius_mac_auth' : 'radius_hotspot_login',
+                'router_api_skipped' => true,
+                'auto_login_ready' => true,
+                'waiting_for_hotspot_login' => false,
+                'waiting_for_reauth' => false,
+            ];
+
+            $session->update([
+                'status' => 'idle',
+                'expires_at' => $radiusAccessExpiresAt,
+                'metadata' => array_merge($session->metadata ?? [], [
+                    'activation' => array_merge(
+                        (array) (($session->metadata ?? [])['activation'] ?? []),
+                        $activationMetadata
+                    ),
+                ]),
+            ]);
+
+            $payment->update([
+                'session_id' => $session->id,
+                'metadata' => array_merge($payment->metadata ?? [], [
+                    'activation' => array_merge(
+                        (array) (($payment->metadata ?? [])['activation'] ?? []),
+                        $activationMetadata
+                    ),
+                ]),
+            ]);
+
+            Log::info('Paid access ready for RADIUS hotspot auto-login', [
+                'payment_id' => $payment->id,
+                'session_id' => $session->id,
+                'username' => $username,
+                'identity_type' => $identity['identity_type'],
+            ]);
+
+            return $session->fresh();
+        }
+
         $sessionManager = app(SessionManager::class);
         $activation = $sessionManager->activateSession($session->fresh(), $payment->package);
 
