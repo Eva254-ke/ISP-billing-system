@@ -5,6 +5,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
 use App\Http\Controllers\Admin\AdminPageController;
+use App\Http\Controllers\CaptivePortalController; // <--- ADDED FOR NEW PORTAL
 use App\Models\Router;
 use App\Models\Package;
 use App\Models\Payment;
@@ -101,40 +102,42 @@ Route::prefix('portal')->name('portal.')->group(function () {
 });
 
 // ----------------------------------------------------------------------------
-// Captive Portal Routes (Public - New WiFi Payment Flow)
+// Captive Portal Routes (Public - NEW Zero-Friction WiFi Payment Flow)
 // No authentication required - for users connecting to WiFi
 // ----------------------------------------------------------------------------
 Route::prefix('wifi')->name('wifi.')->group(function () {
-    // Package selection and payment initiation
-    Route::get('/', [\App\Http\Controllers\CaptivePortalController::class, 'packages'])->name('packages');
-    Route::post('/pay', [\App\Http\Controllers\CaptivePortalController::class, 'pay'])
-        ->middleware('throttle:20,1')
-        ->name('pay');
+    // 1. The ONLY page the user sees (Single Page Architecture)
+    Route::get('/', [CaptivePortalController::class, 'index'])->name('index');
     
-    // Payment and session status
-    Route::get('/status/{phone}', [\App\Http\Controllers\CaptivePortalController::class, 'status'])->name('status');
-    Route::get('/status/{phone}/check', [\App\Http\Controllers\CaptivePortalController::class, 'checkStatus'])->name('status.check');
-    
-    // Reconnection flows
-    Route::get('/reconnect', [\App\Http\Controllers\CaptivePortalController::class, 'reconnectForm'])->name('reconnect.form');
-    Route::post('/reconnect', [\App\Http\Controllers\CaptivePortalController::class, 'reconnect'])
-        ->middleware('throttle:20,1')
+    // 2. AJAX Endpoints for Payment & Voucher Initiation
+    Route::post('/initiate', [CaptivePortalController::class, 'initiate'])
+        ->middleware('throttle:30,1') // Prevent M-Pesa STK spam
+        ->name('initiate');
+        
+    // 3. AJAX Endpoint to Poll M-Pesa Status (Frontend polls this every 3s)
+    Route::get('/status/{payment}', [CaptivePortalController::class, 'checkStatus'])
+        ->name('status.check');
+        
+    // 4. AJAX Endpoint for Reconnecting via M-Pesa Receipt or Voucher Code
+    Route::post('/reconnect', [CaptivePortalController::class, 'reconnect'])
+        ->middleware('throttle:30,1')
         ->name('reconnect');
-    
-    // Session extension
-    Route::post('/extend', [\App\Http\Controllers\CaptivePortalController::class, 'extend'])
-        ->middleware('throttle:20,1')
-        ->name('extend');
+        
+    // 5. The Magic Close Endpoint (OS Connectivity Check)
+    // Bypasses CSRF because OS background checkers (iOS/Android) hit this directly without sessions
+    Route::get('/connect', [CaptivePortalController::class, 'connect'])
+        ->name('connect')
+        ->withoutMiddleware([\App\Http\Middleware\VerifyCsrfToken::class]);
 });
 
 // Compatibility redirect: some users access captive via /admin/wifi by mistake.
 Route::get('/admin/wifi', function () {
     $tenantId = (int) (Auth::user()?->tenant_id ?? 0);
     if ($tenantId > 0) {
-        return redirect()->route('wifi.packages', ['tenant_id' => $tenantId]);
+        return redirect()->route('wifi.index', ['tenant_id' => $tenantId]); // <--- FIXED: was wifi.packages
     }
 
-    return redirect()->route('wifi.packages');
+    return redirect()->route('wifi.index'); // <--- FIXED: was wifi.packages
 });
 
 // ============================================================================
@@ -174,11 +177,8 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
     // ----------------------------------------------------------------------------
     Route::prefix('routers')->name('routers.')->group(function () {
         Route::get('/', [AdminPageController::class, 'routers'])->name('index');
-        
         Route::get('/create', [AdminPageController::class, 'routersCreate'])->name('create');
-        
         Route::get('/{router}', [AdminPageController::class, 'routersShow'])->name('show');
-        
         Route::get('/{router}/edit', [AdminPageController::class, 'routersEdit'])->name('edit');
     });
     
@@ -187,11 +187,8 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
     // ----------------------------------------------------------------------------
     Route::prefix('packages')->name('packages.')->group(function () {
         Route::get('/', [AdminPageController::class, 'packages'])->name('index');
-        
         Route::get('/create', [AdminPageController::class, 'packagesCreate'])->name('create');
-        
         Route::get('/{package}', [AdminPageController::class, 'packagesShow'])->name('show');
-        
         Route::get('/{package}/edit', [AdminPageController::class, 'packagesEdit'])->name('edit');
     });
     
@@ -200,9 +197,7 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
     // ----------------------------------------------------------------------------
     Route::prefix('vouchers')->name('vouchers.')->group(function () {
         Route::get('/', [AdminPageController::class, 'vouchersIndex'])->name('index');
-        
         Route::get('/generate', [AdminPageController::class, 'vouchersGenerate'])->name('generate');
-        
         Route::get('/print', [AdminPageController::class, 'vouchersPrint'])->name('print');
     });
     
@@ -211,9 +206,7 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
     // ----------------------------------------------------------------------------
     Route::prefix('payments')->name('payments.')->group(function () {
         Route::get('/', [AdminPageController::class, 'payments'])->name('index');
-        
         Route::get('/export', [AdminPageController::class, 'paymentsExport'])->name('export');
-
         Route::get('/{payment}/invoice', [AdminPageController::class, 'paymentInvoice'])->name('invoice');
     });
 
@@ -229,9 +222,7 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
     // ----------------------------------------------------------------------------
     Route::prefix('clients')->name('clients.')->group(function () {
         Route::get('/hotspot', [AdminPageController::class, 'clientsHotspot'])->name('hotspot');
-        
         Route::get('/pppoe', [AdminPageController::class, 'clientsPppoe'])->name('pppoe');
-        
         Route::get('/customers', [AdminPageController::class, 'clientsCustomers'])->name('customers');
     });
     
@@ -242,11 +233,8 @@ Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function
     
     Route::prefix('settings')->name('settings.')->group(function () {
         Route::get('/mpesa', [AdminPageController::class, 'settingsMpesa'])->name('mpesa');
-        
         Route::get('/sms', [AdminPageController::class, 'settingsSms'])->name('sms');
-        
         Route::get('/branding', [AdminPageController::class, 'settingsBranding'])->name('branding');
-        
         Route::get('/account', [AdminPageController::class, 'settingsAccount'])->name('account');
     });
     

@@ -3221,6 +3221,96 @@ class CaptivePortalPaymentStatusTest extends TestCase
         $this->assertNotNull(data_get($session->metadata, 'radius.revoked_at'));
     }
 
+    public function test_session_manager_keeps_shared_mac_radius_profile_for_another_live_session(): void
+    {
+        config()->set('radius.enabled', true);
+        config()->set('radius.pure_radius', true);
+        config()->set('radius.disconnect_on_terminate', true);
+        $this->configureRadiusProvisioningConnection();
+
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant);
+        $router = $this->createRouter($tenant, [
+            'status' => 'online',
+            'last_seen_at' => now(),
+        ]);
+        $username = 'CE:02:07:D9:07:9D';
+
+        DB::connection('radius')->table('radcheck')->insert([
+            'username' => $username,
+            'attribute' => 'Cleartext-Password',
+            'op' => ':=',
+            'value' => $username,
+        ]);
+
+        DB::connection('radius')->table('radreply')->insert([
+            'username' => $username,
+            'attribute' => 'Session-Timeout',
+            'op' => ':=',
+            'value' => '7200',
+        ]);
+
+        $livePayment = $this->createPayment($tenant, $package, [
+            'status' => 'confirmed',
+            'completed_at' => now()->subMinutes(20),
+        ]);
+        UserSession::query()->create([
+            'tenant_id' => $tenant->id,
+            'router_id' => $router->id,
+            'package_id' => $package->id,
+            'username' => $username,
+            'phone' => '0712345678',
+            'status' => 'idle',
+            'started_at' => now()->subMinutes(20),
+            'expires_at' => now()->addHour(),
+            'payment_id' => $livePayment->id,
+            'metadata' => [
+                'radius' => [
+                    'provisioned' => true,
+                    'username' => $username,
+                ],
+            ],
+        ]);
+
+        $expiredPayment = $this->createPayment($tenant, $package, [
+            'status' => 'confirmed',
+            'completed_at' => now()->subMinutes(10),
+        ]);
+        $expiredSession = UserSession::query()->create([
+            'tenant_id' => $tenant->id,
+            'router_id' => $router->id,
+            'package_id' => $package->id,
+            'username' => $username,
+            'phone' => '0712345678',
+            'status' => 'active',
+            'started_at' => now()->subMinutes(10),
+            'expires_at' => now()->subMinute(),
+            'payment_id' => $expiredPayment->id,
+            'metadata' => [
+                'radius' => [
+                    'provisioned' => true,
+                    'username' => $username,
+                ],
+            ],
+        ]);
+
+        $mikrotikService = Mockery::mock(MikroTikService::class);
+        $mikrotikService->shouldNotReceive('disconnectSession');
+
+        $radiusDisconnectService = Mockery::mock(RadiusDisconnectService::class);
+        $radiusDisconnectService->shouldNotReceive('disconnect');
+
+        $manager = new SessionManager($mikrotikService, $radiusDisconnectService, new FreeRadiusProvisioningService());
+
+        $this->assertTrue($manager->terminateSession($expiredSession, 'expired'));
+
+        $expiredSession->refresh();
+        $this->assertSame('terminated', $expiredSession->status);
+        $this->assertSame('shared_live_authorization', data_get($expiredSession->metadata, 'radius.revocation_skip_reason'));
+        $this->assertSame(1, DB::connection('radius')->table('radcheck')->where('username', $username)->count());
+        $this->assertSame(1, DB::connection('radius')->table('radreply')->where('username', $username)->count());
+    }
+
     public function test_session_manager_preserves_pure_radius_session_when_radius_disconnect_fails(): void
     {
         config()->set('radius.enabled', true);

@@ -361,6 +361,23 @@ class SessionManager
 
     private function terminateRadiusManagedSession(UserSession $session, string $reason): bool
     {
+        $radiusUsername = $this->resolveRadiusUsername($session);
+        if (
+            $radiusUsername !== ''
+            && $this->shouldPreserveSharedRadiusAuthorization($session, $radiusUsername, $reason)
+        ) {
+            $this->storeRadiusRevocationSkippedMetadata($session, $radiusUsername, $reason);
+            $session->markTerminated($reason);
+
+            Log::channel('radius')->info('Session terminated without revoking shared RADIUS authorization', [
+                'session_id' => $session->id,
+                'username' => $radiusUsername,
+                'reason' => $reason,
+            ]);
+
+            return true;
+        }
+
         $authorizationRevoked = $this->revokeRadiusAuthorization($session, $reason);
 
         if (!(bool) config('radius.disconnect_on_terminate', false)) {
@@ -485,6 +502,24 @@ class SessionManager
         return '';
     }
 
+    private function shouldPreserveSharedRadiusAuthorization(UserSession $session, string $username, string $reason): bool
+    {
+        if (!in_array($reason, ['expired', 'data_limit_reached', 'expiry_check'], true)) {
+            return false;
+        }
+
+        return UserSession::query()
+            ->where('tenant_id', $session->tenant_id)
+            ->whereKeyNot($session->getKey())
+            ->whereIn('status', ['active', 'idle'])
+            ->where(function ($query): void {
+                $query->whereNull('expires_at')
+                    ->orWhere('expires_at', '>', now());
+            })
+            ->where('username', $username)
+            ->exists();
+    }
+
     private function storeRadiusRevocationMetadata(UserSession $session, string $username, string $reason): void
     {
         $revokedAt = now()->toIso8601String();
@@ -516,5 +551,21 @@ class SessionManager
         ]);
 
         $payment->update(['metadata' => $paymentMetadata]);
+    }
+
+    private function storeRadiusRevocationSkippedMetadata(UserSession $session, string $username, string $reason): void
+    {
+        $skippedAt = now()->toIso8601String();
+        $sessionMetadata = is_array($session->metadata) ? $session->metadata : [];
+        $sessionRadius = is_array($sessionMetadata['radius'] ?? null) ? $sessionMetadata['radius'] : [];
+        $sessionMetadata['radius'] = array_merge($sessionRadius, [
+            'username' => $username,
+            'active_username' => $username,
+            'revocation_skipped_at' => $skippedAt,
+            'revocation_skip_reason' => 'shared_live_authorization',
+            'revocation_reason' => $reason,
+        ]);
+
+        $session->update(['metadata' => $sessionMetadata]);
     }
 }

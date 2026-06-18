@@ -86,7 +86,7 @@
         ], $routeContext), static fn ($value) => $value !== null && $value !== ''));
         $radiusAutoLogin = is_array($radiusAutoLogin ?? null) ? $radiusAutoLogin : null;
         $radiusPendingReauth = (bool) ($radiusPendingReauth ?? false);
-        $shouldAutoPoll = in_array($statusView, ['pending', 'paid'], true);
+        $shouldAutoPoll = in_array($statusView, ['pending', 'verifying', 'paid'], true);
         $packagesParams = array_filter(array_merge([
             'phone' => $displayPhone,
             'tenant_id' => $tenantId > 0 ? $tenantId : null,
@@ -192,7 +192,7 @@
         @endif
 
         <article class="cp-card">
-            @if($statusView === 'pending')
+            @if(in_array($statusView, ['pending', 'verifying'], true))
                 <div class="cp-status-head">
                     <div>
                         <span class="cp-status-pill warning">{{ $pendingStatusLabel }}</span>
@@ -239,7 +239,7 @@
                         <span class="cp-status-pill">Payment confirmed</span>
                         <h2 class="cp-section-title">Connecting your device</h2>
                         <p class="cp-card-subtitle">
-                            @if($radiusAutoLogin)
+                            @if($formRadiusAutoLogin)
                                 Your payment is confirmed. This device is being signed into the hotspot now.
                             @elseif($radiusPendingReauth)
                                 Your payment is confirmed. The hotspot is re-authorizing this device now.
@@ -586,8 +586,12 @@
         }
 
         function submitRadiusAutoLogin(loginPayload = null) {
-            if (loginPayload && typeof loginPayload === 'object') {
-                radiusAutoLogin = loginPayload;
+            const selectedLoginPayload = loginPayload && typeof loginPayload === 'object'
+                ? loginPayload
+                : (radiusAutoLogin || continueBrowsingAutoLogin);
+
+            if (selectedLoginPayload && typeof selectedLoginPayload === 'object') {
+                radiusAutoLogin = selectedLoginPayload;
             }
 
             if (!radiusAutoLogin || !radiusAutoLogin.action) {
@@ -645,7 +649,7 @@
             }
         });
 
-        if (radiusAutoLogin && !hasRecentRadiusAutoLoginAttempt()) {
+        if ((radiusAutoLogin || continueBrowsingAutoLogin) && !hasRecentRadiusAutoLoginAttempt()) {
             setTimeout(() => {
                 submitRadiusAutoLogin();
             }, 150);
