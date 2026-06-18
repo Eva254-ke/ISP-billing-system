@@ -29,8 +29,14 @@ class CaptivePortalController extends Controller
             return response('Network configuration error. Please contact support.', 400);
         }
 
+        // Strictly collect MAC and IP from MikroTik query parameters
         $mac = $this->cleanMac($request->query('mac', $request->query('mac-address', '')));
-        $ip = $request->query('ip', $request->query('ip-address', ''));
+        $ip = $request->query('ip', $request->query('ip-address', $request->ip()));
+
+        // If MAC is missing, it means MikroTik didn't intercept the traffic
+        if (empty($mac)) {
+            return response('WiFi network error: Missing device MAC. Please "Forget" this WiFi network in your phone settings and reconnect.', 400);
+        }
 
         $isConnected = $this->isDeviceAuthorized($mac, $ip);
 
@@ -50,21 +56,30 @@ class CaptivePortalController extends Controller
 
     public function initiate(Request $request): JsonResponse
     {
-        // FIX: Using an array for rules prevents Laravel from splitting the '|' inside the regex string
+        $mac = $this->cleanMac($request->input('mac', ''));
+        $ip = $request->input('ip', $request->ip());
+
+        // Strict Production Check: We CANNOT provision without a MAC
+        if (empty($mac)) {
+            return response()->json([
+                'status' => 'failed', 
+                'message' => 'Missing device MAC address. Please "Forget" this WiFi network in your phone settings, then reconnect to trigger the portal again.'
+            ], 422);
+        }
+
+        $request->merge(['mac' => $mac, 'ip' => $ip]);
+
         $request->validate([
             'mac' => 'required|string',
             'ip' => 'required|ip',
             'type' => 'required|in:mpesa,voucher',
             'phone' => [
                 'required_if:type,mpesa',
-                'regex:' . self::KENYA_PHONE_REGEX, 
+                'regex:' . self::KENYA_PHONE_REGEX,
             ],
             'package_id' => 'required_if:type,mpesa|exists:packages,id',
             'code' => 'required_if:type,voucher|string',
         ]);
-
-        $mac = $this->cleanMac($request->mac);
-        $ip = $request->ip;
 
         if ($request->type === 'voucher') {
             return $this->processVoucher($request->code, $mac, $ip);
@@ -83,12 +98,11 @@ class CaptivePortalController extends Controller
         }
 
         if (in_array($payment->status, ['completed', 'confirmed'])) {
-            if (!$this->isDeviceAuthorized($payment->metadata['mac'] ?? '', $payment->metadata['ip'] ?? '')) {
-                $this->grantNetworkAccess(
-                    $payment->metadata['mac'] ?? '',
-                    $payment->metadata['ip'] ?? '',
-                    $payment->tenant_id
-                );
+            $pMac = $payment->metadata['mac'] ?? '';
+            $pIp = $payment->metadata['ip'] ?? '';
+            
+            if ($pMac && !$this->isDeviceAuthorized($pMac, $pIp)) {
+                $this->grantNetworkAccess($pMac, $pIp, $payment->tenant_id);
             }
             return response()->json(['status' => 'connected', 'message' => 'Access granted!']);
         }
@@ -102,14 +116,24 @@ class CaptivePortalController extends Controller
 
     public function reconnect(Request $request): JsonResponse
     {
+        $mac = $this->cleanMac($request->input('mac', ''));
+        $ip = $request->input('ip', $request->ip());
+
+        if (empty($mac)) {
+            return response()->json([
+                'status' => 'failed', 
+                'message' => 'Missing device MAC address. Please reconnect to the WiFi network.'
+            ], 422);
+        }
+
+        $request->merge(['mac' => $mac, 'ip' => $ip]);
+
         $request->validate([
             'mac' => 'required|string',
             'ip' => 'required|ip',
             'code' => 'required|string',
         ]);
 
-        $mac = $this->cleanMac($request->mac);
-        $ip = $request->ip;
         $code = strtoupper(trim($request->code));
 
         $voucher = Voucher::where('code', $code)->where('is_used', false)->first();
@@ -232,14 +256,25 @@ class CaptivePortalController extends Controller
 
     private function grantNetworkAccess(string $mac, string $ip, int $tenantId, int $ttlSeconds = 86400): void
     {
-        try {
-            $this->mikrotik->authorizeDevice($mac, $ip, $ttlSeconds);
-        } catch (\Throwable $e) {
-            Log::error('MikroTik authorization failed', ['error' => $e->getMessage(), 'mac' => $mac]);
-        }
-
+        // 1. Set O(1) Redis Cache FIRST so the fast-path check passes immediately
         Redis::setex("wifi:auth:{$mac}", $ttlSeconds, $ip);
         Redis::setex("wifi:auth:{$ip}", $ttlSeconds, $mac);
+
+        // 2. Attempt to provision on MikroTik (Catching Session Timeouts)
+        try {
+            // Set a strict timeout for the router API call if your service supports it,
+            // otherwise just catch the exception so it doesn't crash the user's portal
+            $this->mikrotik->authorizeDevice($mac, $ip, $ttlSeconds);
+        } catch (\Throwable $e) {
+            // If the router API times out or fails, we log it. 
+            // The Redis cache is already set, so if you have a background sync or RADIUS fallback, it will pick it up.
+            Log::error('MikroTik Router API Timeout/Failed', [
+                'error' => $e->getMessage(), 
+                'mac' => $mac, 
+                'ip' => $ip,
+                'tenant_id' => $tenantId
+            ]);
+        }
     }
 
     private function isDeviceAuthorized(string $mac, string $ip): bool
@@ -264,6 +299,7 @@ class CaptivePortalController extends Controller
     private function cleanMac(string $mac): string
     {
         $mac = strtoupper(preg_replace('/[^A-Fa-f0-9]/', '', $mac));
+        if (strlen($mac) < 12) return $mac; 
         return implode(':', str_split($mac, 2));
     }
 
