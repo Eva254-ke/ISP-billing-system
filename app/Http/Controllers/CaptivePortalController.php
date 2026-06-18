@@ -7,11 +7,12 @@ use Illuminate\Http\JsonResponse;
 use App\Models\Package;
 use App\Models\Payment;
 use App\Models\Tenant;
-use App\Models\Router; // <--- ADDED
+use App\Models\Router;
 use App\Models\Voucher;
 use App\Models\UserSession;
 use App\Services\MikroTik\MikroTikService;
 use App\Services\MikroTik\SessionManager;
+use App\Services\Radius\FreeRadiusProvisioningService;
 use App\Services\Mpesa\DarajaService;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
@@ -296,7 +297,7 @@ class CaptivePortalController extends Controller
             Log::warning('Cache set failed', ['error' => $e->getMessage()]);
         }
 
-        // 2. Activate Session via your existing SessionManager
+        // 2. Provision via RADIUS or SessionManager
         try {
             $package = null;
             $phone = null;
@@ -334,7 +335,7 @@ class CaptivePortalController extends Controller
                 return;
             }
 
-            // CRITICAL FIX: Find the router for this tenant so SessionManager knows where to send the command
+            // Find the router for this tenant
             $router = Router::where('tenant_id', $tenantId)->first();
 
             // Create or update the UserSession record in the database
@@ -344,7 +345,7 @@ class CaptivePortalController extends Controller
                     'mac_address' => $mac,
                 ],
                 [
-                    'router_id' => $router?->id, // <--- THIS WAS MISSING AND CAUSED THE SILENT FAILURE
+                    'router_id' => $router?->id,
                     'ip_address' => $ip,
                     'phone' => $phone,
                     'username' => $mac, 
@@ -357,16 +358,40 @@ class CaptivePortalController extends Controller
                 ]
             );
 
-            // Call the SessionManager to provision on the router/RADIUS
-            $sessionManager = app(SessionManager::class);
-            $result = $sessionManager->activateSession($session, $package);
+            // USE RADIUS INSTEAD OF MIKROTIK API
+            $radiusEnabled = (bool) config('radius.enabled', false);
             
-            Log::info('Network access grant attempt finished', [
-                'mac' => $mac, 
-                'ip' => $ip,
-                'session_id' => $session->id,
-                'session_manager_result' => $result // <--- LOGS THE EXACT RESULT FROM THE ROUTER
-            ]);
+            if ($radiusEnabled) {
+                $radiusService = app(FreeRadiusProvisioningService::class);
+                
+                $expiresAt = now()->addSeconds($ttlSeconds);
+                
+                $radiusService->provisionUser(
+                    $mac,           // username (MAC address)
+                    $mac,           // password (same as username for simplicity)
+                    $package,       // Package object
+                    $expiresAt,     // Expiration time
+                    $mac            // callingStationId (MAC address)
+                );
+                
+                Log::info('Network access granted via RADIUS', [
+                    'mac' => $mac, 
+                    'ip' => $ip,
+                    'session_id' => $session->id,
+                    'expires_at' => $expiresAt->toIso8601String()
+                ]);
+            } else {
+                // Fallback to SessionManager if RADIUS is disabled
+                $sessionManager = app(SessionManager::class);
+                $result = $sessionManager->activateSession($session, $package);
+                
+                Log::info('Network access granted via SessionManager', [
+                    'mac' => $mac, 
+                    'ip' => $ip,
+                    'session_id' => $session->id,
+                    'session_manager_result' => $result
+                ]);
+            }
 
         } catch (\Throwable $e) {
             Log::error('Session activation failed', [
