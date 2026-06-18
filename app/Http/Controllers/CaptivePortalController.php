@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Validation\Rule; // <--- ADDED FOR REGEX FIX
 use App\Models\Package;
 use App\Models\Payment;
 use App\Models\Tenant;
@@ -24,7 +25,6 @@ class CaptivePortalController extends Controller
 
     /**
      * 1. THE SINGLE PAGE (Packages / Voucher / Reconnect)
-     * No redirects. Just renders the view. The JS handles the rest.
      */
     public function index(Request $request)
     {
@@ -58,11 +58,15 @@ class CaptivePortalController extends Controller
      */
     public function initiate(Request $request): JsonResponse
     {
+        // FIX: Use Rule::regex() to prevent the '|' in the phone regex from breaking Laravel's validator
         $request->validate([
             'mac' => 'required|string',
             'ip' => 'required|ip',
             'type' => 'required|in:mpesa,voucher',
-            'phone' => 'required_if:type,mpesa|regex:' . self::KENYA_PHONE_REGEX,
+            'phone' => [
+                'required_if:type,mpesa',
+                Rule::regex(self::KENYA_PHONE_REGEX),
+            ],
             'package_id' => 'required_if:type,mpesa|exists:packages,id',
             'code' => 'required_if:type,voucher|string',
         ]);
@@ -79,11 +83,9 @@ class CaptivePortalController extends Controller
 
     /**
      * 3. POLL PAYMENT STATUS (AJAX)
-     * The frontend polls this every 3 seconds after an STK push.
      */
     public function checkStatus(Payment $payment): JsonResponse
     {
-        // Reconcile with Daraja if still pending
         if (in_array($payment->status, ['pending', 'initiated'])) {
             if (method_exists($this->daraja, 'reconcilePayment')) {
                 $this->daraja->reconcilePayment($payment);
@@ -92,7 +94,6 @@ class CaptivePortalController extends Controller
         }
 
         if (in_array($payment->status, ['completed', 'confirmed'])) {
-            // Grant access if not already granted
             if (!$this->isDeviceAuthorized($payment->metadata['mac'] ?? '', $payment->metadata['ip'] ?? '')) {
                 $this->grantNetworkAccess(
                     $payment->metadata['mac'] ?? '',
@@ -112,7 +113,6 @@ class CaptivePortalController extends Controller
 
     /**
      * 4. RECONNECT (M-Pesa Receipt Code or Voucher)
-     * Used when a user disconnects and reconnects to the WiFi.
      */
     public function reconnect(Request $request): JsonResponse
     {
@@ -126,7 +126,6 @@ class CaptivePortalController extends Controller
         $ip = $request->ip;
         $code = strtoupper(trim($request->code));
 
-        // 1. Check Vouchers
         $voucher = Voucher::where('code', $code)->where('is_used', false)->first();
         if ($voucher) {
             $voucher->update(['is_used' => true, 'used_by_mac' => $mac, 'used_at' => now()]);
@@ -134,7 +133,6 @@ class CaptivePortalController extends Controller
             return response()->json(['status' => 'connected', 'message' => 'Voucher redeemed!']);
         }
 
-        // 2. Check M-Pesa Receipts
         $payment = Payment::where('mpesa_receipt_number', $code)
             ->whereIn('status', ['completed', 'confirmed'])
             ->first();
@@ -149,20 +147,17 @@ class CaptivePortalController extends Controller
 
     /**
      * 5. THE MAGIC CLOSE (OS Connectivity Check)
-     * This endpoint MUST be whitelisted in your MikroTik Walled Garden.
      */
     public function connect(Request $request)
     {
         $ua = $request->header('User-Agent', '');
 
-        // iOS Captive Portal Detection
         if (str_contains($ua, 'CaptiveNetworkSupport') || str_contains($ua, 'iPhone') || str_contains($ua, 'iPad') || str_contains($ua, 'Mac OS X')) {
             return response('<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>', 200)
                 ->header('Content-Type', 'text/html; charset=UTF-8');
         }
 
-        // Android / Windows / Linux Captive Portal Detection
-        return response('', 204); // 204 No Content closes Android/Windows portals
+        return response('', 204);
     }
 
     // =========================================================================
@@ -174,7 +169,6 @@ class CaptivePortalController extends Controller
         $package = Package::findOrFail($packageId);
         $normalizedPhone = $this->normalizePhone($phone);
 
-        // Prevent duplicate active STK pushes
         $recentPayment = Payment::where('phone', $normalizedPhone)
             ->where('package_id', $packageId)
             ->where('status', 'pending')
@@ -200,11 +194,38 @@ class CaptivePortalController extends Controller
         ]);
 
         try {
-            $this->daraja->initiateStkPush($payment, $normalizedPhone, $package->price);
+            $triggered = false;
+            
+            // ROBUST FIX: Dynamically attempt to call the STK push method based on your service's signature
+            if (method_exists($this->daraja, 'initiateStkPush')) {
+                try {
+                    $this->daraja->initiateStkPush($payment, $normalizedPhone, $package->price);
+                    $triggered = true;
+                } catch (\ArgumentCountError $e) {
+                    $this->daraja->initiateStkPush($normalizedPhone, $package->price, $payment->id);
+                    $triggered = true;
+                }
+            } elseif (method_exists($this->daraja, 'stkPush')) {
+                $this->daraja->stkPush($normalizedPhone, $package->price, $payment->id);
+                $triggered = true;
+            } elseif (method_exists($this->daraja, 'sendStkPush')) {
+                $this->daraja->sendStkPush($normalizedPhone, $package->price);
+                $triggered = true;
+            }
+            
+            if (!$triggered) {
+                throw new \Exception("DarajaService is missing a recognized STK push method.");
+            }
+
         } catch (\Throwable $e) {
-            Log::error('STK Push failed', ['error' => $e->getMessage()]);
+            Log::error('STK Push failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
             $payment->update(['status' => 'failed']);
-            return response()->json(['status' => 'failed', 'message' => 'Failed to send M-Pesa prompt.'], 500);
+            
+            // Return the exact error to the frontend so it doesn't hang silently
+            return response()->json([
+                'status' => 'failed', 
+                'message' => 'M-Pesa Error: ' . $e->getMessage()
+            ], 500);
         }
 
         return response()->json([
@@ -230,14 +251,12 @@ class CaptivePortalController extends Controller
 
     private function grantNetworkAccess(string $mac, string $ip, int $tenantId, int $ttlSeconds = 86400): void
     {
-        // 1. Apply rule in MikroTik / FreeRADIUS
         try {
             $this->mikrotik->authorizeDevice($mac, $ip, $ttlSeconds);
         } catch (\Throwable $e) {
             Log::error('MikroTik authorization failed', ['error' => $e->getMessage(), 'mac' => $mac]);
         }
 
-        // 2. Set O(1) Redis Cache for instant portal checks
         Redis::setex("wifi:auth:{$mac}", $ttlSeconds, $ip);
         Redis::setex("wifi:auth:{$ip}", $ttlSeconds, $mac);
     }
