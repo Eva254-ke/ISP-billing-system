@@ -4,7 +4,6 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
-// Removed: use Illuminate\Validation\Rule; (Does not exist in your Laravel version)
 use App\Models\Package;
 use App\Models\Payment;
 use App\Models\Tenant;
@@ -23,9 +22,6 @@ class CaptivePortalController extends Controller
         private DarajaService $daraja
     ) {}
 
-    /**
-     * 1. THE SINGLE PAGE (Packages / Voucher / Reconnect)
-     */
     public function index(Request $request)
     {
         $tenant = $this->resolveTenant($request);
@@ -36,7 +32,6 @@ class CaptivePortalController extends Controller
         $mac = $this->cleanMac($request->query('mac', $request->query('mac-address', '')));
         $ip = $request->query('ip', $request->query('ip-address', ''));
 
-        // O(1) Fast-Path Check: Are they already authorized in Redis?
         $isConnected = $this->isDeviceAuthorized($mac, $ip);
 
         $packages = Package::where('tenant_id', $tenant->id)
@@ -53,9 +48,6 @@ class CaptivePortalController extends Controller
         ]);
     }
 
-    /**
-     * 2. INITIATE PAYMENT OR VOUCHER (AJAX)
-     */
     public function initiate(Request $request): JsonResponse
     {
         // FIX: Using an array for rules prevents Laravel from splitting the '|' inside the regex string
@@ -65,7 +57,7 @@ class CaptivePortalController extends Controller
             'type' => 'required|in:mpesa,voucher',
             'phone' => [
                 'required_if:type,mpesa',
-                'regex:' . self::KENYA_PHONE_REGEX, // <--- FIXED: Standard string regex inside array
+                'regex:' . self::KENYA_PHONE_REGEX, 
             ],
             'package_id' => 'required_if:type,mpesa|exists:packages,id',
             'code' => 'required_if:type,voucher|string',
@@ -81,9 +73,6 @@ class CaptivePortalController extends Controller
         return $this->processMpesa($request->phone, $request->package_id, $mac, $ip);
     }
 
-    /**
-     * 3. POLL PAYMENT STATUS (AJAX)
-     */
     public function checkStatus(Payment $payment): JsonResponse
     {
         if (in_array($payment->status, ['pending', 'initiated'])) {
@@ -111,9 +100,6 @@ class CaptivePortalController extends Controller
         return response()->json(['status' => 'pending', 'message' => 'Waiting for M-Pesa confirmation...']);
     }
 
-    /**
-     * 4. RECONNECT (M-Pesa Receipt Code or Voucher)
-     */
     public function reconnect(Request $request): JsonResponse
     {
         $request->validate([
@@ -145,9 +131,6 @@ class CaptivePortalController extends Controller
         return response()->json(['status' => 'failed', 'message' => 'Invalid or expired code.'], 400);
     }
 
-    /**
-     * 5. THE MAGIC CLOSE (OS Connectivity Check)
-     */
     public function connect(Request $request)
     {
         $ua = $request->header('User-Agent', '');
@@ -196,7 +179,6 @@ class CaptivePortalController extends Controller
         try {
             $triggered = false;
             
-            // ROBUST FIX: Dynamically attempt to call the STK push method based on your service's signature
             if (method_exists($this->daraja, 'initiateStkPush')) {
                 try {
                     $this->daraja->initiateStkPush($payment, $normalizedPhone, $package->price);
@@ -221,7 +203,6 @@ class CaptivePortalController extends Controller
             Log::error('STK Push failed', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
             $payment->update(['status' => 'failed']);
             
-            // Return the exact error to the frontend so it doesn't hang silently
             return response()->json([
                 'status' => 'failed', 
                 'message' => 'M-Pesa Error: ' . $e->getMessage()

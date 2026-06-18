@@ -26,13 +26,13 @@
             max-width: 450px; 
             text-align: center; 
         }
-        h2 { margin-top: 0; color: #111827; }
+        h2 { margin-top: 0; color: #111827; font-size: 1.5rem; }
         h3 { font-size: 0.9rem; color: #6b7280; margin-bottom: 0.5rem; }
         
         /* 2-COLUMN GRID FOR PACKAGES */
         .packages-grid {
             display: grid;
-            grid-template-columns: 1fr 1fr; /* Forces exactly 2 columns */
+            grid-template-columns: 1fr 1fr; 
             gap: 12px;
             margin-top: 15px;
         }
@@ -62,7 +62,7 @@
             margin-top: 0.5rem;
         }
         
-        input { 
+        input[type="text"], input[type="tel"] { 
             width: 100%; 
             padding: 0.8rem; 
             margin: 0.5rem 0; 
@@ -70,7 +70,28 @@
             border-radius: 0.5rem; 
             box-sizing: border-box; 
             font-size: 1rem;
+            outline: none;
+            transition: border-color 0.2s;
         }
+        input:focus {
+            border-color: #2563eb;
+        }
+
+        /* CLEAN PHONE INPUT STYLES */
+        #phone-number-input {
+            padding: 1rem;
+            font-size: 1.25rem;
+            text-align: center;
+            letter-spacing: 2px;
+            border: 2px solid #d1d5db;
+            margin-top: 1rem;
+            margin-bottom: 1rem;
+        }
+        #phone-number-input:focus {
+            border-color: #2563eb;
+            box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+        }
+
         .hidden { display: none; }
         
         .spinner { 
@@ -84,7 +105,6 @@
         }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
 
-        /* SUPPORT LINK & FOOTER */
         .support-link {
             margin-top: 25px;
             font-size: 0.9rem;
@@ -118,10 +138,9 @@
     <div id="state-menu" class="{{ $isConnected ? 'hidden' : '' }}">
         <h2>Get Internet Access</h2>
         
-        <!-- 2-COLUMN GRID FOR PACKAGES -->
         <div class="packages-grid">
             @foreach($packages as $pkg)
-                <button class="btn btn-primary" onclick="payMpesa({{ $pkg->id }}, '{{ $pkg->name }}', {{ $pkg->price }})">
+                <button class="btn btn-primary" onclick="showPhoneInput({{ $pkg->id }}, '{{ $pkg->name }}', {{ $pkg->price }})">
                     {{ $pkg->name }}<br>
                     <small style="opacity: 0.8; font-weight: normal;">KES {{ number_format($pkg->price) }}</small>
                 </button>
@@ -133,15 +152,25 @@
         <input type="text" id="reconnect-code" placeholder="M-Pesa Code or Voucher">
         <button class="btn btn-secondary" onclick="reconnectAccess()">Reconnect</button>
         
-        <!-- CALL SUPPORT LINK -->
         <div class="support-link">
             Need help? <a href="tel:0742939094">Call Support: 0742939094</a>
         </div>
 
-        <!-- FOOTER -->
         <footer>
             Cloudbridge Technologies &copy; 2026
         </footer>
+    </div>
+
+    <!-- STATE 2.5: CLEAN PHONE INPUT (NEW) -->
+    <div id="state-phone-input" class="hidden">
+        <h2>Enter M-Pesa Number</h2>
+        <p id="phone-input-details" style="color: #6b7280; margin-bottom: 0.5rem; font-size: 0.95rem;"></p>
+        
+        <!-- type="tel" and inputmode="numeric" forces the numeric keypad on mobile -->
+        <input type="tel" id="phone-number-input" placeholder="0712345678" maxlength="12" inputmode="numeric" autocomplete="tel">
+        
+        <button class="btn btn-primary" onclick="submitPhoneNumber()">Send STK Push</button>
+        <button class="btn btn-secondary" onclick="showState('menu')">Cancel</button>
     </div>
 
     <!-- STATE 3: PROCESSING -->
@@ -155,35 +184,94 @@
 <script>
     const MAC = '{{ $mac }}';
     const IP = '{{ $ip }}';
-    const CSRF = document.querySelector('meta[name="csrf-token"]').content;
+    const CSRF = document.querySelector('meta[name="csrf-token"]')?.content || '';
+    
+    let selectedPackage = { id: 0, name: '', amount: 0 };
 
-    // 1. HANDLE M-PESA
-    async function payMpesa(packageId, name, amount) {
-        const phone = prompt(`Enter M-Pesa Phone Number for ${name} (KES ${amount}):`);
-        if (!phone) return;
+    // 1. SHOW CLEAN PHONE INPUT
+    function showPhoneInput(packageId, name, amount) {
+        selectedPackage = { id: packageId, name, amount };
+        document.getElementById('phone-input-details').innerHTML = `For <strong>${name}</strong> (KES ${amount.toLocaleString()})`;
+        document.getElementById('phone-number-input').value = ''; 
+        showState('phone-input');
+        
+        // Focus the input after a tiny delay to allow transition
+        setTimeout(() => {
+            document.getElementById('phone-number-input').focus();
+        }, 100);
+    }
 
+    // 2. VALIDATE AND SUBMIT PHONE NUMBER
+    function submitPhoneNumber() {
+        const phoneInput = document.getElementById('phone-number-input');
+        let phone = phoneInput.value.trim();
+        
+        if (!phone) {
+            alert('Please enter your M-Pesa phone number.');
+            return;
+        }
+        
+        // Clean input: remove spaces, dashes, etc.
+        phone = phone.replace(/\D/g, '');
+        
+        // Normalize to 07XXXXXXXX or 01XXXXXXXX
+        if (phone.startsWith('254')) {
+            phone = '0' + phone.substring(3);
+        } else if (phone.startsWith('7') || phone.startsWith('1')) {
+            phone = '0' + phone;
+        }
+        
+        // Strict validation for Kenya numbers
+        if (!/^(0[17]\d{8})$/.test(phone)) {
+            alert('Invalid number. Please use 07XXXXXXXX or 01XXXXXXXX.');
+            return;
+        }
+
+        initiatePayment(phone);
+    }
+
+    // 3. INITIATE PAYMENT (BULLETPROOF AJAX)
+    async function initiatePayment(phone) {
         showState('processing', 'Sending M-Pesa Prompt...', 'Check your phone and enter your PIN.');
 
         try {
             const res = await fetch('/wifi/initiate', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'X-CSRF-TOKEN': CSRF },
-                body: JSON.stringify({ mac: MAC, ip: IP, type: 'mpesa', phone, package_id: packageId })
+                headers: { 
+                    'Content-Type': 'application/json', 
+                    'Accept': 'application/json', // Forces Laravel to return JSON even on errors
+                    'X-CSRF-TOKEN': CSRF 
+                },
+                body: JSON.stringify({ 
+                    mac: MAC, 
+                    ip: IP, 
+                    type: 'mpesa', 
+                    phone: phone, 
+                    package_id: selectedPackage.id 
+                })
             });
 
-            // FIX: Catch HTML 500 errors from Laravel instead of breaking silently
-            if (!res.ok) {
-                let errorMsg = 'Server error. Please check logs.';
-                try {
-                    const errData = await res.json();
-                    errorMsg = errData.message || errorMsg;
-                } catch (e) {}
-                alert(errorMsg);
+            // Safely parse JSON to prevent crashes on HTML error pages
+            let data;
+            const text = await res.text();
+            try {
+                data = JSON.parse(text);
+            } catch (e) {
+                console.error('Server returned non-JSON:', text.substring(0, 200));
+                alert('Server Error: Invalid response. Please contact support.');
                 showState('menu');
                 return;
             }
 
-            const data = await res.json();
+            if (!res.ok) {
+                let errorMsg = data.message || 'Server error.';
+                if (data.errors) {
+                    errorMsg = Object.values(data.errors).flat().join(', ');
+                }
+                alert(errorMsg); // Shows exact validation or API errors
+                showState('menu');
+                return;
+            }
 
             if (data.payment_id) {
                 pollPaymentStatus(data.payment_id);
@@ -192,17 +280,19 @@
                 showState('menu');
             }
         } catch (error) {
-            console.error(error);
-            alert('Network error. Please try again.');
+            console.error('Fetch error:', error);
+            alert('Network error: ' + error.message);
             showState('menu');
         }
     }
 
-    // 2. POLL STATUS
+    // 4. POLL STATUS
     async function pollPaymentStatus(paymentId) {
         const interval = setInterval(async () => {
             try {
-                const res = await fetch(`/wifi/status/${paymentId}`);
+                const res = await fetch(`/wifi/status/${paymentId}`, {
+                    headers: { 'Accept': 'application/json' }
+                });
                 const data = await res.json();
 
                 if (data.status === 'connected') {
@@ -222,9 +312,9 @@
         }, 3000); 
     }
 
-    // 3. HANDLE RECONNECT
+    // 5. HANDLE RECONNECT
     async function reconnectAccess() {
-        const code = document.getElementById('reconnect-code').value;
+        const code = document.getElementById('reconnect-code').value.trim();
         if (!code) return alert('Please enter a code');
 
         showState('processing', 'Verifying Code...', 'Checking M-Pesa receipt or Voucher.');
@@ -232,10 +322,29 @@
         try {
             const res = await fetch('/wifi/reconnect', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'X-CSRF-TOKEN': CSRF },
+                headers: { 
+                    'Content-Type': 'application/json', 
+                    'Accept': 'application/json',
+                    'X-CSRF-TOKEN': CSRF 
+                },
                 body: JSON.stringify({ mac: MAC, ip: IP, code })
             });
-            const data = await res.json();
+
+            let data;
+            const text = await res.text();
+            try {
+                data = JSON.parse(text);
+            } catch (e) {
+                alert('Server Error: Invalid response.');
+                showState('menu');
+                return;
+            }
+
+            if (!res.ok) {
+                alert(data.message || 'Invalid code.');
+                showState('menu');
+                return;
+            }
 
             if (data.status === 'connected') {
                 showState('connected');
@@ -245,12 +354,12 @@
                 showState('menu');
             }
         } catch (error) {
-            alert('Network error.');
+            alert('Network error: ' + error.message);
             showState('menu');
         }
     }
 
-    // 4. THE MAGIC PORTAL CLOSURE
+    // 6. THE MAGIC PORTAL CLOSURE
     function triggerPortalClose() {
         window.open('', '_self');
         window.close();
@@ -265,10 +374,13 @@
         }, 1000);
     }
 
+    // 7. STATE MANAGEMENT
     function showState(state, title = '', message = '') {
         document.getElementById('state-menu').classList.toggle('hidden', state !== 'menu');
+        document.getElementById('state-phone-input').classList.toggle('hidden', state !== 'phone-input');
         document.getElementById('state-processing').classList.toggle('hidden', state !== 'processing');
         document.getElementById('state-connected').classList.toggle('hidden', state !== 'connected');
+        
         if (title) document.getElementById('processing-title').innerText = title;
         if (message) document.getElementById('processing-message').innerText = message;
     }
