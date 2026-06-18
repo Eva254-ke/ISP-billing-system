@@ -10,7 +10,7 @@ use App\Models\Tenant;
 use App\Models\Voucher;
 use App\Services\MikroTik\MikroTikService;
 use App\Services\Mpesa\DarajaService;
-use Illuminate\Support\Facades\Redis;
+use Illuminate\Support\Facades\Cache; // Changed from Redis to universal Cache
 use Illuminate\Support\Facades\Log;
 
 class CaptivePortalController extends Controller
@@ -24,144 +24,154 @@ class CaptivePortalController extends Controller
 
     public function index(Request $request)
     {
-        $tenant = $this->resolveTenant($request);
-        if (!$tenant) {
-            return response('Network configuration error. Please contact support.', 400);
+        // ULTIMATE SAFETY NET: Catch any unexpected error to prevent 500 crash
+        try {
+            $tenant = $this->resolveTenant($request);
+            if (!$tenant) {
+                return response('Network configuration error. Please contact support.', 400);
+            }
+
+            $mac = $this->cleanMac($request->query('mac') ?? $request->query('mac-address') ?? '');
+            $ip = $request->query('ip') ?? $request->query('ip-address') ?? $request->ip();
+
+            // STRICT CHECK: If MAC is missing, return simple text (No missing Blade view crash)
+            if (empty($mac) || strlen($mac) < 12) {
+                return response('WiFi network error: Missing device MAC. Please "Forget" this WiFi network in your phone settings and reconnect.', 400);
+            }
+
+            $isConnected = $this->isDeviceAuthorized($mac, $ip);
+
+            $packages = Package::where('tenant_id', $tenant->id)
+                ->where('is_active', true)
+                ->orderBy('sort_order')
+                ->get();
+
+            return view('captive.portal', [
+                'tenant' => $tenant,
+                'packages' => $packages,
+                'mac' => $mac,
+                'ip' => $ip,
+                'isConnected' => $isConnected,
+            ]);
+        } catch (\Throwable $e) {
+            Log::error('Captive Portal Index Fatal Error', ['error' => $e->getMessage()]);
+            return response('A temporary network error occurred. Please try again in a moment.', 500);
         }
-
-        // 1. Get MAC and IP strictly from MikroTik's redirect URL
-        $mac = $this->cleanMac($request->query('mac') ?? $request->query('mac-address') ?? '');
-        $ip = $request->query('ip') ?? $request->query('ip-address') ?? '';
-
-        // 2. STRICT CHECK: If MAC is missing, MikroTik didn't intercept the traffic.
-        if (empty($mac) || strlen($mac) < 12) {
-            // Return a clean HTML error instead of a raw 400 text
-            return response()->view('captive.error', [
-                'title' => 'Connection Error',
-                'message' => 'We couldn\'t detect your device. Please go to your phone\'s WiFi settings, tap "Forget Network" on this WiFi, and reconnect. The portal will open automatically.'
-            ], 400);
-        }
-
-        // 3. Fallback IP if MikroTik didn't pass it (rare, but safe)
-        if (empty($ip)) {
-            $ip = $request->ip();
-        }
-
-        $isConnected = $this->isDeviceAuthorized($mac, $ip);
-
-        $packages = Package::where('tenant_id', $tenant->id)
-            ->where('is_active', true)
-            ->orderBy('sort_order')
-            ->get();
-
-        return view('captive.portal', [
-            'tenant' => $tenant,
-            'packages' => $packages,
-            'mac' => $mac,
-            'ip' => $ip,
-            'isConnected' => $isConnected,
-        ]);
     }
 
     public function initiate(Request $request): JsonResponse
     {
-        $mac = $this->cleanMac($request->input('mac') ?? '');
-        $ip = $request->input('ip') ?? $request->ip();
+        try {
+            $mac = $this->cleanMac($request->input('mac') ?? '');
+            $ip = $request->input('ip') ?? $request->ip();
 
-        // STRICT CHECK: We cannot provision without a valid MAC
-        if (empty($mac) || strlen($mac) < 12) {
-            return response()->json([
-                'status' => 'failed', 
-                'message' => 'Missing device MAC. Please "Forget" this WiFi network in your phone settings and reconnect.'
-            ], 422);
+            if (empty($mac) || strlen($mac) < 12) {
+                return response()->json([
+                    'status' => 'failed', 
+                    'message' => 'Missing device MAC. Please "Forget" this WiFi network and reconnect.'
+                ], 422);
+            }
+
+            $request->merge(['mac' => $mac, 'ip' => $ip]);
+
+            $request->validate([
+                'mac' => 'required|string',
+                'ip' => 'required|ip',
+                'type' => 'required|in:mpesa,voucher',
+                'phone' => [
+                    'required_if:type,mpesa',
+                    'regex:' . self::KENYA_PHONE_REGEX,
+                ],
+                'package_id' => 'required_if:type,mpesa|exists:packages,id',
+                'code' => 'required_if:type,voucher|string',
+            ]);
+
+            if ($request->type === 'voucher') {
+                return $this->processVoucher($request->code, $mac, $ip);
+            }
+
+            return $this->processMpesa($request->phone, $request->package_id, $mac, $ip);
+        } catch (\Throwable $e) {
+            Log::error('Initiate Fatal Error', ['error' => $e->getMessage()]);
+            return response()->json(['status' => 'failed', 'message' => 'Server error. Please try again.'], 500);
         }
-
-        $request->merge(['mac' => $mac, 'ip' => $ip]);
-
-        $request->validate([
-            'mac' => 'required|string',
-            'ip' => 'required|ip',
-            'type' => 'required|in:mpesa,voucher',
-            'phone' => [
-                'required_if:type,mpesa',
-                'regex:' . self::KENYA_PHONE_REGEX,
-            ],
-            'package_id' => 'required_if:type,mpesa|exists:packages,id',
-            'code' => 'required_if:type,voucher|string',
-        ]);
-
-        if ($request->type === 'voucher') {
-            return $this->processVoucher($request->code, $mac, $ip);
-        }
-
-        return $this->processMpesa($request->phone, $request->package_id, $mac, $ip);
     }
 
     public function checkStatus(Payment $payment): JsonResponse
     {
-        if (in_array($payment->status, ['pending', 'initiated'])) {
-            if (method_exists($this->daraja, 'reconcilePayment')) {
-                $this->daraja->reconcilePayment($payment);
-                $payment->refresh();
+        try {
+            if (in_array($payment->status, ['pending', 'initiated'])) {
+                if (method_exists($this->daraja, 'reconcilePayment')) {
+                    $this->daraja->reconcilePayment($payment);
+                    $payment->refresh();
+                }
             }
-        }
 
-        if (in_array($payment->status, ['completed', 'confirmed'])) {
-            $pMac = $payment->metadata['mac'] ?? '';
-            $pIp = $payment->metadata['ip'] ?? '';
-            
-            if ($pMac && !$this->isDeviceAuthorized($pMac, $pIp)) {
-                $this->grantNetworkAccess($pMac, $pIp, $payment->tenant_id);
+            if (in_array($payment->status, ['completed', 'confirmed'])) {
+                $pMac = $payment->metadata['mac'] ?? '';
+                $pIp = $payment->metadata['ip'] ?? '';
+                
+                if ($pMac && !$this->isDeviceAuthorized($pMac, $pIp)) {
+                    $this->grantNetworkAccess($pMac, $pIp, $payment->tenant_id);
+                }
+                return response()->json(['status' => 'connected', 'message' => 'Access granted!']);
             }
-            return response()->json(['status' => 'connected', 'message' => 'Access granted!']);
-        }
 
-        if ($payment->status === 'failed') {
-            return response()->json(['status' => 'failed', 'message' => 'Payment failed. Please try again.']);
-        }
+            if ($payment->status === 'failed') {
+                return response()->json(['status' => 'failed', 'message' => 'Payment failed. Please try again.']);
+            }
 
-        return response()->json(['status' => 'pending', 'message' => 'Waiting for M-Pesa confirmation...']);
+            return response()->json(['status' => 'pending', 'message' => 'Waiting for M-Pesa confirmation...']);
+        } catch (\Throwable $e) {
+            Log::error('CheckStatus Fatal Error', ['error' => $e->getMessage()]);
+            return response()->json(['status' => 'failed', 'message' => 'Server error checking status.'], 500);
+        }
     }
 
     public function reconnect(Request $request): JsonResponse
     {
-        $mac = $this->cleanMac($request->input('mac') ?? '');
-        $ip = $request->input('ip') ?? $request->ip();
+        try {
+            $mac = $this->cleanMac($request->input('mac') ?? '');
+            $ip = $request->input('ip') ?? $request->ip();
 
-        if (empty($mac) || strlen($mac) < 12) {
-            return response()->json([
-                'status' => 'failed', 
-                'message' => 'Missing device MAC. Please reconnect to the WiFi network.'
-            ], 422);
+            if (empty($mac) || strlen($mac) < 12) {
+                return response()->json([
+                    'status' => 'failed', 
+                    'message' => 'Missing device MAC. Please reconnect to the WiFi network.'
+                ], 422);
+            }
+
+            $request->merge(['mac' => $mac, 'ip' => $ip]);
+
+            $request->validate([
+                'mac' => 'required|string',
+                'ip' => 'required|ip',
+                'code' => 'required|string',
+            ]);
+
+            $code = strtoupper(trim($request->code));
+
+            $voucher = Voucher::where('code', $code)->where('is_used', false)->first();
+            if ($voucher) {
+                $voucher->update(['is_used' => true, 'used_by_mac' => $mac, 'used_at' => now()]);
+                $this->grantNetworkAccess($mac, $ip, $voucher->tenant_id, ($voucher->duration_minutes ?? 1440) * 60);
+                return response()->json(['status' => 'connected', 'message' => 'Voucher redeemed!']);
+            }
+
+            $payment = Payment::where('mpesa_receipt_number', $code)
+                ->whereIn('status', ['completed', 'confirmed'])
+                ->first();
+                
+            if ($payment) {
+                $this->grantNetworkAccess($mac, $ip, $payment->tenant_id);
+                return response()->json(['status' => 'connected', 'message' => 'Receipt verified!']);
+            }
+
+            return response()->json(['status' => 'failed', 'message' => 'Invalid or expired code.'], 400);
+        } catch (\Throwable $e) {
+            Log::error('Reconnect Fatal Error', ['error' => $e->getMessage()]);
+            return response()->json(['status' => 'failed', 'message' => 'Server error. Please try again.'], 500);
         }
-
-        $request->merge(['mac' => $mac, 'ip' => $ip]);
-
-        $request->validate([
-            'mac' => 'required|string',
-            'ip' => 'required|ip',
-            'code' => 'required|string',
-        ]);
-
-        $code = strtoupper(trim($request->code));
-
-        $voucher = Voucher::where('code', $code)->where('is_used', false)->first();
-        if ($voucher) {
-            $voucher->update(['is_used' => true, 'used_by_mac' => $mac, 'used_at' => now()]);
-            $this->grantNetworkAccess($mac, $ip, $voucher->tenant_id, ($voucher->duration_minutes ?? 1440) * 60);
-            return response()->json(['status' => 'connected', 'message' => 'Voucher redeemed!']);
-        }
-
-        $payment = Payment::where('mpesa_receipt_number', $code)
-            ->whereIn('status', ['completed', 'confirmed'])
-            ->first();
-            
-        if ($payment) {
-            $this->grantNetworkAccess($mac, $ip, $payment->tenant_id);
-            return response()->json(['status' => 'connected', 'message' => 'Receipt verified!']);
-        }
-
-        return response()->json(['status' => 'failed', 'message' => 'Invalid or expired code.'], 400);
     }
 
     public function connect(Request $request)
@@ -265,16 +275,18 @@ class CaptivePortalController extends Controller
 
     private function grantNetworkAccess(string $mac, string $ip, int $tenantId, int $ttlSeconds = 86400): void
     {
-        // 1. Set O(1) Redis Cache FIRST so the fast-path check passes immediately
-        Redis::setex("wifi:auth:{$mac}", $ttlSeconds, $ip);
-        Redis::setex("wifi:auth:{$ip}", $ttlSeconds, $mac);
+        // 1. Set Cache FIRST (Using universal Cache facade instead of Redis to prevent 500s if Redis is down)
+        try {
+            Cache::put("wifi:auth:{$mac}", $ip, $ttlSeconds);
+            Cache::put("wifi:auth:{$ip}", $mac, $ttlSeconds);
+        } catch (\Throwable $e) {
+            Log::warning('Cache set failed', ['error' => $e->getMessage()]);
+        }
 
-        // 2. Attempt to provision on MikroTik (Catching Session Timeouts)
+        // 2. Attempt to provision on MikroTik
         try {
             $this->mikrotik->authorizeDevice($mac, $ip, $ttlSeconds);
         } catch (\Throwable $e) {
-            // If the router API times out, we log it. 
-            // The Redis cache is already set. 
             Log::error('MikroTik Router API Timeout/Failed', [
                 'error' => $e->getMessage(), 
                 'mac' => $mac, 
@@ -287,7 +299,12 @@ class CaptivePortalController extends Controller
     private function isDeviceAuthorized(string $mac, string $ip): bool
     {
         if (!$mac && !$ip) return false;
-        return ($mac && Redis::get("wifi:auth:{$mac}")) || ($ip && Redis::get("wifi:auth:{$ip}"));
+        try {
+            return ($mac && Cache::get("wifi:auth:{$mac}")) 
+                || ($ip && Cache::get("wifi:auth:{$ip}"));
+        } catch (\Throwable $e) {
+            return false; // Fail safely if cache is down
+        }
     }
 
     private function resolveTenant(Request $request): ?Tenant
@@ -303,12 +320,11 @@ class CaptivePortalController extends Controller
         return Tenant::first(); 
     }
 
-    // Strict MAC cleaner: accepts nullable, returns empty string if invalid
     private function cleanMac(?string $mac): string
     {
         if ($mac === null) return '';
         $mac = strtoupper(preg_replace('/[^A-Fa-f0-9]/', '', $mac));
-        if (strlen($mac) < 12) return ''; // Return empty if it's not a full MAC
+        if (strlen($mac) < 12) return ''; 
         return implode(':', str_split($mac, 2));
     }
 
