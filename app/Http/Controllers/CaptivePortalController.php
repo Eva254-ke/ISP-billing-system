@@ -29,13 +29,22 @@ class CaptivePortalController extends Controller
             return response('Network configuration error. Please contact support.', 400);
         }
 
-        // Strictly collect MAC and IP from MikroTik query parameters
-        $mac = $this->cleanMac($request->query('mac', $request->query('mac-address', '')));
-        $ip = $request->query('ip', $request->query('ip-address', $request->ip()));
+        // 1. Get MAC and IP strictly from MikroTik's redirect URL
+        $mac = $this->cleanMac($request->query('mac') ?? $request->query('mac-address') ?? '');
+        $ip = $request->query('ip') ?? $request->query('ip-address') ?? '';
 
-        // If MAC is missing, it means MikroTik didn't intercept the traffic
-        if (empty($mac)) {
-            return response('WiFi network error: Missing device MAC. Please "Forget" this WiFi network in your phone settings and reconnect.', 400);
+        // 2. STRICT CHECK: If MAC is missing, MikroTik didn't intercept the traffic.
+        if (empty($mac) || strlen($mac) < 12) {
+            // Return a clean HTML error instead of a raw 400 text
+            return response()->view('captive.error', [
+                'title' => 'Connection Error',
+                'message' => 'We couldn\'t detect your device. Please go to your phone\'s WiFi settings, tap "Forget Network" on this WiFi, and reconnect. The portal will open automatically.'
+            ], 400);
+        }
+
+        // 3. Fallback IP if MikroTik didn't pass it (rare, but safe)
+        if (empty($ip)) {
+            $ip = $request->ip();
         }
 
         $isConnected = $this->isDeviceAuthorized($mac, $ip);
@@ -56,14 +65,14 @@ class CaptivePortalController extends Controller
 
     public function initiate(Request $request): JsonResponse
     {
-        $mac = $this->cleanMac($request->input('mac', ''));
-        $ip = $request->input('ip', $request->ip());
+        $mac = $this->cleanMac($request->input('mac') ?? '');
+        $ip = $request->input('ip') ?? $request->ip();
 
-        // Strict Production Check: We CANNOT provision without a MAC
-        if (empty($mac)) {
+        // STRICT CHECK: We cannot provision without a valid MAC
+        if (empty($mac) || strlen($mac) < 12) {
             return response()->json([
                 'status' => 'failed', 
-                'message' => 'Missing device MAC address. Please "Forget" this WiFi network in your phone settings, then reconnect to trigger the portal again.'
+                'message' => 'Missing device MAC. Please "Forget" this WiFi network in your phone settings and reconnect.'
             ], 422);
         }
 
@@ -116,13 +125,13 @@ class CaptivePortalController extends Controller
 
     public function reconnect(Request $request): JsonResponse
     {
-        $mac = $this->cleanMac($request->input('mac', ''));
-        $ip = $request->input('ip', $request->ip());
+        $mac = $this->cleanMac($request->input('mac') ?? '');
+        $ip = $request->input('ip') ?? $request->ip();
 
-        if (empty($mac)) {
+        if (empty($mac) || strlen($mac) < 12) {
             return response()->json([
                 'status' => 'failed', 
-                'message' => 'Missing device MAC address. Please reconnect to the WiFi network.'
+                'message' => 'Missing device MAC. Please reconnect to the WiFi network.'
             ], 422);
         }
 
@@ -262,12 +271,10 @@ class CaptivePortalController extends Controller
 
         // 2. Attempt to provision on MikroTik (Catching Session Timeouts)
         try {
-            // Set a strict timeout for the router API call if your service supports it,
-            // otherwise just catch the exception so it doesn't crash the user's portal
             $this->mikrotik->authorizeDevice($mac, $ip, $ttlSeconds);
         } catch (\Throwable $e) {
-            // If the router API times out or fails, we log it. 
-            // The Redis cache is already set, so if you have a background sync or RADIUS fallback, it will pick it up.
+            // If the router API times out, we log it. 
+            // The Redis cache is already set. 
             Log::error('MikroTik Router API Timeout/Failed', [
                 'error' => $e->getMessage(), 
                 'mac' => $mac, 
@@ -296,10 +303,12 @@ class CaptivePortalController extends Controller
         return Tenant::first(); 
     }
 
-    private function cleanMac(string $mac): string
+    // Strict MAC cleaner: accepts nullable, returns empty string if invalid
+    private function cleanMac(?string $mac): string
     {
+        if ($mac === null) return '';
         $mac = strtoupper(preg_replace('/[^A-Fa-f0-9]/', '', $mac));
-        if (strlen($mac) < 12) return $mac; 
+        if (strlen($mac) < 12) return ''; // Return empty if it's not a full MAC
         return implode(':', str_split($mac, 2));
     }
 
