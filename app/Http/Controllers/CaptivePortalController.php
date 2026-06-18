@@ -10,7 +10,7 @@ use App\Models\Tenant;
 use App\Models\Voucher;
 use App\Services\MikroTik\MikroTikService;
 use App\Services\Mpesa\DarajaService;
-use Illuminate\Support\Facades\Cache; // Changed from Redis to universal Cache
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 
 class CaptivePortalController extends Controller
@@ -24,7 +24,6 @@ class CaptivePortalController extends Controller
 
     public function index(Request $request)
     {
-        // ULTIMATE SAFETY NET: Catch any unexpected error to prevent 500 crash
         try {
             $tenant = $this->resolveTenant($request);
             if (!$tenant) {
@@ -34,7 +33,6 @@ class CaptivePortalController extends Controller
             $mac = $this->cleanMac($request->query('mac') ?? $request->query('mac-address') ?? '');
             $ip = $request->query('ip') ?? $request->query('ip-address') ?? $request->ip();
 
-            // STRICT CHECK: If MAC is missing, return simple text (No missing Blade view crash)
             if (empty($mac) || strlen($mac) < 12) {
                 return response('WiFi network error: Missing device MAC. Please "Forget" this WiFi network in your phone settings and reconnect.', 400);
             }
@@ -209,14 +207,27 @@ class CaptivePortalController extends Controller
             ]);
         }
 
+        // FIX: Added all required database columns to prevent SQL 1364 errors
         $payment = Payment::create([
             'tenant_id' => $package->tenant_id,
             'phone' => $normalizedPhone,
+            'customer_name' => 'WiFi Guest',
             'package_id' => $package->id,
+            'package_name' => $package->name, // <--- THIS WAS MISSING AND CAUSED THE SQL ERROR
             'amount' => $package->price,
+            'currency' => $package->currency ?? 'KES',
+            'mpesa_checkout_request_id' => 'CP-' . strtoupper(uniqid()),
             'status' => 'pending',
             'type' => 'captive_portal',
-            'metadata' => ['mac' => $mac, 'ip' => $ip, 'package_name' => $package->name]
+            'initiated_at' => now(),
+            'payment_channel' => 'captive_portal',
+            'metadata' => [
+                'gateway' => 'mpesa',
+                'created_via' => 'captive_portal',
+                'mac' => $mac, 
+                'ip' => $ip, 
+                'package_name' => $package->name
+            ]
         ]);
 
         try {
@@ -275,7 +286,6 @@ class CaptivePortalController extends Controller
 
     private function grantNetworkAccess(string $mac, string $ip, int $tenantId, int $ttlSeconds = 86400): void
     {
-        // 1. Set Cache FIRST (Using universal Cache facade instead of Redis to prevent 500s if Redis is down)
         try {
             Cache::put("wifi:auth:{$mac}", $ip, $ttlSeconds);
             Cache::put("wifi:auth:{$ip}", $mac, $ttlSeconds);
@@ -283,7 +293,6 @@ class CaptivePortalController extends Controller
             Log::warning('Cache set failed', ['error' => $e->getMessage()]);
         }
 
-        // 2. Attempt to provision on MikroTik
         try {
             $this->mikrotik->authorizeDevice($mac, $ip, $ttlSeconds);
         } catch (\Throwable $e) {
@@ -303,7 +312,7 @@ class CaptivePortalController extends Controller
             return ($mac && Cache::get("wifi:auth:{$mac}")) 
                 || ($ip && Cache::get("wifi:auth:{$ip}"));
         } catch (\Throwable $e) {
-            return false; // Fail safely if cache is down
+            return false;
         }
     }
 
