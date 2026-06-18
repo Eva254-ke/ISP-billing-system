@@ -4,7 +4,7 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
-use Illuminate\Validation\Rule; // <--- ADDED FOR REGEX FIX
+// Removed: use Illuminate\Validation\Rule; (Does not exist in your Laravel version)
 use App\Models\Package;
 use App\Models\Payment;
 use App\Models\Tenant;
@@ -58,14 +58,14 @@ class CaptivePortalController extends Controller
      */
     public function initiate(Request $request): JsonResponse
     {
-        // FIX: Use Rule::regex() to prevent the '|' in the phone regex from breaking Laravel's validator
+        // FIX: Using an array for rules prevents Laravel from splitting the '|' inside the regex string
         $request->validate([
             'mac' => 'required|string',
             'ip' => 'required|ip',
             'type' => 'required|in:mpesa,voucher',
             'phone' => [
                 'required_if:type,mpesa',
-                Rule::regex(self::KENYA_PHONE_REGEX),
+                'regex:' . self::KENYA_PHONE_REGEX, // <--- FIXED: Standard string regex inside array
             ],
             'package_id' => 'required_if:type,mpesa|exists:packages,id',
             'code' => 'required_if:type,voucher|string',
