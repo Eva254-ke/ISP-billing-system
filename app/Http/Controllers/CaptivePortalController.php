@@ -638,32 +638,41 @@ class CaptivePortalController extends Controller
                 }
                 
                 if ($activeRadiusSession) {
-                    // Find corresponding UserSession and return it
                     $userSession = UserSession::query()
                         ->where('tenant_id', $tenantId)
-                        ->where('username', $activeRadiusSession['username'])
-                        ->where('status', 'active')
-                        ->orderByDesc('last_activity_at')
+                        ->where(function ($query) use ($activeRadiusSession, $clientMac, $clientIp): void {
+                            $radiusUsername = trim((string) ($activeRadiusSession['username'] ?? ''));
+                            if ($radiusUsername !== '') {
+                                $query->orWhere('username', $radiusUsername);
+                            }
+
+                            if ($clientMac !== null) {
+                                $query->orWhere('mac_address', $clientMac);
+                            }
+
+                            if ($clientIp !== null) {
+                                $query->orWhere('ip_address', $clientIp);
+                            }
+                        })
+                        ->whereIn('status', ['active', 'idle'])
+                        ->orderByDesc('id')
                         ->first();
-                        
+
                     if ($userSession) {
-                        // Update MAC/IP if changed
-                        if ($clientMac && $userSession->mac_address !== $clientMac) {
-                            $userSession->update(['mac_address' => $clientMac]);
+                        $syncedRadiusSession = $radiusAccountingService->syncActiveSession($userSession);
+                        $userSession = $userSession->fresh();
+
+                        if ($syncedRadiusSession && $userSession?->isActive()) {
+                            Log::channel('radius')->info('Active session found via RADIUS accounting', [
+                                'tenant_id' => $tenantId,
+                                'username' => $activeRadiusSession['username'],
+                                'session_id' => $userSession->id,
+                                'client_mac' => $clientMac,
+                                'client_ip' => $clientIp,
+                            ]);
+
+                            return $userSession;
                         }
-                        if ($clientIp && $userSession->ip_address !== $clientIp) {
-                            $userSession->update(['ip_address' => $clientIp]);
-                        }
-                        
-                        Log::channel('radius')->info('Active session found via RADIUS accounting', [
-                            'tenant_id' => $tenantId,
-                            'username' => $activeRadiusSession['username'],
-                            'session_id' => $userSession->id,
-                            'client_mac' => $clientMac,
-                            'client_ip' => $clientIp,
-                        ]);
-                        
-                        return $userSession;
                     }
                 }
             } catch (\Throwable $e) {
@@ -1805,14 +1814,14 @@ class CaptivePortalController extends Controller
         }
 
         $identityResolver = app(RadiusIdentityResolver::class);
-        $radiusIdentity = $this->resolveRadiusIdentityForPayment($payment);
-        $radiusPureFlow = $identityResolver->shouldUsePureRadiusFlow($radiusIdentity);
-        $radiusPendingReauth = !$radiusPureFlow
-            && $identityResolver->shouldBypassRouterActivation($radiusIdentity);
         $latestSession = UserSession::query()
             ->where('payment_id', $payment->id)
             ->latest('id')
             ->first();
+        $radiusIdentity = $this->resolveProvisionedRadiusIdentityForPayment($payment, $latestSession);
+        $radiusPureFlow = $identityResolver->shouldUsePureRadiusFlow($radiusIdentity);
+        $radiusPendingReauth = !$radiusPureFlow
+            && $identityResolver->shouldBypassRouterActivation($radiusIdentity);
 
         if (!$this->paymentCanStillAuthorizeAccess($payment, $latestSession)) {
             return [
@@ -2708,112 +2717,6 @@ class CaptivePortalController extends Controller
                     'error' => $e->getMessage(),
                 ]);
             }
-        }
-
-        if ($radiusProvisioned && $radiusPureFlow) {
-            $existingActivationMetadata = is_array(($session->metadata ?? [])['activation'] ?? null)
-                ? (array) $session->metadata['activation']
-                : [];
-
-            $alreadyAwaitingRadiusLogin = (bool) ($existingActivationMetadata['waiting_for_hotspot_login'] ?? false)
-                || (bool) ($existingActivationMetadata['waiting_for_reauth'] ?? false);
-
-            if ($alreadyAwaitingRadiusLogin) {
-                return $this->syncPendingRadiusAuthorizationWindowState($payment, $session);
-            }
-
-            $authorizationPreparedAt = now();
-            $authorizationExpiresAt = $this->resolvePendingRadiusAuthorizationExpiresAt($payment, $session, $authorizationPreparedAt);
-            $activationMetadata = [
-                'authorization_started_at' => $authorizationPreparedAt->toIso8601String(),
-                'authorization_expires_at' => $authorizationExpiresAt->toIso8601String(),
-                'last_attempt_at' => $authorizationPreparedAt->toIso8601String(),
-                'method' => ($identity['identity_type'] ?? null) === 'mac' ? 'radius_mac_auth' : 'radius_hotspot_login',
-                'router_api_skipped' => true,
-                'waiting_for_hotspot_login' => true,
-                'waiting_for_reauth' => ($identity['identity_type'] ?? null) === 'mac',
-            ];
-
-            $session->update([
-                'status' => 'idle',
-                'expires_at' => $radiusAccessExpiresAt,
-                'metadata' => array_merge($session->metadata ?? [], [
-                    'activation' => array_merge(
-                        (array) (($session->metadata ?? [])['activation'] ?? []),
-                        $activationMetadata
-                    ),
-                ]),
-            ]);
-
-            $payment->update([
-                'session_id' => $session->id,
-                'metadata' => array_merge($payment->metadata ?? [], [
-                    'activation' => array_merge(
-                        (array) (($payment->metadata ?? [])['activation'] ?? []),
-                        $activationMetadata
-                    ),
-                ]),
-            ]);
-
-            Log::info('Paid access prepared for pure RADIUS hotspot login', [
-                'payment_id' => $payment->id,
-                'session_id' => $session->id,
-                'username' => $username,
-                'identity_type' => $identity['identity_type'],
-            ]);
-
-            return $session->fresh();
-        }
-
-        if ($radiusProvisioned && $identityResolver->shouldBypassRouterActivation($identity)) {
-            $existingActivationMetadata = is_array(($session->metadata ?? [])['activation'] ?? null)
-                ? (array) $session->metadata['activation']
-                : [];
-
-            if ((bool) ($existingActivationMetadata['waiting_for_reauth'] ?? false)) {
-                return $this->syncPendingRadiusAuthorizationWindowState($payment, $session);
-            }
-
-            $authorizationPreparedAt = now();
-            $authorizationExpiresAt = $this->resolvePendingRadiusAuthorizationExpiresAt($payment, $session, $authorizationPreparedAt);
-            $activationMetadata = [
-                'authorization_started_at' => $authorizationPreparedAt->toIso8601String(),
-                'authorization_expires_at' => $authorizationExpiresAt->toIso8601String(),
-                'last_attempt_at' => $authorizationPreparedAt->toIso8601String(),
-                'method' => 'radius_mac_auth',
-                'router_api_skipped' => true,
-                'waiting_for_reauth' => true,
-            ];
-
-            $session->update([
-                'status' => 'idle',
-                'expires_at' => $radiusAccessExpiresAt,
-                'metadata' => array_merge($session->metadata ?? [], [
-                    'activation' => array_merge(
-                        (array) (($session->metadata ?? [])['activation'] ?? []),
-                        $activationMetadata
-                    ),
-                ]),
-            ]);
-
-            $payment->update([
-                'session_id' => $session->id,
-                'metadata' => array_merge($payment->metadata ?? [], [
-                    'activation' => array_merge(
-                        (array) (($payment->metadata ?? [])['activation'] ?? []),
-                        $activationMetadata
-                    ),
-                ]),
-            ]);
-
-            Log::info('Paid access authorized via FreeRADIUS MAC mode; awaiting hotspot re-authentication', [
-                'payment_id' => $payment->id,
-                'session_id' => $session->id,
-                'username' => $username,
-                'mac_address' => $clientMac,
-            ]);
-
-            return $session->fresh();
         }
 
         $sessionManager = app(SessionManager::class);
@@ -4280,6 +4183,39 @@ class CaptivePortalController extends Controller
             macAddress: $this->normalizeMacAddress((string) ($clientContext['mac'] ?? ''))
                 ?? $this->normalizeMacAddress((string) ($session?->mac_address ?? ''))
         );
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function resolveProvisionedRadiusIdentityForPayment(Payment $payment, ?UserSession $session = null): array
+    {
+        $identity = $this->resolveRadiusIdentityForPayment($payment);
+        $session ??= UserSession::query()->where('payment_id', $payment->id)->latest('id')->first();
+
+        if (!$session instanceof UserSession) {
+            return $identity;
+        }
+
+        $provisionedUsername = $this->resolveStoredRadiusUsername($session);
+        if ($provisionedUsername === '') {
+            return $identity;
+        }
+
+        $metadata = is_array($session->metadata) ? $session->metadata : [];
+        $radiusMetadata = is_array($metadata['radius'] ?? null) ? $metadata['radius'] : [];
+        $identity['username'] = $provisionedUsername;
+        $identity['password'] = $provisionedUsername;
+        $identity['identity_type'] = (string) ($radiusMetadata['identity_type'] ?? $identity['identity_type'] ?? 'phone');
+        $identity['access_mode'] = (string) ($radiusMetadata['access_mode'] ?? $identity['access_mode'] ?? RadiusIdentityResolver::ACCESS_MODE_PHONE);
+        $identity['fallback_used'] = (bool) ($radiusMetadata['fallback_used'] ?? $identity['fallback_used'] ?? false);
+
+        if (($normalizedMac = $this->normalizeMacAddress($provisionedUsername)) !== null) {
+            $identity['identity_type'] = 'mac';
+            $identity['mac_address'] = $normalizedMac;
+        }
+
+        return $identity;
     }
 
     private function resolveReusableExtensionSession(Payment $payment): ?UserSession
