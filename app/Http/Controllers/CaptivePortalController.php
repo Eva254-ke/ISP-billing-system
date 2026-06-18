@@ -8,7 +8,9 @@ use App\Models\Package;
 use App\Models\Payment;
 use App\Models\Tenant;
 use App\Models\Voucher;
+use App\Models\UserSession;
 use App\Services\MikroTik\MikroTikService;
+use App\Services\MikroTik\SessionManager;
 use App\Services\Mpesa\DarajaService;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
@@ -110,7 +112,8 @@ class CaptivePortalController extends Controller
                 $pIp = $payment->metadata['ip'] ?? '';
                 
                 if ($pMac && !$this->isDeviceAuthorized($pMac, $pIp)) {
-                    $this->grantNetworkAccess($pMac, $pIp, $payment->tenant_id);
+                    // Pass the $payment object directly so the router knows exactly which package to apply
+                    $this->grantNetworkAccess($pMac, $pIp, $payment->tenant_id, 86400, $payment);
                 }
                 return response()->json(['status' => 'connected', 'message' => 'Access granted!']);
             }
@@ -161,7 +164,7 @@ class CaptivePortalController extends Controller
                 ->first();
                 
             if ($payment) {
-                $this->grantNetworkAccess($mac, $ip, $payment->tenant_id);
+                $this->grantNetworkAccess($mac, $ip, $payment->tenant_id, 86400, $payment);
                 return response()->json(['status' => 'connected', 'message' => 'Receipt verified!']);
             }
 
@@ -207,13 +210,12 @@ class CaptivePortalController extends Controller
             ]);
         }
 
-        // FIX: Added all required database columns to prevent SQL 1364 errors
         $payment = Payment::create([
             'tenant_id' => $package->tenant_id,
             'phone' => $normalizedPhone,
             'customer_name' => 'WiFi Guest',
             'package_id' => $package->id,
-            'package_name' => $package->name, // <--- THIS WAS MISSING AND CAUSED THE SQL ERROR
+            'package_name' => $package->name, 
             'amount' => $package->price,
             'currency' => $package->currency ?? 'KES',
             'mpesa_checkout_request_id' => 'CP-' . strtoupper(uniqid()),
@@ -284,8 +286,9 @@ class CaptivePortalController extends Controller
         return response()->json(['status' => 'connected', 'message' => 'Voucher redeemed!']);
     }
 
-    private function grantNetworkAccess(string $mac, string $ip, int $tenantId, int $ttlSeconds = 86400): void
+    private function grantNetworkAccess(string $mac, string $ip, int $tenantId, int $ttlSeconds = 86400, ?Payment $payment = null): void
     {
+        // 1. Set Cache FIRST (So the fast-path check passes immediately)
         try {
             Cache::put("wifi:auth:{$mac}", $ip, $ttlSeconds);
             Cache::put("wifi:auth:{$ip}", $mac, $ttlSeconds);
@@ -293,11 +296,80 @@ class CaptivePortalController extends Controller
             Log::warning('Cache set failed', ['error' => $e->getMessage()]);
         }
 
+        // 2. Activate Session via your existing SessionManager
         try {
-            $this->mikrotik->authorizeDevice($mac, $ip, $ttlSeconds);
+            $package = null;
+            $phone = null;
+
+            // If we have the payment object, use it directly
+            if ($payment && $payment->package) {
+                $package = $payment->package;
+                $phone = $payment->phone;
+            } else {
+                // Fallback: Try to find payment by MAC metadata
+                $foundPayment = Payment::where('tenant_id', $tenantId)
+                    ->where('metadata->mac', $mac)
+                    ->whereIn('status', ['completed', 'confirmed', 'pending'])
+                    ->latest()
+                    ->first();
+
+                if ($foundPayment && $foundPayment->package) {
+                    $package = $foundPayment->package;
+                    $phone = $foundPayment->phone;
+                    $payment = $foundPayment;
+                } else {
+                    // Fallback: Try to find a redeemed voucher for this MAC
+                    $voucher = Voucher::where('tenant_id', $tenantId)
+                        ->where('used_by_mac', $mac)
+                        ->where('is_used', true)
+                        ->latest()
+                        ->first();
+                    
+                    if ($voucher && $voucher->package) {
+                        $package = $voucher->package;
+                        $phone = $voucher->used_by_phone ?? 'Voucher User';
+                    }
+                }
+            }
+
+            if (!$package) {
+                Log::warning('Cannot activate session: No valid package found for MAC', ['mac' => $mac, 'ip' => $ip]);
+                return;
+            }
+
+            // Create or update the UserSession record in the database
+            $session = UserSession::updateOrCreate(
+                [
+                    'tenant_id' => $tenantId,
+                    'mac_address' => $mac,
+                ],
+                [
+                    'ip_address' => $ip,
+                    'phone' => $phone,
+                    'username' => $mac, 
+                    'status' => 'active',
+                    'package_id' => $package->id,
+                    'payment_id' => $payment?->id,
+                    'started_at' => now(),
+                    'expires_at' => now()->addSeconds($ttlSeconds),
+                    'last_activity_at' => now(),
+                ]
+            );
+
+            // Call the SessionManager to provision on the router/RADIUS
+            $sessionManager = app(SessionManager::class);
+            $sessionManager->activateSession($session, $package);
+            
+            Log::info('Network access granted and session activated', [
+                'mac' => $mac, 
+                'ip' => $ip,
+                'session_id' => $session->id
+            ]);
+
         } catch (\Throwable $e) {
-            Log::error('MikroTik Router API Timeout/Failed', [
+            Log::error('Session activation failed', [
                 'error' => $e->getMessage(), 
+                'trace' => $e->getTraceAsString(),
                 'mac' => $mac, 
                 'ip' => $ip,
                 'tenant_id' => $tenantId
