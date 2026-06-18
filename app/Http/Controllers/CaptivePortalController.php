@@ -7,6 +7,7 @@ use Illuminate\Http\JsonResponse;
 use App\Models\Package;
 use App\Models\Payment;
 use App\Models\Tenant;
+use App\Models\Router; // <--- ADDED
 use App\Models\Voucher;
 use App\Models\UserSession;
 use App\Services\MikroTik\MikroTikService;
@@ -112,7 +113,6 @@ class CaptivePortalController extends Controller
                 $pIp = $payment->metadata['ip'] ?? '';
                 
                 if ($pMac && !$this->isDeviceAuthorized($pMac, $pIp)) {
-                    // Pass the $payment object directly so the router knows exactly which package to apply
                     $this->grantNetworkAccess($pMac, $pIp, $payment->tenant_id, 86400, $payment);
                 }
                 return response()->json(['status' => 'connected', 'message' => 'Access granted!']);
@@ -301,12 +301,10 @@ class CaptivePortalController extends Controller
             $package = null;
             $phone = null;
 
-            // If we have the payment object, use it directly
             if ($payment && $payment->package) {
                 $package = $payment->package;
                 $phone = $payment->phone;
             } else {
-                // Fallback: Try to find payment by MAC metadata
                 $foundPayment = Payment::where('tenant_id', $tenantId)
                     ->where('metadata->mac', $mac)
                     ->whereIn('status', ['completed', 'confirmed', 'pending'])
@@ -318,7 +316,6 @@ class CaptivePortalController extends Controller
                     $phone = $foundPayment->phone;
                     $payment = $foundPayment;
                 } else {
-                    // Fallback: Try to find a redeemed voucher for this MAC
                     $voucher = Voucher::where('tenant_id', $tenantId)
                         ->where('used_by_mac', $mac)
                         ->where('is_used', true)
@@ -337,6 +334,9 @@ class CaptivePortalController extends Controller
                 return;
             }
 
+            // CRITICAL FIX: Find the router for this tenant so SessionManager knows where to send the command
+            $router = Router::where('tenant_id', $tenantId)->first();
+
             // Create or update the UserSession record in the database
             $session = UserSession::updateOrCreate(
                 [
@@ -344,6 +344,7 @@ class CaptivePortalController extends Controller
                     'mac_address' => $mac,
                 ],
                 [
+                    'router_id' => $router?->id, // <--- THIS WAS MISSING AND CAUSED THE SILENT FAILURE
                     'ip_address' => $ip,
                     'phone' => $phone,
                     'username' => $mac, 
@@ -358,12 +359,13 @@ class CaptivePortalController extends Controller
 
             // Call the SessionManager to provision on the router/RADIUS
             $sessionManager = app(SessionManager::class);
-            $sessionManager->activateSession($session, $package);
+            $result = $sessionManager->activateSession($session, $package);
             
-            Log::info('Network access granted and session activated', [
+            Log::info('Network access grant attempt finished', [
                 'mac' => $mac, 
                 'ip' => $ip,
-                'session_id' => $session->id
+                'session_id' => $session->id,
+                'session_manager_result' => $result // <--- LOGS THE EXACT RESULT FROM THE ROUTER
             ]);
 
         } catch (\Throwable $e) {
