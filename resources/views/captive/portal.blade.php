@@ -29,7 +29,6 @@
         h2 { margin-top: 0; color: #111827; font-size: 1.5rem; }
         h3 { font-size: 0.9rem; color: #6b7280; margin-bottom: 0.5rem; }
         
-        /* 2-COLUMN GRID FOR PACKAGES */
         .packages-grid {
             display: grid;
             grid-template-columns: 1fr 1fr; 
@@ -77,7 +76,6 @@
             border-color: #2563eb;
         }
 
-        /* CLEAN PHONE INPUT STYLES */
         #phone-number-input {
             padding: 1rem;
             font-size: 1.25rem;
@@ -161,12 +159,11 @@
         </footer>
     </div>
 
-    <!-- STATE 2.5: CLEAN PHONE INPUT (NEW) -->
+    <!-- STATE 2.5: CLEAN PHONE INPUT -->
     <div id="state-phone-input" class="hidden">
         <h2>Enter M-Pesa Number</h2>
         <p id="phone-input-details" style="color: #6b7280; margin-bottom: 0.5rem; font-size: 0.95rem;"></p>
         
-        <!-- type="tel" and inputmode="numeric" forces the numeric keypad on mobile -->
         <input type="tel" id="phone-number-input" placeholder="0712345678" maxlength="12" inputmode="numeric" autocomplete="tel">
         
         <button class="btn btn-primary" onclick="submitPhoneNumber()">Send STK Push</button>
@@ -188,20 +185,17 @@
     
     let selectedPackage = { id: 0, name: '', amount: 0 };
 
-    // 1. SHOW CLEAN PHONE INPUT
     function showPhoneInput(packageId, name, amount) {
         selectedPackage = { id: packageId, name, amount };
         document.getElementById('phone-input-details').innerHTML = `For <strong>${name}</strong> (KES ${amount.toLocaleString()})`;
         document.getElementById('phone-number-input').value = ''; 
         showState('phone-input');
         
-        // Focus the input after a tiny delay to allow transition
         setTimeout(() => {
             document.getElementById('phone-number-input').focus();
         }, 100);
     }
 
-    // 2. VALIDATE AND SUBMIT PHONE NUMBER
     function submitPhoneNumber() {
         const phoneInput = document.getElementById('phone-number-input');
         let phone = phoneInput.value.trim();
@@ -211,17 +205,14 @@
             return;
         }
         
-        // Clean input: remove spaces, dashes, etc.
         phone = phone.replace(/\D/g, '');
         
-        // Normalize to 07XXXXXXXX or 01XXXXXXXX
         if (phone.startsWith('254')) {
             phone = '0' + phone.substring(3);
         } else if (phone.startsWith('7') || phone.startsWith('1')) {
             phone = '0' + phone;
         }
         
-        // Strict validation for Kenya numbers
         if (!/^(0[17]\d{8})$/.test(phone)) {
             alert('Invalid number. Please use 07XXXXXXXX or 01XXXXXXXX.');
             return;
@@ -230,7 +221,6 @@
         initiatePayment(phone);
     }
 
-    // 3. INITIATE PAYMENT (BULLETPROOF AJAX)
     async function initiatePayment(phone) {
         showState('processing', 'Sending M-Pesa Prompt...', 'Check your phone and enter your PIN.');
 
@@ -239,7 +229,7 @@
                 method: 'POST',
                 headers: { 
                     'Content-Type': 'application/json', 
-                    'Accept': 'application/json', // Forces Laravel to return JSON even on errors
+                    'Accept': 'application/json',
                     'X-CSRF-TOKEN': CSRF 
                 },
                 body: JSON.stringify({ 
@@ -251,7 +241,6 @@
                 })
             });
 
-            // Safely parse JSON to prevent crashes on HTML error pages
             let data;
             const text = await res.text();
             try {
@@ -268,7 +257,7 @@
                 if (data.errors) {
                     errorMsg = Object.values(data.errors).flat().join(', ');
                 }
-                alert(errorMsg); // Shows exact validation or API errors
+                alert(errorMsg);
                 showState('menu');
                 return;
             }
@@ -286,7 +275,6 @@
         }
     }
 
-    // 4. POLL STATUS
     async function pollPaymentStatus(paymentId) {
         const interval = setInterval(async () => {
             try {
@@ -312,7 +300,6 @@
         }, 3000); 
     }
 
-    // 5. HANDLE RECONNECT
     async function reconnectAccess() {
         const code = document.getElementById('reconnect-code').value.trim();
         if (!code) return alert('Please enter a code');
@@ -359,7 +346,6 @@
         }
     }
 
-    // 6. THE MAGIC PORTAL CLOSURE
     function triggerPortalClose() {
         window.open('', '_self');
         window.close();
@@ -374,7 +360,6 @@
         }, 1000);
     }
 
-    // 7. STATE MANAGEMENT
     function showState(state, title = '', message = '') {
         document.getElementById('state-menu').classList.toggle('hidden', state !== 'menu');
         document.getElementById('state-phone-input').classList.toggle('hidden', state !== 'phone-input');
