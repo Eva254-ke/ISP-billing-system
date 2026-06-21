@@ -200,7 +200,10 @@ class CaptivePortalController extends Controller
                 return response()->json(['status' => 'connected', 'message' => 'Voucher redeemed!']);
             }
 
-            $payment = Payment::where('mpesa_receipt_number', $code)
+            $payment = Payment::where(function ($query) use ($code) {
+                    $query->where('mpesa_code', $code)
+                          ->orWhere('mpesa_receipt_number', $code);
+                })
                 ->whereIn('status', ['completed', 'confirmed'])
                 ->first();
                 
