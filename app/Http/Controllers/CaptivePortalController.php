@@ -337,6 +337,18 @@ class CaptivePortalController extends Controller
             $package = null;
             $phone = null;
 
+            if ($payment && !in_array((string) $payment->status, ['completed', 'confirmed'], true)) {
+                Log::warning('Refusing to activate network access for unconfirmed payment', [
+                    'payment_id' => $payment->id,
+                    'tenant_id' => $payment->tenant_id,
+                    'status' => $payment->status,
+                    'mac' => $mac,
+                    'ip' => $ip,
+                ]);
+
+                return null;
+            }
+
             if ($payment && $payment->package) {
                 $this->rememberPaymentClient($payment, $mac, $ip);
                 $package = $payment->package;
@@ -344,7 +356,7 @@ class CaptivePortalController extends Controller
             } else {
                 $foundPayment = Payment::where('tenant_id', $tenantId)
                     ->where('metadata->mac', $mac)
-                    ->whereIn('status', ['completed', 'confirmed', 'pending'])
+                    ->whereIn('status', ['completed', 'confirmed'])
                     ->latest()
                     ->first();
 

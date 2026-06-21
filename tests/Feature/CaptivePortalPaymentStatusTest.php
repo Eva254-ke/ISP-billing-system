@@ -11,6 +11,7 @@ use App\Models\Voucher;
 use App\Jobs\ActivateSession;
 use App\Jobs\ProcessMpesaCallback;
 use App\Jobs\SyncSessionUsage;
+use App\Http\Controllers\CaptivePortalController;
 use App\Services\MikroTik\MikroTikService;
 use App\Services\MikroTik\SessionManager;
 use App\Services\Mpesa\DarajaService;
@@ -56,6 +57,50 @@ class CaptivePortalPaymentStatusTest extends TestCase
         $this->assertNotSame($first['username'], $second['username']);
         $this->assertSame($first['username'], $first['password']);
         $this->assertSame($second['username'], $second['password']);
+    }
+
+    public function test_pending_payment_cannot_provision_network_access(): void
+    {
+        config()->set('radius.enabled', true);
+        $this->configureRadiusProvisioningConnection();
+
+        $tenant = $this->createTenant();
+        $package = $this->createPackage($tenant);
+        $payment = $this->createPayment($tenant, $package, [
+            'status' => 'pending',
+            'metadata' => [
+                'mac' => 'AA:BB:CC:DD:EE:FF',
+                'ip' => '10.0.0.25',
+            ],
+        ]);
+
+        $radiusProvisioning = Mockery::mock(FreeRadiusProvisioningService::class);
+        $radiusProvisioning->shouldNotReceive('provisionUser');
+        $this->app->instance(FreeRadiusProvisioningService::class, $radiusProvisioning);
+
+        $controller = new CaptivePortalController(
+            Mockery::mock(MikroTikService::class),
+            Mockery::mock(DarajaService::class)
+        );
+
+        $method = new \ReflectionMethod($controller, 'grantNetworkAccess');
+        $method->setAccessible(true);
+
+        $session = $method->invoke(
+            $controller,
+            'AA:BB:CC:DD:EE:FF',
+            '10.0.0.25',
+            $tenant->id,
+            3600,
+            $payment
+        );
+
+        $this->assertNull($session);
+        $this->assertDatabaseMissing('user_sessions', [
+            'tenant_id' => $tenant->id,
+            'mac_address' => 'AA:BB:CC:DD:EE:FF',
+        ]);
+        $this->assertSame(0, DB::connection('radius')->table('radcheck')->count());
     }
 
     public function test_packages_view_posts_payments_with_explicit_tenant_context(): void
