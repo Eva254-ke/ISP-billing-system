@@ -13,6 +13,7 @@ use App\Models\UserSession;
 use App\Services\MikroTik\MikroTikService;
 use App\Services\MikroTik\SessionManager;
 use App\Services\Radius\FreeRadiusProvisioningService;
+use App\Services\Radius\RadiusAccountingService;
 use App\Services\Mpesa\DarajaService;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
@@ -110,12 +111,51 @@ class CaptivePortalController extends Controller
             }
 
             if (in_array($payment->status, ['completed', 'confirmed'])) {
-                $pMac = $payment->metadata['mac'] ?? '';
-                $pIp = $payment->metadata['ip'] ?? '';
-                
-                if ($pMac && !$this->isDeviceAuthorized($pMac, $pIp)) {
-                    $this->grantNetworkAccess($pMac, $pIp, $payment->tenant_id, 86400, $payment);
+                $metadata = is_array($payment->metadata) ? $payment->metadata : [];
+                $pMac = $this->cleanMac($metadata['mac'] ?? '');
+                $pIp = $metadata['ip'] ?? '';
+
+                if ($pMac === '') {
+                    Log::channel('radius')->warning('Payment confirmed but captive client MAC is missing', [
+                        'payment_id' => $payment->id,
+                        'tenant_id' => $payment->tenant_id,
+                        'phone' => $payment->phone,
+                    ]);
+
+                    return response()->json([
+                        'status' => 'pending',
+                        'message' => 'Payment confirmed. Please forget this WiFi network and reconnect so we can identify your device.',
+                    ]);
                 }
+
+                $ttlSeconds = $this->paymentTtlSeconds($payment);
+                $session = $this->grantNetworkAccess($pMac, $pIp, $payment->tenant_id, $ttlSeconds, $payment);
+
+                if ((bool) config('radius.enabled', false)) {
+                    $accounting = app(RadiusAccountingService::class);
+                    $session = $session ?: $this->findSessionForPaymentOrClient($payment, $pMac);
+                    $record = $session ? $accounting->syncActiveSession($session) : $accounting->findOpenSession($pMac, $pMac, $pIp);
+
+                    if ($record !== null) {
+                        $this->markDeviceAuthorized($pMac, $pIp, $ttlSeconds);
+
+                        return response()->json(['status' => 'connected', 'message' => 'Access granted!']);
+                    }
+
+                    Log::channel('radius')->info('Payment confirmed; waiting for MikroTik RADIUS accounting', [
+                        'payment_id' => $payment->id,
+                        'tenant_id' => $payment->tenant_id,
+                        'mac' => $pMac,
+                        'ip' => $pIp,
+                        'session_id' => $session?->id,
+                    ]);
+
+                    return response()->json([
+                        'status' => 'pending',
+                        'message' => 'Payment confirmed. Connecting your device to the internet...',
+                    ]);
+                }
+
                 return response()->json(['status' => 'connected', 'message' => 'Access granted!']);
             }
 
@@ -165,7 +205,8 @@ class CaptivePortalController extends Controller
                 ->first();
                 
             if ($payment) {
-                $this->grantNetworkAccess($mac, $ip, $payment->tenant_id, 86400, $payment);
+                $this->rememberPaymentClient($payment, $mac, $ip);
+                $this->grantNetworkAccess($mac, $ip, $payment->tenant_id, $this->paymentTtlSeconds($payment), $payment);
                 return response()->json(['status' => 'connected', 'message' => 'Receipt verified!']);
             }
 
@@ -287,22 +328,17 @@ class CaptivePortalController extends Controller
         return response()->json(['status' => 'connected', 'message' => 'Voucher redeemed!']);
     }
 
-    private function grantNetworkAccess(string $mac, string $ip, int $tenantId, int $ttlSeconds = 86400, ?Payment $payment = null): void
+    private function grantNetworkAccess(string $mac, string $ip, int $tenantId, int $ttlSeconds = 86400, ?Payment $payment = null): ?UserSession
     {
-        // 1. Set Cache FIRST (So the fast-path check passes immediately)
         try {
-            Cache::put("wifi:auth:{$mac}", $ip, $ttlSeconds);
-            Cache::put("wifi:auth:{$ip}", $mac, $ttlSeconds);
-        } catch (\Throwable $e) {
-            Log::warning('Cache set failed', ['error' => $e->getMessage()]);
-        }
-
-        // 2. Provision via RADIUS or SessionManager
-        try {
+            $mac = $this->cleanMac($mac);
+            $ip = trim($ip);
+            $radiusEnabled = (bool) config('radius.enabled', false);
             $package = null;
             $phone = null;
 
             if ($payment && $payment->package) {
+                $this->rememberPaymentClient($payment, $mac, $ip);
                 $package = $payment->package;
                 $phone = $payment->phone;
             } else {
@@ -332,8 +368,11 @@ class CaptivePortalController extends Controller
 
             if (!$package) {
                 Log::warning('Cannot activate session: No valid package found for MAC', ['mac' => $mac, 'ip' => $ip]);
-                return;
+                return null;
             }
+
+            $ttlSeconds = $this->packageTtlSeconds($package, $ttlSeconds);
+            $expiresAt = now()->addSeconds($ttlSeconds);
 
             // Find the router for this tenant
             $router = Router::where('tenant_id', $tenantId)->first();
@@ -349,23 +388,20 @@ class CaptivePortalController extends Controller
                     'ip_address' => $ip,
                     'phone' => $phone,
                     'username' => $mac, 
-                    'status' => 'active',
+                    'status' => $radiusEnabled ? 'idle' : 'active',
                     'package_id' => $package->id,
                     'payment_id' => $payment?->id,
-                    'started_at' => now(),
-                    'expires_at' => now()->addSeconds($ttlSeconds),
+                    'started_at' => $radiusEnabled ? null : now(),
+                    'expires_at' => $expiresAt,
                     'last_activity_at' => now(),
+                    'metadata' => $this->sessionMetadataForPendingRadius($mac, $ip, $payment),
                 ]
             );
 
             // USE RADIUS INSTEAD OF MIKROTIK API
-            $radiusEnabled = (bool) config('radius.enabled', false);
-            
             if ($radiusEnabled) {
                 $radiusService = app(FreeRadiusProvisioningService::class);
-                
-                $expiresAt = now()->addSeconds($ttlSeconds);
-                
+
                 $radiusService->provisionUser(
                     $mac,           // username (MAC address)
                     $mac,           // password (same as username for simplicity)
@@ -374,13 +410,16 @@ class CaptivePortalController extends Controller
                     $mac            // callingStationId (MAC address)
                 );
                 
-                Log::info('Network access granted via RADIUS', [
+                Log::channel('radius')->info('RADIUS access provisioned; waiting for hotspot accounting', [
                     'mac' => $mac, 
                     'ip' => $ip,
+                    'payment_id' => $payment?->id,
                     'session_id' => $session->id,
                     'expires_at' => $expiresAt->toIso8601String()
                 ]);
             } else {
+                $this->markDeviceAuthorized($mac, $ip, $ttlSeconds);
+
                 // Fallback to SessionManager if RADIUS is disabled
                 $sessionManager = app(SessionManager::class);
                 $result = $sessionManager->activateSession($session, $package);
@@ -393,6 +432,8 @@ class CaptivePortalController extends Controller
                 ]);
             }
 
+            return $session;
+
         } catch (\Throwable $e) {
             Log::error('Session activation failed', [
                 'error' => $e->getMessage(), 
@@ -401,6 +442,8 @@ class CaptivePortalController extends Controller
                 'ip' => $ip,
                 'tenant_id' => $tenantId
             ]);
+
+            return null;
         }
     }
 
@@ -408,11 +451,95 @@ class CaptivePortalController extends Controller
     {
         if (!$mac && !$ip) return false;
         try {
+            if ((bool) config('radius.enabled', false)) {
+                $record = app(RadiusAccountingService::class)->findOpenSession($mac, $mac, $ip);
+                if ($record !== null) {
+                    $this->markDeviceAuthorized($mac, $ip, 300);
+                    return true;
+                }
+
+                return false;
+            }
+
             return ($mac && Cache::get("wifi:auth:{$mac}")) 
                 || ($ip && Cache::get("wifi:auth:{$ip}"));
         } catch (\Throwable $e) {
             return false;
         }
+    }
+
+    private function markDeviceAuthorized(string $mac, string $ip, int $ttlSeconds): void
+    {
+        try {
+            Cache::put("wifi:auth:{$mac}", $ip, $ttlSeconds);
+            if ($ip !== '') {
+                Cache::put("wifi:auth:{$ip}", $mac, $ttlSeconds);
+            }
+        } catch (\Throwable $e) {
+            Log::warning('Cache set failed', ['error' => $e->getMessage()]);
+        }
+    }
+
+    private function findSessionForPaymentOrClient(Payment $payment, string $mac): ?UserSession
+    {
+        return UserSession::query()
+            ->where('tenant_id', $payment->tenant_id)
+            ->where(function ($query) use ($payment, $mac): void {
+                $query->where('payment_id', $payment->id)
+                    ->orWhere('mac_address', $mac);
+            })
+            ->latest('id')
+            ->first();
+    }
+
+    private function rememberPaymentClient(Payment $payment, string $mac, string $ip): void
+    {
+        $metadata = is_array($payment->metadata) ? $payment->metadata : [];
+
+        if (($metadata['mac'] ?? null) === $mac && ($metadata['ip'] ?? null) === $ip) {
+            return;
+        }
+
+        $metadata['mac'] = $mac;
+        $metadata['ip'] = $ip;
+
+        $payment->forceFill(['metadata' => $metadata])->save();
+    }
+
+    private function paymentTtlSeconds(Payment $payment): int
+    {
+        return $this->packageTtlSeconds($payment->package, 86400);
+    }
+
+    private function packageTtlSeconds(?Package $package, int $fallback): int
+    {
+        if (!$package) {
+            return max(60, $fallback);
+        }
+
+        return max(60, (int) ($package->duration_in_minutes ?? 0) * 60);
+    }
+
+    private function sessionMetadataForPendingRadius(string $mac, string $ip, ?Payment $payment): array
+    {
+        return [
+            'radius' => [
+                'authorization_prepared' => true,
+                'authorization_mode' => 'mac',
+                'username' => $mac,
+                'calling_station_id' => $mac,
+                'framed_ip_address' => $ip,
+                'waiting_for_hotspot_login' => true,
+                'waiting_for_reauth' => true,
+                'authorization_started_at' => now()->toIso8601String(),
+                'last_attempt_at' => now()->toIso8601String(),
+            ],
+            'activation' => [
+                'payment_id' => $payment?->id,
+                'waiting_for_hotspot_login' => true,
+                'waiting_for_reauth' => true,
+            ],
+        ];
     }
 
     private function resolveTenant(Request $request): ?Tenant
