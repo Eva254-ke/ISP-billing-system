@@ -42,7 +42,8 @@ class FreeRadiusProvisioningService
             $normalizedCallingStationId
         );
 
-        $sessionTimeout = max(60, (int) $package->duration_in_minutes * 60);
+        // Fix: Use duration_in_minutes from package instead of duration_minutes
+        $sessionTimeout = max(60, (int) ($package->duration_in_minutes ?? 60) * 60);
         $rateLimit = $this->buildMikrotikRateLimit($package);
         $db = DB::connection($connection);
 
