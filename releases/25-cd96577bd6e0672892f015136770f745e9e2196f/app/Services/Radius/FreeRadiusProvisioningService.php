@@ -1,0 +1,97 @@
+<?php
+
+namespace App\Services\Radius;
+
+use App\Models\Package;
+use Illuminate\Support\Facades\DB;
+
+class FreeRadiusProvisioningService
+{
+    public function provisionUser(string $username, string $password, Package $package, ?\DateTimeInterface $expiresAt = null): void
+    {
+        $connection = (string) config('radius.db_connection', 'radius');
+        $radcheck = (string) config('radius.tables.radcheck', 'radcheck');
+        $radreply = (string) config('radius.tables.radreply', 'radreply');
+        $cleartextPasswordAttribute = (string) config('radius.attributes.cleartext_password', 'Cleartext-Password');
+        $expirationAttribute = (string) config('radius.attributes.expiration', 'Expiration');
+        $sessionTimeoutAttribute = (string) config('radius.attributes.session_timeout', 'Session-Timeout');
+        $rateLimitAttribute = (string) config('radius.attributes.rate_limit', 'Mikrotik-Rate-Limit');
+        $simultaneousUseAttribute = (string) config('radius.attributes.simultaneous_use', 'Simultaneous-Use');
+        $simultaneousUse = max(1, (int) config('radius.simultaneous_use', 1));
+
+        $sessionTimeout = max(60, (int) $package->duration_in_minutes * 60);
+        $rateLimit = $this->buildMikrotikRateLimit($package);
+        $db = DB::connection($connection);
+
+        $db->transaction(function () use ($db, $radcheck, $radreply, $username, $password, $sessionTimeout, $rateLimit, $simultaneousUse, $expiresAt, $cleartextPasswordAttribute, $expirationAttribute, $sessionTimeoutAttribute, $rateLimitAttribute, $simultaneousUseAttribute) {
+            // Reset profile rows for idempotent provisioning
+            $db
+                ->table($radcheck)
+                ->where('username', $username)
+            ->whereIn('attribute', [$cleartextPasswordAttribute, $expirationAttribute])
+                ->delete();
+
+            $db
+                ->table($radreply)
+                ->where('username', $username)
+                ->whereIn('attribute', [$sessionTimeoutAttribute, $rateLimitAttribute, $simultaneousUseAttribute])
+                ->delete();
+
+            $db
+                ->table($radcheck)
+                ->insert([
+                    [
+                        'username' => $username,
+                        'attribute' => $cleartextPasswordAttribute,
+                        'op' => ':=',
+                        'value' => $password,
+                    ],
+                ]);
+
+            if ($expiresAt) {
+                $db
+                    ->table($radcheck)
+                    ->insert([
+                        'username' => $username,
+                        'attribute' => $expirationAttribute,
+                        'op' => ':=',
+                        'value' => $expiresAt->format('d M Y H:i:s'),
+                    ]);
+            }
+
+            $db
+                ->table($radreply)
+                ->insert([
+                    [
+                        'username' => $username,
+                        'attribute' => $sessionTimeoutAttribute,
+                        'op' => ':=',
+                        'value' => (string) $sessionTimeout,
+                    ],
+                    [
+                        'username' => $username,
+                        'attribute' => $rateLimitAttribute,
+                        'op' => ':=',
+                        'value' => $rateLimit,
+                    ],
+                    [
+                        'username' => $username,
+                        'attribute' => $simultaneousUseAttribute,
+                        'op' => ':=',
+                        'value' => (string) $simultaneousUse,
+                    ],
+                ]);
+        });
+    }
+
+    private function buildMikrotikRateLimit(Package $package): string
+    {
+        $down = (int) ($package->download_limit_mbps ?? 0);
+        $up = (int) ($package->upload_limit_mbps ?? 0);
+
+        $downValue = $down > 0 ? $down . 'M' : '100M';
+        $upValue = $up > 0 ? $up . 'M' : '100M';
+
+        return $upValue . '/' . $downValue;
+    }
+}

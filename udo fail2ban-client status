@@ -1,0 +1,14 @@
+[0;1;32m●[0m fail2ban.service - Fail2Ban Service
+     Loaded: loaded (]8;;file://billing-server-01/usr/lib/systemd/system/fail2ban.service/usr/lib/systemd/system/fail2ban.service]8;;; [0;1;32menabled[0m; preset: [0;1;32menabled[0m)
+     Active: [0;1;32mactive (running)[0m since Mon 2026-03-30 18:57:10 UTC; 1 week 6 days ago
+       Docs: ]8;;man:fail2ban(1)man:fail2ban(1)]8;;
+   Main PID: 1466510 (fail2ban-server)
+      Tasks: 5 (limit: 2315)
+     Memory: 22.7M (peak: 55.0M swap: 2.7M swap peak: 13.8M)
+        CPU: 22min 37.997s
+     CGroup: /system.slice/fail2ban.service
+             └─[0;38;5;245m1466510 /usr/bin/python3 /usr/bin/fail2ban-server -xf start[0m
+
+Mar 30 18:57:10 billing-server-01 systemd[1]: Started fail2ban.service - Fail2Ban Service.
+Mar 30 18:57:11 billing-server-01 fail2ban-server[1466510]: 2026-03-30 18:57:11,113 fail2ban.configreader   [1466510]: WARNING 'allowipv6' not defined in 'Definition'. Using default one: 'auto'
+Mar 30 18:57:12 billing-server-01 fail2ban-server[1466510]: Server ready

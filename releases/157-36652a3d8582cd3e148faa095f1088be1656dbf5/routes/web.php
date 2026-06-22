@@ -1,0 +1,1845 @@
+<?php
+
+use Illuminate\Support\Facades\Route;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Hash;
+use App\Http\Controllers\Admin\AdminPageController;
+use App\Http\Controllers\CaptivePortalController; // <--- ADDED FOR NEW PORTAL
+use App\Models\Router;
+use App\Models\Package;
+use App\Models\Payment;
+use App\Models\UserSession;
+use App\Models\Tenant;
+use App\Services\MikroTik\MikroTikService;
+use App\Services\Mpesa\DarajaService;
+use App\Services\Radius\RadiusAccountingService;
+use App\Services\Admin\AdminSettingsService;
+use App\Services\Admin\TenantBackupService;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Str;
+use Illuminate\Validation\Rules\File as ValidationFile;
+use Illuminate\Validation\Rules\Password as PasswordRule;
+
+/*
+|--------------------------------------------------------------------------
+| Web Routes - CloudBridge Networks WiFi SaaS
+|--------------------------------------------------------------------------
+|
+| Frontend-first development routes with mock authentication.
+| Replace mock auth with real Laravel Sanctum/Jetstream when ready.
+|
+*/
+
+// ============================================================================
+// PUBLIC ROUTES
+// ============================================================================
+
+// Root redirect to login
+Route::get('/', fn() => redirect()->route('login'));
+
+// ----------------------------------------------------------------------------
+// Authentication (Admin only)
+// ----------------------------------------------------------------------------
+Route::get('/login', function () {
+    if (Auth::check() && in_array(Auth::user()?->role, ['super_admin', 'tenant_admin'], true)) {
+        return redirect()->route('admin.dashboard');
+    }
+
+    return view('admin.auth.login');
+})->name('login');
+
+Route::post('/login', function (Request $request) {
+    $credentials = $request->validate([
+        'email' => ['required', 'email'],
+        'password' => ['required', 'string'],
+    ]);
+
+    if (Auth::attempt($credentials, (bool) $request->boolean('remember'))) {
+        $request->session()->regenerate();
+
+        $user = Auth::user();
+        $isAdmin = in_array($user?->role, ['super_admin', 'tenant_admin'], true);
+        $isActive = (bool) ($user?->is_active ?? true);
+
+        if (!$isAdmin || !$isActive) {
+            Auth::logout();
+            $request->session()->invalidate();
+            $request->session()->regenerateToken();
+
+            return back()->with('error', 'Access denied. Admin account required.')->onlyInput('email');
+        }
+
+        if (method_exists($user, 'recordLogin')) {
+            $user->recordLogin($request);
+        }
+
+        return redirect()->route('admin.dashboard');
+    }
+
+    return back()->with('error', 'Invalid email or password.')->onlyInput('email');
+})->name('login.post');
+
+Route::post('/logout', function (Request $request) {
+    Auth::logout();
+    $request->session()->invalidate();
+    $request->session()->regenerateToken();
+
+    return redirect()->route('login');
+})->name('logout');
+
+// ----------------------------------------------------------------------------
+// Customer Portal Routes (Public - Legacy Captive Portal)
+// ----------------------------------------------------------------------------
+Route::prefix('portal')->name('portal.')->group(function () {
+    Route::get('/', fn() => view('portal.home'))->name('home');
+    Route::get('/package/{package}', fn($package) => view('portal.payment', ['package' => $package]))->name('package.show');
+    Route::post('/payment/initiate', fn() => view('portal.payment_status'))->name('payment.initiate');
+    Route::get('/payment/status/{checkoutId}', fn($checkoutId) => view('portal.payment_status'))->name('payment.status');
+    Route::get('/payment/success/{payment?}', fn($payment = null) => view('portal.success', ['payment' => $payment]))->name('payment.success');
+    Route::get('/voucher/redeem', fn() => view('portal.voucher'))->name('voucher.redeem');
+});
+
+// ----------------------------------------------------------------------------
+// Captive Portal Routes (Public - NEW Zero-Friction WiFi Payment Flow)
+// No authentication required - for users connecting to WiFi
+// ----------------------------------------------------------------------------
+Route::prefix('wifi')->name('wifi.')->group(function () {
+    // 1. The ONLY page the user sees (Single Page Architecture)
+    Route::get('/', [CaptivePortalController::class, 'index'])->name('index');
+    
+    // 2. AJAX Endpoints for Payment & Voucher Initiation
+    Route::post('/initiate', [CaptivePortalController::class, 'initiate'])
+        ->middleware('throttle:30,1') // Prevent M-Pesa STK spam
+        ->name('initiate');
+        
+    // 3. AJAX Endpoint to Poll M-Pesa Status (Frontend polls this every 3s)
+    Route::get('/status/{payment}', [CaptivePortalController::class, 'checkStatus'])
+        ->name('status.check');
+        
+    // 4. AJAX Endpoint for Reconnecting via M-Pesa Receipt or Voucher Code
+    Route::post('/reconnect', [CaptivePortalController::class, 'reconnect'])
+        ->middleware('throttle:30,1')
+        ->name('reconnect');
+        
+    // 5. The Magic Close Endpoint (OS Connectivity Check)
+    // Bypasses CSRF because OS background checkers (iOS/Android) hit this directly without sessions
+    Route::get('/connect', [CaptivePortalController::class, 'connect'])
+        ->name('connect')
+        ->withoutMiddleware([\App\Http\Middleware\VerifyCsrfToken::class]);
+});
+
+// Compatibility redirect: some users access captive via /admin/wifi by mistake.
+Route::get('/admin/wifi', function () {
+    $tenantId = (int) (Auth::user()?->tenant_id ?? 0);
+    if ($tenantId > 0) {
+        return redirect()->route('wifi.index', ['tenant_id' => $tenantId]); // <--- FIXED: was wifi.packages
+    }
+
+    return redirect()->route('wifi.index'); // <--- FIXED: was wifi.packages
+});
+
+// ============================================================================
+// ADMIN ROUTES (Protected)
+// ============================================================================
+
+// Protected admin routes group
+Route::middleware('admin.auth')->prefix('admin')->name('admin.')->group(function () {
+    
+    // ----------------------------------------------------------------------------
+    // Dashboard
+    // ----------------------------------------------------------------------------
+    Route::get('/dashboard', [AdminPageController::class, 'dashboard'])->name('dashboard');
+
+    Route::post('/account/password', function (Request $request) {
+        $user = Auth::user();
+        abort_unless($user, 403);
+
+        $validated = $request->validate([
+            'current_password' => ['required', 'string'],
+            'password' => ['required', 'confirmed', PasswordRule::min(8)],
+        ]);
+
+        if (!Hash::check((string) $validated['current_password'], (string) $user->password)) {
+            return back()
+                ->withErrors(['current_password' => 'The current password is incorrect.'])
+                ->withInput();
+        }
+
+        $user->updatePassword((string) $validated['password']);
+
+        return back()->with('success', 'Password updated successfully.');
+    })->name('account.password.update');
+    
+    // ----------------------------------------------------------------------------
+    // Routers Management (MikroTik)
+    // ----------------------------------------------------------------------------
+    Route::prefix('routers')->name('routers.')->group(function () {
+        Route::get('/', [AdminPageController::class, 'routers'])->name('index');
+        Route::get('/create', [AdminPageController::class, 'routersCreate'])->name('create');
+        Route::get('/{router}', [AdminPageController::class, 'routersShow'])->name('show');
+        Route::get('/{router}/edit', [AdminPageController::class, 'routersEdit'])->name('edit');
+    });
+    
+    // ----------------------------------------------------------------------------
+    // Packages Management (WiFi Plans)
+    // ----------------------------------------------------------------------------
+    Route::prefix('packages')->name('packages.')->group(function () {
+        Route::get('/', [AdminPageController::class, 'packages'])->name('index');
+        Route::get('/create', [AdminPageController::class, 'packagesCreate'])->name('create');
+        Route::get('/{package}', [AdminPageController::class, 'packagesShow'])->name('show');
+        Route::get('/{package}/edit', [AdminPageController::class, 'packagesEdit'])->name('edit');
+    });
+    
+    // ----------------------------------------------------------------------------
+    // Vouchers Management (Offline Sales)
+    // ----------------------------------------------------------------------------
+    Route::prefix('vouchers')->name('vouchers.')->group(function () {
+        Route::get('/', [AdminPageController::class, 'vouchersIndex'])->name('index');
+        Route::get('/generate', [AdminPageController::class, 'vouchersGenerate'])->name('generate');
+        Route::get('/print', [AdminPageController::class, 'vouchersPrint'])->name('print');
+    });
+    
+    // ----------------------------------------------------------------------------
+    // Payments & Reports
+    // ----------------------------------------------------------------------------
+    Route::prefix('payments')->name('payments.')->group(function () {
+        Route::get('/', [AdminPageController::class, 'payments'])->name('index');
+        Route::get('/export', [AdminPageController::class, 'paymentsExport'])->name('export');
+        Route::get('/{payment}/invoice', [AdminPageController::class, 'paymentInvoice'])->name('invoice');
+    });
+
+    // ----------------------------------------------------------------------------
+    // System Logs & Diagnostics
+    // ----------------------------------------------------------------------------
+    Route::prefix('logs')->name('logs.')->group(function () {
+        Route::get('/', [AdminPageController::class, 'logsIndex'])->name('index');
+    });
+    
+    // ----------------------------------------------------------------------------
+    // Clients Monitoring (Live Sessions)
+    // ----------------------------------------------------------------------------
+    Route::prefix('clients')->name('clients.')->group(function () {
+        Route::get('/hotspot', [AdminPageController::class, 'clientsHotspot'])->name('hotspot');
+        Route::get('/pppoe', [AdminPageController::class, 'clientsPppoe'])->name('pppoe');
+        Route::get('/customers', [AdminPageController::class, 'clientsCustomers'])->name('customers');
+    });
+    
+    // ----------------------------------------------------------------------------
+    // Settings & Configuration
+    // ----------------------------------------------------------------------------
+    Route::get('/settings', [AdminPageController::class, 'settingsIndex'])->name('settings');
+    
+    Route::prefix('settings')->name('settings.')->group(function () {
+        Route::get('/mpesa', [AdminPageController::class, 'settingsMpesa'])->name('mpesa');
+        Route::get('/sms', [AdminPageController::class, 'settingsSms'])->name('sms');
+        Route::get('/branding', [AdminPageController::class, 'settingsBranding'])->name('branding');
+        Route::get('/account', [AdminPageController::class, 'settingsAccount'])->name('account');
+    });
+    
+    // ----------------------------------------------------------------------------
+    // API Routes for AJAX (Mock Responses for Frontend)
+    // ----------------------------------------------------------------------------
+    Route::prefix('api')->name('api.')->group(function () {
+
+        $resolveTenant = function () {
+            $user = Auth::user();
+
+            if (!$user) {
+                return null;
+            }
+
+            if ($user->tenant_id) {
+                return Tenant::find($user->tenant_id);
+            }
+
+            if (($user->role ?? null) === 'super_admin') {
+                $requestedTenantId = (int) request()->input('tenant_id', request()->query('tenant_id', 0));
+                if ($requestedTenantId > 0) {
+                    return Tenant::query()->active()->find($requestedTenantId);
+                }
+                return null; // Super admin can view aggregate data when tenant is not specified.
+            }
+
+            return null;
+        };
+
+        Route::get('/settings', function (AdminSettingsService $settingsService, TenantBackupService $backupService) use ($resolveTenant) {
+            $tenant = $resolveTenant();
+            $settings = $settingsService->getSettings($tenant);
+
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'settings' => $settings,
+                    'mikrotik_commands' => $settingsService->buildMikrotikCommands($settings),
+                    'system_status' => $settingsService->runtimeStatus(),
+                    'backup_status' => $backupService->latestBackupMetadata($tenant),
+                    ...$settingsService->invoicePreviewContext($tenant),
+                ],
+            ]);
+        })->name('settings.show');
+
+        Route::post('/settings', function (Request $request, AdminSettingsService $settingsService, TenantBackupService $backupService) use ($resolveTenant) {
+            $tenant = $resolveTenant();
+            $settings = $settingsService->save($tenant, (array) $request->input('settings', []));
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Settings saved successfully',
+                'data' => [
+                    'settings' => $settings,
+                    'mikrotik_commands' => $settingsService->buildMikrotikCommands($settings),
+                    'system_status' => $settingsService->runtimeStatus(),
+                    'backup_status' => $backupService->latestBackupMetadata($tenant?->fresh()),
+                    ...$settingsService->invoicePreviewContext($tenant?->fresh()),
+                ],
+            ]);
+        })->name('settings.save');
+
+        Route::post('/settings/branding/upload', function (Request $request, AdminSettingsService $settingsService) use ($resolveTenant) {
+            $validated = $request->validate([
+                'target' => 'required|string|in:logo,favicon',
+                'asset' => ['required', ValidationFile::types(['png', 'jpg', 'jpeg', 'svg', 'webp', 'ico'])->max(4096)],
+            ]);
+
+            $tenant = $resolveTenant();
+            $asset = $request->file('asset');
+            if (!$asset) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'No file was uploaded.',
+                ], 422);
+            }
+
+            $stored = $settingsService->storeBrandAsset($tenant, $asset, (string) $validated['target']);
+
+            return response()->json([
+                'success' => true,
+                'message' => ucfirst((string) $validated['target']) . ' uploaded successfully.',
+                'data' => $stored,
+            ]);
+        })->name('settings.branding.upload');
+
+        Route::get('/settings/backup/download', function (TenantBackupService $backupService) use ($resolveTenant) {
+            $tenant = $resolveTenant();
+            if (!$tenant) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Select a tenant before generating a backup.',
+                ], 422);
+            }
+
+            $backup = $backupService->createBackup($tenant);
+
+            return response()->download($backup['path'], $backup['filename'], [
+                'Content-Type' => 'application/json',
+            ]);
+        })->name('settings.backup.download');
+
+        Route::post('/settings/backup/restore', function (Request $request, TenantBackupService $backupService, AdminSettingsService $settingsService) use ($resolveTenant) {
+            $tenant = $resolveTenant();
+            if (!$tenant) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Select a tenant before restoring a backup.',
+                ], 422);
+            }
+
+            $request->validate([
+                'backup_file' => ['required', ValidationFile::types(['json'])->max(10240)],
+            ]);
+
+            $file = $request->file('backup_file');
+            if (!$file) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Choose a backup file to restore.',
+                ], 422);
+            }
+
+            try {
+                $result = $backupService->restoreBackup($tenant, $file);
+                $settingsService->clearCaches();
+            } catch (\Throwable $exception) {
+                return response()->json([
+                    'success' => false,
+                    'message' => $exception->getMessage(),
+                ], 422);
+            }
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Backup restored successfully for this tenant.',
+                'data' => [
+                    'restored_tables' => $result['restored_tables'],
+                    'backup_status' => $backupService->latestBackupMetadata($tenant->fresh()),
+                ],
+            ]);
+        })->name('settings.backup.restore');
+
+        Route::post('/settings/cache/clear', function (AdminSettingsService $settingsService) {
+            $result = $settingsService->clearCaches();
+
+            return response()->json([
+                'success' => true,
+                'message' => $result['message'],
+                'data' => [
+                    'output' => $result['output'],
+                ],
+            ]);
+        })->name('settings.cache.clear');
+
+        Route::get('/settings/system/status', function (AdminSettingsService $settingsService) {
+            return response()->json([
+                'success' => true,
+                'message' => 'Current release information loaded.',
+                'data' => $settingsService->runtimeStatus(),
+            ]);
+        })->name('settings.system.status');
+
+        Route::post('/settings/mpesa/test', function (Request $request) {
+            $validated = $request->validate([
+                'mpesa_env' => 'nullable|string|in:sandbox,live,production',
+                'mpesa_key' => 'required|string|min:5',
+                'mpesa_secret' => 'required|string|min:5',
+                'mpesa_passkey' => 'nullable|string',
+                'mpesa_shortcode' => 'nullable|string',
+                'mpesa_till' => 'nullable|string',
+                'mpesa_timeout' => 'nullable|integer|min:10|max:120',
+            ]);
+
+            $env = strtolower((string) ($validated['mpesa_env'] ?? 'sandbox'));
+            if ($env === 'production') {
+                $env = 'live';
+            }
+
+            $shortcode = trim((string) ($validated['mpesa_shortcode'] ?? ''));
+            if ($shortcode === '') {
+                $shortcode = trim((string) ($validated['mpesa_till'] ?? ''));
+            }
+
+            $service = new DarajaService([
+                'consumer_key' => (string) ($validated['mpesa_key'] ?? ''),
+                'consumer_secret' => (string) ($validated['mpesa_secret'] ?? ''),
+                'passkey' => (string) ($validated['mpesa_passkey'] ?? ''),
+                'business_shortcode' => $shortcode,
+                'callback_url' => url('/api/mpesa/callback'),
+                'env' => $env,
+                'timeout' => (int) ($validated['mpesa_timeout'] ?? 30),
+            ]);
+
+            $result = $service->testConnection();
+            if (!($result['success'] ?? false)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => (string) ($result['message'] ?? 'Daraja credential validation failed'),
+                    'data' => [
+                        'environment' => $env,
+                        'http_status' => $result['http_status'] ?? null,
+                    ],
+                ], 422);
+            }
+
+            return response()->json([
+                'success' => true,
+                'message' => 'M-Pesa credentials are valid.',
+                'data' => [
+                    'environment' => $env,
+                    'http_status' => $result['http_status'] ?? 200,
+                    'callback_url' => url('/api/mpesa/callback'),
+                ],
+            ]);
+        })->name('settings.mpesa.test');
+
+        Route::post('/settings/mikrotik/test', function (Request $request, MikroTikService $mikroTikService, AdminSettingsService $settingsService) use ($resolveTenant) {
+            $tenant = $resolveTenant();
+
+            $settings = $settingsService->previewSettings($tenant, (array) $request->input('settings', []));
+            $commands = $settingsService->buildMikrotikCommands($settings);
+
+            $router = Router::query()
+                ->when($tenant, fn ($query) => $query->where('tenant_id', $tenant->id))
+                ->orderByDesc('status')
+                ->orderBy('id')
+                ->first();
+
+            if (!$router) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'No router found for this tenant. Add a router first.',
+                    'commands' => $commands,
+                ], 404);
+            }
+
+            $isOnline = $mikroTikService->pingRouter($router);
+
+            if (!$isOnline) {
+                $router->refresh();
+                $diagnostics = $mikroTikService->getConnectivityDiagnostics($router);
+
+                return response()->json([
+                    'success' => false,
+                    'message' => (string) ($diagnostics['message'] ?? 'Router is offline or unreachable'),
+                    'router' => [
+                        'id' => $router->id,
+                        'name' => $router->name,
+                        'ip_address' => $router->ip_address,
+                        'status' => $router->status,
+                    ],
+                    'diagnostics' => $diagnostics,
+                    'commands' => $commands,
+                ], 503);
+            }
+
+            $router->refresh();
+            $systemInfo = $mikroTikService->getRouterSystemInfo($router);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'MikroTik API connection successful',
+                'router' => [
+                    'id' => $router->id,
+                    'name' => $router->name,
+                    'ip_address' => $router->ip_address,
+                    'status' => $router->status,
+                ],
+                'data' => [
+                    'cpu' => $systemInfo['cpu_load'] ?? null,
+                    'memory' => $systemInfo['memory_usage'] ?? null,
+                    'uptime' => $systemInfo['uptime'] ?? null,
+                    'version' => $systemInfo['version'] ?? null,
+                ],
+                'commands' => $commands,
+            ]);
+        })->name('settings.mikrotik.test');
+        
+        // Router Status & Testing
+        Route::get('/routers/status', function (Request $request, MikroTikService $mikroTikService, RadiusAccountingService $radiusAccountingService) use ($resolveTenant) {
+            $tenant = $resolveTenant();
+            $live = $request->boolean('live', true);
+
+            $query = Router::query();
+            if ($tenant) {
+                $query->where('tenant_id', $tenant->id);
+            }
+
+            $routers = $query
+                ->orderBy('name')
+                ->limit(100)
+                ->get()
+                ->map(function (Router $router) use ($live, $mikroTikService, $radiusAccountingService) {
+                    $isOnline = in_array((string) ($router->status ?? Router::STATUS_OFFLINE), [Router::STATUS_ONLINE, Router::STATUS_WARNING], true);
+                    $status = (string) ($router->status ?? Router::STATUS_OFFLINE);
+                    $cpu = $router->cpu_usage;
+                    $memory = $router->memory_usage;
+                    $routerFingerprint = Str::lower(trim((string) ($router->model ?: $router->name)));
+                    $serviceType = match (true) {
+                        Str::contains($routerFingerprint, 'hotspot + pppoe'),
+                        (Str::contains($routerFingerprint, 'hotspot') && Str::contains($routerFingerprint, 'pppoe')) => 'both',
+                        Str::contains($routerFingerprint, 'pppoe') => 'pppoe',
+                        default => 'hotspot',
+                    };
+
+                    $useRouterApiForLiveStatus = $live && !(bool) config('radius.pure_radius', false);
+
+                    if ($useRouterApiForLiveStatus) {
+                        $isOnline = $mikroTikService->pingRouter($router);
+                        $router->refresh();
+                        $status = (string) ($router->status ?? ($isOnline ? Router::STATUS_ONLINE : Router::STATUS_OFFLINE));
+
+                        if ($isOnline) {
+                            $systemInfo = $mikroTikService->getRouterSystemInfo($router);
+                            $cpu = isset($systemInfo['cpu_load']) ? (int) $systemInfo['cpu_load'] : $cpu;
+                            $memory = isset($systemInfo['memory_usage']) ? (int) $systemInfo['memory_usage'] : $memory;
+
+                            if ((int) $cpu >= Router::HEALTHY_CPU_THRESHOLD || (int) $memory >= Router::HEALTHY_MEMORY_THRESHOLD) {
+                                $router->markWarning('High resource usage');
+                                $status = Router::STATUS_WARNING;
+                            }
+                        } elseif ((bool) config('radius.enabled', false)
+                            && ($router->radius_enabled || (bool) config('radius.pure_radius', false))
+                        ) {
+                            try {
+                                if ($radiusAccountingService->findRecentRouterActivity($router) !== null) {
+                                    $router->markOnline();
+                                    $router->refresh();
+                                    $status = Router::STATUS_ONLINE;
+                                }
+                            } catch (\Throwable $e) {
+                                \Log::channel('radius')->warning('Admin router status RADIUS activity lookup failed', [
+                                    'router_id' => $router->id,
+                                    'router' => $router->name,
+                                    'error' => $e->getMessage(),
+                                ]);
+                            }
+                        }
+                    } elseif ($live
+                        && (bool) config('radius.enabled', false)
+                        && ($router->radius_enabled || (bool) config('radius.pure_radius', false))
+                    ) {
+                        try {
+                            if ($radiusAccountingService->findRecentRouterActivity($router) !== null) {
+                                $router->markOnline();
+                                $router->refresh();
+                                $status = Router::STATUS_ONLINE;
+                                $isOnline = true;
+                            }
+                        } catch (\Throwable $e) {
+                            \Log::channel('radius')->warning('Admin router status RADIUS activity lookup failed', [
+                                'router_id' => $router->id,
+                                'router' => $router->name,
+                                'error' => $e->getMessage(),
+                            ]);
+                        }
+                    }
+
+                    $metadata = is_array($router->metadata) ? $router->metadata : [];
+                    $resourceSource = match (true) {
+                        $cpu === null && $memory === null => 'unavailable',
+                        ($metadata['metrics_source'] ?? null) === 'router_push' => 'router_push',
+                        $useRouterApiForLiveStatus && $isOnline => 'router_api',
+                        default => 'cached',
+                    };
+
+                    return [
+                        'id' => $router->id,
+                        'name' => $router->name,
+                        'ip' => $router->ip_address,
+                        'location' => $router->location,
+                        'type' => $serviceType,
+                        'status' => $status,
+                        'users' => (int) ($router->active_sessions ?? 0),
+                        'cpu' => $cpu,
+                        'memory' => $memory,
+                        'resource_source' => $resourceSource,
+                        'last_seen_at' => $router->last_seen_at?->toIso8601String(),
+                    ];
+                });
+
+            $online = $routers->filter(fn ($router) => in_array($router['status'], [Router::STATUS_ONLINE, Router::STATUS_WARNING], true))->count();
+            $offline = $routers->where('status', Router::STATUS_OFFLINE)->count();
+
+            return response()->json([
+                'success' => true,
+                'data' => $routers,
+                'summary' => [
+                    'online' => $online,
+                    'offline' => $offline,
+                    'total' => $routers->count(),
+                    'live' => $live,
+                ],
+            ]);
+        })->name('routers.status');
+        
+        Route::post('/routers/test', function (Request $request, MikroTikService $mikroTikService) use ($resolveTenant) {
+            $tenant = $resolveTenant();
+
+            $router = Router::query()
+                ->when($tenant, fn ($q) => $q->where('tenant_id', $tenant->id))
+                ->find($request->input('router_id'));
+
+            if (!$router) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Router not found',
+                ], 404);
+            }
+
+            $isOnline = $mikroTikService->pingRouter($router);
+
+            if (!$isOnline) {
+                $router->refresh();
+                $diagnostics = $mikroTikService->getConnectivityDiagnostics($router);
+
+                return response()->json([
+                    'success' => false,
+                    'message' => (string) ($diagnostics['message'] ?? 'Router is offline or unreachable'),
+                    'router' => [
+                        'id' => $router->id,
+                        'status' => $router->status,
+                    ],
+                    'diagnostics' => $diagnostics,
+                ], 503);
+            }
+
+            $router->refresh();
+            $systemInfo = $mikroTikService->getRouterSystemInfo($router);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Router is online',
+                'router' => $router->id,
+                'data' => [
+                    'status' => $router->status,
+                    'cpu' => $systemInfo['cpu_load'] ?? $router->cpu_usage,
+                    'memory' => $systemInfo['memory_usage'] ?? $router->memory_usage,
+                    'uptime' => $systemInfo['uptime'] ?? null,
+                ],
+            ]);
+        })->name('routers.test');
+        
+        // Package Stats
+        Route::get('/packages/stats', function () use ($resolveTenant) {
+            $tenant = $resolveTenant();
+
+            $packages = Package::query()->when($tenant, fn ($q) => $q->where('tenant_id', $tenant->id));
+            $payments = Payment::query()->when($tenant, fn ($q) => $q->where('tenant_id', $tenant->id));
+
+            return response()->json([
+                'total' => (clone $packages)->count(),
+                'active' => (clone $packages)->where('is_active', true)->count(),
+                'revenue_today' => (float) (clone $payments)
+                    ->whereDate('created_at', now()->toDateString())
+                    ->whereIn('status', ['completed', 'confirmed', 'activated'])
+                    ->sum('amount'),
+                'revenue_week' => (float) (clone $payments)
+                    ->where('created_at', '>=', now()->startOfWeek())
+                    ->whereIn('status', ['completed', 'confirmed', 'activated'])
+                    ->sum('amount'),
+            ]);
+        })->name('packages.stats');
+
+        Route::get('/dashboard/summary', function () use ($resolveTenant) {
+            $tenant = $resolveTenant();
+
+            $payments = Payment::query()->when($tenant, fn ($query) => $query->where('tenant_id', $tenant->id));
+            $packages = Package::query()->when($tenant, fn ($query) => $query->where('tenant_id', $tenant->id));
+            $routers = Router::query()->when($tenant, fn ($query) => $query->where('tenant_id', $tenant->id));
+            $sessions = UserSession::query()->when($tenant, fn ($query) => $query->where('tenant_id', $tenant->id));
+
+            $successStatuses = ['completed', 'confirmed', 'activated'];
+            $weeklyRevenue = [];
+            for ($i = 6; $i >= 0; $i--) {
+                $day = now()->subDays($i);
+                $weeklyRevenue[] = [
+                    'date' => $day->toDateString(),
+                    'label' => $day->format('D'),
+                    'amount' => (float) (clone $payments)
+                        ->whereDate('created_at', $day->toDateString())
+                        ->whereIn('status', $successStatuses)
+                        ->sum('amount'),
+                ];
+            }
+
+            $thisWeekTx = (clone $payments)->where('created_at', '>=', now()->startOfWeek());
+            $successThisWeek = (clone $thisWeekTx)->whereIn('status', $successStatuses)->count();
+            $totalThisWeek = (clone $thisWeekTx)->count();
+
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'revenue_today' => (float) (clone $payments)
+                        ->whereDate('created_at', now()->toDateString())
+                        ->whereIn('status', $successStatuses)
+                        ->sum('amount'),
+                    'revenue_week' => (float) (clone $payments)
+                        ->where('created_at', '>=', now()->startOfWeek())
+                        ->whereIn('status', $successStatuses)
+                        ->sum('amount'),
+                    'active_sessions' => (clone $sessions)->where('status', 'active')->count(),
+                    'packages_total' => (clone $packages)->count(),
+                    'routers_online' => (clone $routers)->whereIn('status', ['online', 'warning'])->count(),
+                    'routers_total' => (clone $routers)->count(),
+                    'transactions_week' => $totalThisWeek,
+                    'success_rate_week' => $totalThisWeek > 0
+                        ? round(($successThisWeek / $totalThisWeek) * 100)
+                        : 0,
+                    'weekly_revenue' => $weeklyRevenue,
+                ],
+            ]);
+        })->name('dashboard.summary');
+
+        $resolveTenantForPackageWrite = function (Request $request) use ($resolveTenant): ?Tenant {
+            $tenant = $resolveTenant();
+            if ($tenant) {
+                return $tenant;
+            }
+
+            $user = Auth::user();
+            if (($user?->role ?? null) !== 'super_admin') {
+                return null;
+            }
+
+            $requestedTenantId = (int) $request->input('tenant_id', $request->query('tenant_id', 0));
+            if ($requestedTenantId > 0) {
+                return Tenant::query()->active()->find($requestedTenantId);
+            }
+
+            $activeTenants = Tenant::query()->active()->select('id')->limit(2)->get();
+            if ($activeTenants->count() === 1) {
+                return Tenant::query()->find((int) $activeTenants->first()->id);
+            }
+
+            return null;
+        };
+
+        $tenantScopeError = function () {
+            return response()->json([
+                'success' => false,
+                'message' => 'Tenant not found. For super admin, select a tenant first.',
+            ], 422);
+        };
+
+        $resolveTenantRouter = function (Tenant $tenant, int $routerId): ?Router {
+            if ($routerId <= 0) {
+                return null;
+            }
+
+            return Router::resolveCanonicalRecord(
+                Router::query()
+                ->where('tenant_id', $tenant->id)
+                ->find($routerId)
+            );
+        };
+
+        $collectRouterProfiles = function (Router $router, MikroTikService $mikroTikService): array {
+            $profiles = array_merge(
+                $mikroTikService->getHotspotUserProfiles($router),
+                $mikroTikService->getPppProfiles($router)
+            );
+
+            return collect($profiles)
+                ->map(fn ($name) => trim((string) $name))
+                ->filter()
+                ->unique(fn ($name) => Str::lower($name))
+                ->sort(fn ($a, $b) => strnatcasecmp($a, $b))
+                ->values()
+                ->all();
+        };
+
+        $readCachedRouterProfiles = function (Router $router): array {
+            $metadata = is_array($router->metadata) ? $router->metadata : [];
+            $rawProfiles = $metadata['cached_profiles'] ?? [];
+
+            return collect(is_array($rawProfiles) ? $rawProfiles : [])
+                ->map(fn ($name) => trim((string) $name))
+                ->filter()
+                ->unique(fn ($name) => Str::lower($name))
+                ->sort(fn ($a, $b) => strnatcasecmp($a, $b))
+                ->values()
+                ->all();
+        };
+
+        $cacheRouterProfiles = function (Router $router, array $profiles): void {
+            if (empty($profiles)) {
+                return;
+            }
+
+            $metadata = is_array($router->metadata) ? $router->metadata : [];
+            $metadata['cached_profiles'] = array_values($profiles);
+            $metadata['cached_profiles_synced_at'] = now()->toIso8601String();
+
+            $router->update([
+                'metadata' => $metadata,
+            ]);
+        };
+
+        $resolveRouterProfilesForUse = function (Router $router, MikroTikService $mikroTikService) use ($collectRouterProfiles, $readCachedRouterProfiles, $cacheRouterProfiles): array {
+            $isOnline = $mikroTikService->pingRouter($router);
+            $router->refresh();
+
+            if ($isOnline) {
+                $profiles = $collectRouterProfiles($router, $mikroTikService);
+                if (!empty($profiles)) {
+                    $cacheRouterProfiles($router, $profiles);
+                }
+
+                return [
+                    'profiles' => $profiles,
+                    'source' => 'router',
+                    'message' => empty($profiles)
+                        ? 'No MikroTik profiles found on the selected router.'
+                        : 'MikroTik profiles loaded successfully.',
+                ];
+            }
+
+            $cachedProfiles = $readCachedRouterProfiles($router);
+            if (!empty($cachedProfiles)) {
+                $metadata = is_array($router->metadata) ? $router->metadata : [];
+                $cachedAt = trim((string) ($metadata['cached_profiles_synced_at'] ?? ''));
+                $suffix = $cachedAt !== '' ? " Last synced: {$cachedAt}." : '';
+
+                return [
+                    'profiles' => $cachedProfiles,
+                    'source' => 'router_cache',
+                    'message' => "Router is currently unreachable. Using last synced router profiles.{$suffix}",
+                ];
+            }
+
+            $diagnostics = $mikroTikService->getConnectivityDiagnostics($router);
+
+            return [
+                'profiles' => [],
+                'source' => 'router_offline',
+                'message' => (string) ($diagnostics['message'] ?? 'Selected router is offline or unreachable.'),
+            ];
+        };
+
+        $matchSelectedProfile = function (array $availableProfiles, string $requestedProfile): ?string {
+            $normalizedRequested = Str::lower(trim($requestedProfile));
+            if ($normalizedRequested === '') {
+                return null;
+            }
+
+            foreach ($availableProfiles as $profile) {
+                $candidate = trim((string) $profile);
+                if ($candidate !== '' && Str::lower($candidate) === $normalizedRequested) {
+                    return $candidate;
+                }
+            }
+
+            return null;
+        };
+
+        Route::get('/mikrotik/profiles', function (Request $request, MikroTikService $mikroTikService) use ($resolveTenantForPackageWrite, $tenantScopeError, $resolveTenantRouter, $resolveRouterProfilesForUse) {
+            $tenant = $resolveTenantForPackageWrite($request);
+
+            if (!$tenant) {
+                return $tenantScopeError();
+            }
+
+            $routers = Router::selectionCandidatesForTenant($tenant->id);
+
+            $routerRows = $routers->map(fn (Router $router) => [
+                'id' => $router->id,
+                'name' => $router->name,
+                'ip_address' => $router->ip_address,
+                'status' => $router->status,
+                'location' => $router->location,
+            ])->values()->all();
+
+            if (empty($routerRows)) {
+                return response()->json([
+                    'success' => true,
+                    'message' => 'No routers found. Add a router first.',
+                    'data' => [
+                        'profiles' => [],
+                        'router' => null,
+                        'routers' => [],
+                        'source' => 'none',
+                    ],
+                ]);
+            }
+
+            $requestedRouterId = (int) $request->query('router_id', 0);
+            $selectedRouter = $requestedRouterId > 0
+                ? $resolveTenantRouter($tenant, $requestedRouterId)
+                : $routers->first();
+
+            if ($requestedRouterId > 0 && !$selectedRouter) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Selected router was not found for this tenant.',
+                    'data' => [
+                        'profiles' => [],
+                        'router' => null,
+                        'routers' => $routerRows,
+                        'source' => 'none',
+                    ],
+                ], 404);
+            }
+
+            $profiles = [];
+            $message = 'Select a router to load MikroTik profiles.';
+            $source = 'none';
+
+            if ($selectedRouter) {
+                $resolvedProfiles = $resolveRouterProfilesForUse($selectedRouter, $mikroTikService);
+                $profiles = $resolvedProfiles['profiles'];
+                $message = $resolvedProfiles['message'];
+                $source = $resolvedProfiles['source'];
+            }
+
+            return response()->json([
+                'success' => true,
+                'message' => $message,
+                'data' => [
+                    'profiles' => $profiles,
+                    'router' => $selectedRouter ? [
+                        'id' => $selectedRouter->id,
+                        'name' => $selectedRouter->name,
+                        'ip_address' => $selectedRouter->ip_address,
+                        'status' => $selectedRouter->status,
+                        'location' => $selectedRouter->location,
+                    ] : null,
+                    'routers' => $routerRows,
+                    'source' => $source,
+                ],
+            ]);
+        })->name('mikrotik.profiles');
+
+        Route::post('/routers', function (Request $request) use ($resolveTenantForPackageWrite, $tenantScopeError) {
+            $tenant = $resolveTenantForPackageWrite($request);
+
+            if (!$tenant) {
+                return $tenantScopeError();
+            }
+
+            $validated = $request->validate([
+                'name' => 'required|string|max:120',
+                'type' => 'required|in:hotspot,pppoe,both',
+                'ip' => [
+                    'required',
+                    'string',
+                    'max:45',
+                    static function ($attribute, $value, $fail) {
+                        $host = trim((string) $value);
+                        $isIp = filter_var($host, FILTER_VALIDATE_IP) !== false;
+                        $isHostname = filter_var($host, FILTER_VALIDATE_DOMAIN, FILTER_FLAG_HOSTNAME) !== false;
+
+                        if (!$isIp && !$isHostname) {
+                            $fail('Router address must be a valid IP address or hostname.');
+                        }
+                    },
+                ],
+                'port' => 'nullable|integer|min:1|max:65535',
+                'username' => 'required|string|max:120',
+                'password' => 'required|string|max:255',
+                'location' => 'nullable|string|max:120',
+                'notes' => 'nullable|string|max:1000',
+            ]);
+
+            $ipAddress = trim((string) $validated['ip']);
+            $serviceType = strtolower((string) $validated['type']);
+
+            $alreadyExists = Router::query()
+                ->where('tenant_id', $tenant->id)
+                ->where('ip_address', $ipAddress)
+                ->exists();
+
+            if ($alreadyExists) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'A router with that IP address already exists for this tenant.',
+                ], 422);
+            }
+
+            $router = Router::create([
+                'tenant_id' => $tenant->id,
+                'name' => trim((string) $validated['name']),
+                'model' => match ($serviceType) {
+                    'pppoe' => 'MikroTik PPPoE',
+                    'both' => 'MikroTik Hotspot + PPPoE',
+                    default => 'MikroTik Hotspot',
+                },
+                'ip_address' => $ipAddress,
+                'api_port' => (int) ($validated['port'] ?? 8728),
+                'api_username' => trim((string) $validated['username']),
+                'api_password' => encrypt((string) $validated['password']),
+                'api_ssl' => false,
+                'location' => filled($validated['location'] ?? null) ? trim((string) $validated['location']) : null,
+                'notes' => filled($validated['notes'] ?? null) ? trim((string) $validated['notes']) : null,
+                'status' => Router::STATUS_OFFLINE,
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Router saved successfully.',
+                'data' => [
+                    'id' => $router->id,
+                    'name' => $router->name,
+                    'ip' => $router->ip_address,
+                    'location' => $router->location,
+                    'type' => $serviceType,
+                    'status' => $router->status,
+                ],
+            ], 201);
+        })->name('routers.store');
+
+        Route::post('/routers/bulk-delete', function (Request $request) use ($resolveTenantForPackageWrite, $tenantScopeError) {
+            $tenant = $resolveTenantForPackageWrite($request);
+
+            if (!$tenant) {
+                return $tenantScopeError();
+            }
+
+            $validated = $request->validate([
+                'router_ids' => 'required|array|min:1',
+                'router_ids.*' => 'integer',
+            ]);
+
+            $routers = Router::query()
+                ->where('tenant_id', $tenant->id)
+                ->whereIn('id', $validated['router_ids'])
+                ->get();
+
+            if ($routers->isEmpty()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'No matching routers found.',
+                ], 404);
+            }
+
+            foreach ($routers as $router) {
+                $router->delete();
+            }
+
+            return response()->json([
+                'success' => true,
+                'message' => sprintf('%d router(s) deleted successfully.', $routers->count()),
+                'deleted' => $routers->count(),
+            ]);
+        })->name('routers.bulk-delete');
+
+        Route::get('/packages', function () use ($resolveTenant) {
+            $tenant = $resolveTenant();
+
+            $packages = Package::query()
+                ->when($tenant, fn ($query) => $query->where('tenant_id', $tenant->id))
+                ->orderBy('sort_order')
+                ->orderBy('price')
+                ->limit(200)
+                ->get()
+                ->map(fn (Package $package) => [
+                    'id' => $package->id,
+                    'name' => $package->name,
+                    'description' => $package->description,
+                    'price' => (float) $package->price,
+                    'duration_value' => $package->duration_value,
+                    'duration_unit' => $package->duration_unit,
+                    'download_limit_mbps' => $package->download_limit_mbps,
+                    'upload_limit_mbps' => $package->upload_limit_mbps,
+                    'mikrotik_profile_name' => $package->mikrotik_profile_name,
+                    'is_active' => (bool) $package->is_active,
+                    'total_sales' => (int) ($package->total_sales ?? 0),
+                    'sort_order' => $package->sort_order,
+                ]);
+
+            return response()->json([
+                'success' => true,
+                'data' => $packages,
+            ]);
+        })->name('packages.index');
+
+        Route::post('/packages', function (Request $request, MikroTikService $mikroTikService) use ($resolveTenantForPackageWrite, $tenantScopeError, $resolveTenantRouter, $resolveRouterProfilesForUse, $matchSelectedProfile) {
+            $tenant = $resolveTenantForPackageWrite($request);
+
+            if (!$tenant) {
+                return $tenantScopeError();
+            }
+
+            $validated = $request->validate([
+                'name' => 'required|string|max:120',
+                'price' => 'required|numeric|min:0',
+                'duration_value' => 'required|integer|min:1|max:100000',
+                'duration_unit' => 'required|in:minutes,hours,days,weeks,months',
+                'download_limit_mbps' => 'nullable|integer|min:1|max:100000',
+                'upload_limit_mbps' => 'nullable|integer|min:1|max:100000',
+                'router_id' => 'nullable|integer|min:1',
+                'mikrotik_profile_name' => 'nullable|string|max:120',
+                'is_active' => 'nullable|boolean',
+            ]);
+
+            $requestedProfile = trim((string) $validated['mikrotik_profile_name']);
+            $selectedProfile = null;
+
+            if ($requestedProfile !== '') {
+                $router = $resolveTenantRouter($tenant, (int) ($validated['router_id'] ?? 0));
+                if (!$router) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Select a router if you want to use a MikroTik profile.',
+                    ], 422);
+                }
+
+                $resolvedProfiles = $resolveRouterProfilesForUse($router, $mikroTikService);
+                $availableProfiles = $resolvedProfiles['profiles'];
+                if (empty($availableProfiles)) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => (string) ($resolvedProfiles['message'] ?? 'No MikroTik profiles were found on the selected router.'),
+                    ], 422);
+                }
+
+                $selectedProfile = $matchSelectedProfile($availableProfiles, $requestedProfile);
+
+                if (!$selectedProfile) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Selected MikroTik profile does not exist on the chosen router.',
+                    ], 422);
+                }
+            }
+
+            $sortOrder = (int) (Package::query()
+                ->where('tenant_id', $tenant->id)
+                ->max('sort_order') ?? 0) + 1;
+
+            $package = Package::create([
+                'tenant_id' => $tenant->id,
+                'name' => $validated['name'],
+                'description' => null,
+                'code' => Package::generateUniqueCode(fallbackName: (string) $validated['name']),
+                'price' => $validated['price'],
+                'currency' => 'KES',
+                'duration_value' => $validated['duration_value'],
+                'duration_unit' => $validated['duration_unit'],
+                'download_limit_mbps' => $validated['download_limit_mbps'] ?? null,
+                'upload_limit_mbps' => $validated['upload_limit_mbps'] ?? null,
+                'mikrotik_profile_name' => $selectedProfile,
+                'is_active' => (bool) ($validated['is_active'] ?? true),
+                'sort_order' => $sortOrder,
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Package created successfully',
+                'data' => [
+                    'id' => $package->id,
+                    'name' => $package->name,
+                ],
+            ], 201);
+        })->name('packages.create');
+
+        Route::put('/packages/{package}', function (Request $request, Package $package, MikroTikService $mikroTikService) use ($resolveTenantForPackageWrite, $tenantScopeError, $resolveTenantRouter, $resolveRouterProfilesForUse, $matchSelectedProfile) {
+            $tenant = $resolveTenantForPackageWrite($request);
+
+            if (!$tenant) {
+                return $tenantScopeError();
+            }
+
+            if ((int) $package->tenant_id !== (int) $tenant->id) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Package not found',
+                ], 404);
+            }
+
+            $validated = $request->validate([
+                'name' => 'required|string|max:120',
+                'price' => 'required|numeric|min:0',
+                'duration_value' => 'required|integer|min:1|max:100000',
+                'duration_unit' => 'required|in:minutes,hours,days,weeks,months',
+                'download_limit_mbps' => 'nullable|integer|min:1|max:100000',
+                'upload_limit_mbps' => 'nullable|integer|min:1|max:100000',
+                'router_id' => 'nullable|integer|min:1',
+                'mikrotik_profile_name' => 'nullable|string|max:120',
+                'is_active' => 'nullable|boolean',
+            ]);
+
+            $requestedProfile = trim((string) $validated['mikrotik_profile_name']);
+            $selectedProfile = null;
+
+            if ($requestedProfile !== '') {
+                $router = $resolveTenantRouter($tenant, (int) ($validated['router_id'] ?? 0));
+                if (!$router) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Select a router if you want to use a MikroTik profile.',
+                    ], 422);
+                }
+
+                $resolvedProfiles = $resolveRouterProfilesForUse($router, $mikroTikService);
+                $availableProfiles = $resolvedProfiles['profiles'];
+                if (empty($availableProfiles)) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => (string) ($resolvedProfiles['message'] ?? 'No MikroTik profiles were found on the selected router.'),
+                    ], 422);
+                }
+
+                $selectedProfile = $matchSelectedProfile($availableProfiles, $requestedProfile);
+
+                if (!$selectedProfile) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Selected MikroTik profile does not exist on the chosen router.',
+                    ], 422);
+                }
+            }
+
+            $package->update([
+                'name' => $validated['name'],
+                'description' => null,
+                'price' => $validated['price'],
+                'duration_value' => $validated['duration_value'],
+                'duration_unit' => $validated['duration_unit'],
+                'download_limit_mbps' => $validated['download_limit_mbps'] ?? null,
+                'upload_limit_mbps' => $validated['upload_limit_mbps'] ?? null,
+                'mikrotik_profile_name' => $selectedProfile,
+                'is_active' => (bool) ($validated['is_active'] ?? false),
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Package updated successfully',
+            ]);
+        })->name('packages.update');
+
+        Route::patch('/packages/{package}/status', function (Request $request, Package $package) use ($resolveTenantForPackageWrite, $tenantScopeError) {
+            $tenant = $resolveTenantForPackageWrite($request);
+
+            if (!$tenant) {
+                return $tenantScopeError();
+            }
+
+            if ((int) $package->tenant_id !== (int) $tenant->id) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Package not found',
+                ], 404);
+            }
+
+            $validated = $request->validate([
+                'is_active' => 'required|boolean',
+            ]);
+
+            $package->update([
+                'is_active' => (bool) $validated['is_active'],
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Package status updated',
+            ]);
+        })->name('packages.status');
+
+        Route::delete('/packages/{package}', function (Request $request, Package $package) use ($resolveTenantForPackageWrite, $tenantScopeError) {
+            $tenant = $resolveTenantForPackageWrite($request);
+
+            if (!$tenant) {
+                return $tenantScopeError();
+            }
+
+            if ((int) $package->tenant_id !== (int) $tenant->id) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Package not found',
+                ], 404);
+            }
+
+            $package->delete();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Package deleted successfully',
+            ]);
+        })->name('packages.delete');
+        
+        // Client Stats (Live)
+        Route::get('/clients/stats', function () use ($resolveTenant) {
+            $tenant = $resolveTenant();
+            UserSession::expireStaleSessions($tenant?->id);
+
+            $mode = request()->query('mode');
+
+            $sessions = UserSession::query()
+                ->when($tenant, fn ($q) => $q->where('tenant_id', $tenant->id))
+                ->when($mode === 'pppoe', fn ($q) => $q->where('username', 'like', 'pppoe%'))
+                ->when($mode === 'hotspot', fn ($q) => $q->where(function ($inner) {
+                    $inner->whereNull('username')->orWhere('username', 'not like', 'pppoe%');
+                }));
+
+            $activeSessions = (clone $sessions)->active()->count();
+            $totalBytes = (int) (clone $sessions)->sum('bytes_total');
+            $totalGb = round($totalBytes / (1024 * 1024 * 1024), 2);
+            $routersOnline = Router::query()
+                ->when($tenant, fn ($query) => $query->where('tenant_id', $tenant->id))
+                ->whereIn('status', ['online', 'warning'])
+                ->count();
+
+            return response()->json([
+                'hotspot_active' => $activeSessions,
+                'pppoe_active' => 0,
+                'total_bandwidth' => $totalGb . ' GB',
+                'routers_online' => $routersOnline,
+            ]);
+        })->name('clients.stats');
+
+        Route::get('/clients/sessions', function (Request $request) use ($resolveTenant) {
+            $tenant = $resolveTenant();
+            UserSession::expireStaleSessions($tenant?->id);
+
+            $limit = min(max((int) $request->integer('limit', 150), 1), 500);
+            $status = strtolower(trim($request->string('status')->toString()));
+            $search = trim($request->string('search')->toString());
+            $mode = $request->string('mode')->toString();
+
+            $sessions = UserSession::query()
+                ->select('user_sessions.*')
+                ->addSelect([
+                    'last_payment_at' => Payment::query()
+                        ->select('created_at')
+                        ->whereIn('status', ['confirmed', 'completed', 'activated'])
+                        ->where(function ($query) {
+                            $query->whereColumn('payments.session_id', 'user_sessions.id')
+                                ->orWhereColumn('payments.id', 'user_sessions.payment_id');
+                        })
+                        ->latest('created_at')
+                        ->limit(1),
+                ])
+                ->when($tenant, fn ($query) => $query->where('tenant_id', $tenant->id))
+                ->when($mode === 'pppoe', fn ($query) => $query->where('username', 'like', 'pppoe%'))
+                ->when($mode === 'hotspot', fn ($query) => $query->where(function ($inner) {
+                    $inner->whereNull('username')->orWhere('username', 'not like', 'pppoe%');
+                }))
+                ->when(in_array($mode, ['hotspot', 'pppoe'], true) && in_array($status, ['', 'all'], true), fn ($query) => $query->live())
+                ->when($status === 'active', fn ($query) => $query->active())
+                ->when($status === 'idle', fn ($query) => $query->where('status', 'idle')->notExpired())
+                ->when($status === 'expired', fn ($query) => $query->expired())
+                ->when($status !== '' && !in_array($status, ['all', 'active', 'idle', 'expired'], true), fn ($query) => $query->where('status', $status))
+                ->when($search !== '', function ($query) use ($search) {
+                    $query->where(function ($inner) use ($search) {
+                        $inner->where('username', 'like', "%{$search}%")
+                            ->orWhere('phone', 'like', "%{$search}%")
+                            ->orWhere('ip_address', 'like', "%{$search}%")
+                            ->orWhere('mac_address', 'like', "%{$search}%");
+                    });
+                })
+                ->with(['package', 'router'])
+                ->orderByDesc('last_payment_at')
+                ->latest('created_at')
+                ->limit($limit)
+                ->get()
+                ->map(function (UserSession $session) {
+                    $awaitingFirstLogin = $session->awaitsRadiusReauthentication();
+                    $latestPayment = Payment::query()
+                        ->whereIn('status', ['confirmed', 'completed', 'activated'])
+                        ->where(function ($query) use ($session) {
+                            $query->where('session_id', $session->id);
+
+                            if ((int) ($session->payment_id ?? 0) > 0) {
+                                $query->orWhere('id', $session->payment_id);
+                            }
+                        })
+                        ->latest('created_at')
+                        ->first();
+
+                    return [
+                        'id' => $session->id,
+                        'username' => $session->username,
+                        'phone' => $session->phone,
+                        'status' => $session->status,
+                        'ip_address' => $session->ip_address,
+                        'mac_address' => $session->mac_address,
+                        'router' => $session->router?->name,
+                        'package' => $session->package?->name,
+                        'duration_label' => $session->package?->duration_formatted,
+                        'awaiting_first_login' => $awaitingFirstLogin,
+                        'authorization_expires_at' => $awaitingFirstLogin
+                            ? $session->pendingRadiusAuthorizationExpiresAt()?->toIso8601String()
+                            : null,
+                        'expires_at' => $session->expires_at?->toIso8601String(),
+                        'display_expires_at' => $awaitingFirstLogin
+                            ? null
+                            : $session->expires_at?->toIso8601String(),
+                        'started_at' => $session->started_at?->toIso8601String(),
+                        'last_payment_at' => $latestPayment?->created_at?->timezone(config('app.timezone'))->toIso8601String(),
+                        'last_payment_amount' => $latestPayment ? (float) $latestPayment->amount : null,
+                        'last_payment_reference' => $latestPayment?->mpesa_receipt_number,
+                        'bytes_total' => (int) ($session->bytes_total ?? 0),
+                    ];
+                });
+
+            return response()->json([
+                'success' => true,
+                'data' => $sessions,
+            ]);
+        })->name('clients.sessions');
+        
+        // Disconnect Client
+        Route::post('/clients/disconnect', function (Request $request) use ($resolveTenant) {
+            $tenant = $resolveTenant();
+
+            $session = UserSession::query()
+                ->when($tenant, fn ($q) => $q->where('tenant_id', $tenant->id))
+                ->where('username', $request->input('username'))
+                ->active()
+                ->first();
+
+            if (!$session) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Active session not found',
+                ], 404);
+            }
+
+            $session->update([
+                'status' => 'terminated',
+                'terminated_at' => now(),
+                'termination_reason' => 'admin_disconnect',
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'message' => "Client {$request->input('username')} disconnected",
+                'router' => $request->input('router_id'),
+            ]);
+        })->name('clients.disconnect');
+
+        // Payments Data
+        Route::get('/payments', function (Request $request) use ($resolveTenant) {
+            $tenant = $resolveTenant();
+
+            $limit = min(max((int) $request->integer('limit', 100), 1), 500);
+            $status = $request->string('status')->toString();
+
+            $payments = Payment::query()
+                ->when($tenant, fn ($query) => $query->where('tenant_id', $tenant->id))
+                ->when($status !== '', fn ($query) => $query->where('status', $status))
+                ->with(['package', 'session'])
+                ->latest('created_at')
+                ->limit($limit)
+                ->get()
+                ->map(function (Payment $payment) {
+                    return [
+                        'id' => $payment->id,
+                        'phone' => $payment->phone ?: $payment->mpesa_phone,
+                        'package_name' => $payment->package_name ?: $payment->package?->name,
+                        'package_id' => $payment->package_id,
+                        'amount' => (float) $payment->amount,
+                        'currency' => $payment->currency,
+                        'status' => $payment->status,
+                        'reference' => $payment->mpesa_receipt_number ?: ($payment->mpesa_checkout_request_id ?: $payment->reference),
+                        'mpesa_receipt_number' => $payment->mpesa_receipt_number,
+                        'mpesa_checkout_request_id' => $payment->mpesa_checkout_request_id,
+                        'created_at' => $payment->created_at?->toIso8601String(),
+                    ];
+                });
+
+            return response()->json([
+                'success' => true,
+                'data' => $payments,
+            ]);
+        })->name('payments.index');
+
+        Route::get('/payments/{payment}', function (Payment $payment) use ($resolveTenant) {
+            $tenant = $resolveTenant();
+
+            if ($tenant && (int) $payment->tenant_id !== (int) $tenant->id) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Payment not found',
+                ], 404);
+            }
+
+            $payment->load(['package', 'session.router']);
+
+            $reference = $payment->mpesa_receipt_number
+                ?: ($payment->mpesa_checkout_request_id ?: ($payment->reference ?: ('PAY-' . $payment->id)));
+            $callbackPayload = $payment->callback_payload ?: ($payment->callback_data ?: ($payment->metadata ?: []));
+            $router = $payment->session?->router;
+            $routerLabel = $router
+                ? trim(implode(' ', array_filter([$router->name, $router->ip_address ? '(' . $router->ip_address . ')' : null])))
+                : null;
+
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'id' => $payment->id,
+                    'reference' => $reference,
+                    'status' => strtolower((string) ($payment->status ?? 'unknown')),
+                    'phone' => $payment->phone ?: $payment->mpesa_phone,
+                    'package_name' => $payment->package_name ?: $payment->package?->name,
+                    'amount' => (float) $payment->amount,
+                    'currency' => $payment->currency ?: 'KES',
+                    'payment_channel' => $payment->payment_channel,
+                    'created_at' => $payment->created_at?->toIso8601String(),
+                    'initiated_at' => $payment->initiated_at?->toIso8601String(),
+                    'completed_at' => $payment->completed_at?->toIso8601String(),
+                    'activated_at' => $payment->activated_at?->toIso8601String(),
+                    'mpesa_receipt_number' => $payment->mpesa_receipt_number,
+                    'mpesa_checkout_request_id' => $payment->mpesa_checkout_request_id,
+                    'callback_payload' => $callbackPayload,
+                    'router_label' => $routerLabel,
+                    'session_started_at' => $payment->session?->started_at?->toIso8601String(),
+                    'session_expires_at' => $payment->session?->expires_at?->toIso8601String(),
+                    'session_duration_label' => $payment->package?->duration_formatted,
+                ],
+            ]);
+        })->name('payments.show');
+
+        Route::get('/payments/stats', function () use ($resolveTenant) {
+            $tenant = $resolveTenant();
+
+            $payments = Payment::query()->when($tenant, fn ($query) => $query->where('tenant_id', $tenant->id));
+            $successStatuses = ['completed', 'confirmed'];
+
+            $daily = [];
+            for ($i = 6; $i >= 0; $i--) {
+                $day = now()->subDays($i);
+                $daily[] = [
+                    'date' => $day->toDateString(),
+                    'label' => $day->format('D'),
+                    'amount' => (float) (clone $payments)
+                        ->whereDate('created_at', $day->toDateString())
+                        ->whereIn('status', $successStatuses)
+                        ->sum('amount'),
+                ];
+            }
+
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'revenue_total' => (float) (clone $payments)
+                        ->whereIn('status', $successStatuses)
+                        ->sum('amount'),
+                    'revenue_today' => (float) (clone $payments)
+                        ->whereDate('created_at', now()->toDateString())
+                        ->whereIn('status', $successStatuses)
+                        ->sum('amount'),
+                    'pending' => (clone $payments)->where('status', 'pending')->count(),
+                    'failed' => (clone $payments)->where('status', 'failed')->count(),
+                    'daily_revenue' => $daily,
+                ],
+            ]);
+        })->name('payments.stats');
+
+        // Vouchers Data
+        Route::post('/vouchers/generate', function (Request $request) use ($resolveTenant) {
+            $tenant = $resolveTenant();
+
+            if (!$tenant) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Tenant not found',
+                ], 404);
+            }
+
+            $validated = $request->validate([
+                'package_id' => 'required|integer|exists:packages,id',
+                'quantity' => 'required|integer|min:1|max:1000',
+                'validity_hours' => 'required|integer|min:1|max:8760',
+                'prefix' => 'nullable|string|max:20',
+                'batch_label' => 'nullable|string|max:120',
+            ]);
+
+            $package = Package::query()
+                ->where('tenant_id', $tenant->id)
+                ->where('is_active', true)
+                ->find($validated['package_id']);
+
+            if (!$package) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Selected package is not available for this tenant',
+                ], 422);
+            }
+
+            $prefix = \App\Models\Voucher::normalizePrefix($validated['prefix'] ?? 'CB-WIFI') ?? 'CB-WIFI';
+
+            $batchId = (string) Str::uuid();
+            $batchName = trim((string) ($validated['batch_label'] ?? ''));
+            if ($batchName === '') {
+                $batchName = 'Batch-' . now()->format('Ymd-His');
+            }
+
+            $quantity = (int) $validated['quantity'];
+            $validityHours = (int) $validated['validity_hours'];
+
+            $vouchers = DB::transaction(function () use ($tenant, $package, $quantity, $validityHours, $prefix, $batchId, $batchName) {
+                $created = collect();
+
+                for ($i = 0; $i < $quantity; $i++) {
+                    do {
+                        $code = \App\Models\Voucher::generateCode(6);
+                        $exists = \App\Models\Voucher::query()
+                            ->where('tenant_id', $tenant->id)
+                            ->where('prefix', $prefix)
+                            ->where('code', $code)
+                            ->exists();
+                    } while ($exists);
+
+                    $created->push(\App\Models\Voucher::create([
+                        'tenant_id' => $tenant->id,
+                        'package_id' => $package->id,
+                        'code' => $code,
+                        'prefix' => $prefix,
+                        'status' => 'unused',
+                        'valid_from' => now(),
+                        'valid_until' => now()->copy()->addHours($validityHours),
+                        'validity_hours' => $validityHours,
+                        'batch_id' => $batchId,
+                        'batch_name' => $batchName,
+                        'captive_portal_redeemable' => true,
+                    ]));
+                }
+
+                return $created;
+            });
+
+            return response()->json([
+                'success' => true,
+                'message' => "Generated {$quantity} voucher(s)",
+                'data' => [
+                    'batch_id' => $batchId,
+                    'batch_name' => $batchName,
+                    'package' => [
+                        'id' => $package->id,
+                        'name' => $package->name,
+                    ],
+                    'validity_hours' => $validityHours,
+                    'vouchers' => $vouchers->map(fn ($voucher) => [
+                        'id' => $voucher->id,
+                        'code' => $voucher->code,
+                        'code_display' => $voucher->code_display,
+                        'created_at' => $voucher->created_at?->toIso8601String(),
+                        'valid_until' => $voucher->valid_until?->toIso8601String(),
+                    ]),
+                ],
+            ], 201);
+        })->name('vouchers.generate');
+
+        Route::get('/vouchers/{voucher}', function (\App\Models\Voucher $voucher) use ($resolveTenant) {
+            $tenant = $resolveTenant();
+
+            if (!$tenant || (int) $voucher->tenant_id !== (int) $tenant->id) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Voucher not found',
+                ], 404);
+            }
+
+            $voucher->load(['package', 'router']);
+
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'id' => $voucher->id,
+                    'code' => $voucher->code,
+                    'code_display' => $voucher->code_display,
+                    'status' => $voucher->status,
+                    'package_name' => $voucher->package?->name,
+                    'created_at' => $voucher->created_at?->toIso8601String(),
+                    'valid_until' => $voucher->valid_until?->toIso8601String(),
+                    'used_by_phone' => $voucher->used_by_phone,
+                    'used_at' => $voucher->used_at?->toIso8601String(),
+                    'router_name' => $voucher->router?->name,
+                ],
+            ]);
+        })->name('vouchers.show');
+
+        Route::delete('/vouchers/{voucher}', function (\App\Models\Voucher $voucher) use ($resolveTenant) {
+            $tenant = $resolveTenant();
+
+            if (!$tenant || (int) $voucher->tenant_id !== (int) $tenant->id) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Voucher not found',
+                ], 404);
+            }
+
+            if (strtolower((string) $voucher->status) === 'used') {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Used vouchers cannot be deleted',
+                ], 422);
+            }
+
+            $voucher->delete();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Voucher deleted successfully',
+            ]);
+        })->name('vouchers.delete');
+
+        Route::post('/vouchers/bulk-delete', function (Request $request) use ($resolveTenant) {
+            $tenant = $resolveTenant();
+
+            if (!$tenant) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Tenant not found',
+                ], 404);
+            }
+
+            $validated = $request->validate([
+                'voucher_ids' => 'required|array|min:1',
+                'voucher_ids.*' => 'integer',
+            ]);
+
+            $vouchers = \App\Models\Voucher::query()
+                ->where('tenant_id', $tenant->id)
+                ->whereIn('id', $validated['voucher_ids'])
+                ->get();
+
+            if ($vouchers->isEmpty()) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'No matching vouchers found',
+                ], 404);
+            }
+
+            $blocked = $vouchers->filter(fn ($voucher) => strtolower((string) $voucher->status) === 'used')->count();
+            $toDelete = $vouchers->reject(fn ($voucher) => strtolower((string) $voucher->status) === 'used');
+
+            foreach ($toDelete as $voucher) {
+                $voucher->delete();
+            }
+
+            return response()->json([
+                'success' => true,
+                'message' => "Deleted {$toDelete->count()} voucher(s)" . ($blocked > 0 ? "; skipped {$blocked} used voucher(s)" : ''),
+                'data' => [
+                    'deleted' => $toDelete->count(),
+                    'skipped_used' => $blocked,
+                ],
+            ]);
+        })->name('vouchers.bulk-delete');
+
+        Route::get('/vouchers', function (Request $request) use ($resolveTenant) {
+            $tenant = $resolveTenant();
+
+            $limit = min(max((int) $request->integer('limit', 100), 1), 500);
+            $status = $request->string('status')->toString();
+            $packageId = $request->integer('package_id');
+            $search = trim($request->string('search')->toString());
+
+            $vouchers = \App\Models\Voucher::query()
+                ->when($tenant, fn ($query) => $query->where('tenant_id', $tenant->id))
+                ->when($status !== '', fn ($query) => $query->where('status', $status))
+                ->when($packageId > 0, fn ($query) => $query->where('package_id', $packageId))
+                ->when($search !== '', fn ($query) => $query->where('code', 'like', "%{$search}%"))
+                ->with('package')
+                ->latest('created_at')
+                ->limit($limit)
+                ->get()
+                ->map(function (\App\Models\Voucher $voucher) {
+                    return [
+                        'id' => $voucher->id,
+                        'code' => $voucher->code,
+                        'code_display' => $voucher->code_display,
+                        'status' => $voucher->status,
+                        'package_id' => $voucher->package_id,
+                        'package_name' => $voucher->package?->name,
+                        'used_by_phone' => $voucher->used_by_phone,
+                        'valid_until' => $voucher->valid_until?->toIso8601String(),
+                        'used_at' => $voucher->used_at?->toIso8601String(),
+                        'created_at' => $voucher->created_at?->toIso8601String(),
+                    ];
+                });
+
+            return response()->json([
+                'success' => true,
+                'data' => $vouchers,
+            ]);
+        })->name('vouchers.index');
+    });
+});
+
+// ============================================================================
+// FALLBACK & ERROR HANDLING
+// ============================================================================
+
+// 404 Handler
+Route::fallback(function () {
+    if (request()->is('admin*')) {
+        return response()->view('admin.errors.404', [], 404);
+    }
+    return response()->view('errors.404', [], 404);
+});
+
+// Health Check (for monitoring)
+Route::get('/health', function () {
+    return response()->json([
+        'status' => 'healthy',
+        'app' => config('app.name'),
+        'env' => config('app.env'),
+        'php' => phpversion(),
+        'laravel' => app()->version(),
+        'timestamp' => now()->toISOString()
+    ]);
+});
