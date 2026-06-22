@@ -14,6 +14,7 @@ use App\Services\MikroTik\MikroTikService;
 use App\Services\MikroTik\SessionManager;
 use App\Services\Radius\FreeRadiusProvisioningService;
 use App\Services\Radius\RadiusAccountingService;
+use App\Services\Radius\RadiusIdentityResolver;
 use App\Services\Mpesa\DarajaService;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
@@ -440,20 +441,25 @@ class CaptivePortalController extends Controller
                 ]
             );
 
-            // USE RADIUS INSTEAD OF MIKROTIK API
+            // USE RADIUS WITH NORMALIZED MAC
             if ($radiusEnabled) {
                 $radiusService = app(FreeRadiusProvisioningService::class);
+                $identityResolver = app(RadiusIdentityResolver::class);
+                
+                // Normalize MAC address to match what MikroTik expects
+                $normalizedMac = $identityResolver->normalizeMacAddress($mac) ?? $mac;
 
                 $radiusService->provisionUser(
-                    $mac,           // username (MAC address)
-                    $mac,           // password (same as username for simplicity)
-                    $package,       // Package object
-                    $expiresAt,     // Expiration time
-                    $mac            // callingStationId (MAC address)
+                    $normalizedMac,           // username (normalized MAC address)
+                    $normalizedMac,           // password (same as username for simplicity)
+                    $package,                 // Package object
+                    $expiresAt,               // Expiration time
+                    $normalizedMac            // callingStationId (normalized MAC address)
                 );
                 
-                Log::channel('radius')->info('RADIUS access provisioned; waiting for hotspot accounting', [
-                    'mac' => $mac, 
+                Log::channel('radius')->info('RADIUS access provisioned with normalized MAC; waiting for hotspot accounting', [
+                    'original_mac' => $mac,
+                    'normalized_mac' => $normalizedMac,
                     'ip' => $ip,
                     'payment_id' => $payment?->id,
                     'session_id' => $session->id,
