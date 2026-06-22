@@ -107,7 +107,7 @@ class UserSession extends Model
     {
         return $query->where('status', 'active')
             ->notExpired();
-    }
+    }    
 
     public function scopeNotExpired($query)
     {
@@ -608,17 +608,18 @@ class UserSession extends Model
 
     public static function findOrCreateFromVoucher(string $voucherCode, string $phone): ?self
     {
+        // FIXED: Use 'status' field instead of 'is_used' boolean
         $voucher = Voucher::where('code', $voucherCode)
-            ->where('status', 'active')
-            ->where('is_used', false)
+            ->where('status', 'unused')
             ->first();
 
         if (!$voucher) {
             return null;
         }
 
+        // FIXED: Update 'status' field instead of 'is_used' boolean
         $voucher->update([
-            'is_used' => true,
+            'status' => 'used',
             'used_at' => now(),
             'used_by_phone' => $phone,
         ]);
