@@ -340,28 +340,28 @@ class CaptivePortalController extends Controller
             }
 
             // FIX: Save the REAL CheckoutRequestID from Safaricom response
-            // This ensures callbacks are matched exactly - no more ambiguous matching
-            if (is_array($stkResult) && !empty($stkResult['CheckoutRequestID'])) {
+            // Daraja returns lowercase keys, so we check for lowercase
+            if (is_array($stkResult) && !empty($stkResult['checkout_request_id'])) {
                 $payment->update([
-                    'mpesa_checkout_request_id' => $stkResult['CheckoutRequestID'],
+                    'mpesa_checkout_request_id' => $stkResult['checkout_request_id'],
                     'metadata' => array_merge(is_array($payment->metadata) ? $payment->metadata : [], [
-                        'daraja_merchant_request_id' => $stkResult['MerchantRequestID'] ?? null,
-                        'daraja_response_code' => $stkResult['ResponseCode'] ?? null,
-                        'daraja_response_description' => $stkResult['ResponseDescription'] ?? null,
-                        'daraja_customer_message' => $stkResult['CustomerMessage'] ?? null,
+                        'daraja_merchant_request_id' => $stkResult['merchant_request_id'] ?? null,
+                        'daraja_response_code' => $stkResult['response_code'] ?? null,
+                        'daraja_response_description' => $stkResult['response_description'] ?? null,
+                        'daraja_customer_message' => $stkResult['customer_message'] ?? null,
                     ]),
                 ]);
 
                 Log::channel('payment')->info('Captured real Daraja CheckoutRequestID', [
                     'payment_id' => $payment->id,
-                    'checkout_request_id' => $stkResult['CheckoutRequestID'],
-                    'merchant_request_id' => $stkResult['MerchantRequestID'] ?? null,
-                    'response_code' => $stkResult['ResponseCode'] ?? null,
+                    'checkout_request_id' => $stkResult['checkout_request_id'],
+                    'merchant_request_id' => $stkResult['merchant_request_id'] ?? null,
+                    'response_code' => $stkResult['response_code'] ?? null,
                 ]);
             } elseif (is_object($stkResult)) {
                 // Handle object response (some Daraja implementations return objects)
-                $checkoutId = $stkResult->CheckoutRequestID ?? ($stkResult->checkout_request_id ?? null);
-                $merchantId = $stkResult->MerchantRequestID ?? ($stkResult->merchant_request_id ?? null);
+                $checkoutId = $stkResult->checkout_request_id ?? ($stkResult->CheckoutRequestID ?? null);
+                $merchantId = $stkResult->merchant_request_id ?? ($stkResult->MerchantRequestID ?? null);
                 
                 if ($checkoutId) {
                     $payment->update([
@@ -446,9 +446,10 @@ class CaptivePortalController extends Controller
                     $phone = $foundPayment->phone;
                     $payment = $foundPayment;
                 } else {
+                    // FIX: Use 'status' field instead of 'is_used' boolean
                     $voucher = Voucher::where('tenant_id', $tenantId)
                         ->where('used_by_mac', $mac)
-                        ->where('is_used', true)
+                        ->where('status', 'used')
                         ->latest()
                         ->first();
                     
