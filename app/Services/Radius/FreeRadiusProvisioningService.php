@@ -28,7 +28,6 @@ class FreeRadiusProvisioningService
         $radcheck = (string) config('radius.tables.radcheck', 'radcheck');
         $radreply = (string) config('radius.tables.radreply', 'radreply');
         $cleartextPasswordAttribute = (string) config('radius.attributes.cleartext_password', 'Cleartext-Password');
-        $callingStationIdAttribute = (string) config('radius.attributes.calling_station_id', 'Calling-Station-Id');
         $expirationAttribute = (string) config('radius.attributes.expiration', 'Expiration');
         $sessionTimeoutAttribute = (string) config('radius.attributes.session_timeout', 'Session-Timeout');
         $rateLimitAttribute = (string) config('radius.attributes.rate_limit', 'Mikrotik-Rate-Limit');
@@ -47,12 +46,13 @@ class FreeRadiusProvisioningService
         $rateLimit = $this->buildMikrotikRateLimit($package);
         $db = DB::connection($connection);
 
-        $db->transaction(function () use ($db, $radcheck, $radreply, $username, $password, $sessionTimeout, $rateLimit, $simultaneousUse, $expiresAt, $normalizedCallingStationId, $cleartextPasswordAttribute, $callingStationIdAttribute, $expirationAttribute, $sessionTimeoutAttribute, $rateLimitAttribute, $simultaneousUseAttribute, $enforceSimultaneousUse) {
+        $db->transaction(function () use ($db, $radcheck, $radreply, $username, $password, $sessionTimeout, $rateLimit, $simultaneousUse, $expiresAt, $cleartextPasswordAttribute, $expirationAttribute, $sessionTimeoutAttribute, $rateLimitAttribute, $simultaneousUseAttribute, $enforceSimultaneousUse) {
             // Reset profile rows for idempotent provisioning
+            // REMOVED: $callingStationIdAttribute from the delete list since we no longer insert it
             $db
                 ->table($radcheck)
                 ->where('username', $username)
-                ->whereIn('attribute', [$cleartextPasswordAttribute, $callingStationIdAttribute, $expirationAttribute, $simultaneousUseAttribute])
+                ->whereIn('attribute', [$cleartextPasswordAttribute, $expirationAttribute, $simultaneousUseAttribute])
                 ->delete();
 
             $db
@@ -81,16 +81,9 @@ class FreeRadiusProvisioningService
                 ->table($radcheck)
                 ->insert($radcheckRows);
 
-            if ($normalizedCallingStationId !== null) {
-                $db
-                    ->table($radcheck)
-                    ->insert([
-                        'username' => $username,
-                        'attribute' => $callingStationIdAttribute,
-                        'op' => '==',
-                        'value' => $normalizedCallingStationId,
-                    ]);
-            }
+            // REMOVED: The entire Calling-Station-Id insert block
+            // In Pure RADIUS mode, MikroTik sends the MAC as the username,
+            // so we don't need to bind via Calling-Station-Id
 
             if ($expiresAt) {
                 $db
