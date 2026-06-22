@@ -192,17 +192,25 @@ class CaptivePortalController extends Controller
             ]);
 
             $code = strtoupper(trim($request->code));
+            
+            // Extract receipt code from M-Pesa SMS if user pasted the full message
+            if (strlen($code) < 10 && preg_match('/[A-Z0-9]{10,12}/', $request->code, $matches)) {
+                $code = strtoupper($matches[0]);
+            }
 
-            $voucher = Voucher::where('code', $code)->where('is_used', false)->first();
+            $voucher = Voucher::where('code', $code)->whereNull('used_at')->first();
             if ($voucher) {
-                $voucher->update(['is_used' => true, 'used_by_mac' => $mac, 'used_at' => now()]);
+                $voucher->update(['used_by_mac' => $mac, 'used_at' => now()]);
                 $this->grantNetworkAccess($mac, $ip, $voucher->tenant_id, ($voucher->duration_minutes ?? 1440) * 60);
                 return response()->json(['status' => 'connected', 'message' => 'Voucher redeemed!']);
             }
 
-            $payment = Payment::where('mpesa_receipt_number', $code)
-                ->whereIn('status', ['completed', 'confirmed'])
-                ->first();
+            $payment = Payment::where(function($q) use ($code) {
+                $q->where('mpesa_code', $code)
+                  ->orWhere('mpesa_receipt_number', $code)
+                  ->orWhere('mpesa_phone', str_replace('0', '254', $code))
+                  ->orWhere('phone', str_replace('254', '0', $code));
+            })->whereIn('status', ['completed', 'confirmed'])->first();
                 
             if ($payment) {
                 $this->rememberPaymentClient($payment, $mac, $ip);
@@ -316,13 +324,13 @@ class CaptivePortalController extends Controller
 
     private function processVoucher(string $code, string $mac, string $ip): JsonResponse
     {
-        $voucher = Voucher::where('code', strtoupper(trim($code)))->where('is_used', false)->first();
+        $voucher = Voucher::where('code', strtoupper(trim($code)))->whereNull('used_at')->first();
 
         if (!$voucher) {
             return response()->json(['status' => 'failed', 'message' => 'Invalid or used voucher.'], 400);
         }
 
-        $voucher->update(['is_used' => true, 'used_by_mac' => $mac, 'used_at' => now()]);
+        $voucher->update(['used_by_mac' => $mac, 'used_at' => now()]);
         $this->grantNetworkAccess($mac, $ip, $voucher->tenant_id, ($voucher->duration_minutes ?? 1440) * 60);
 
         return response()->json(['status' => 'connected', 'message' => 'Voucher redeemed!']);

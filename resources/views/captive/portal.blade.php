@@ -125,15 +125,8 @@
 <body>
 
 <div class="card">
-    <!-- STATE 1: ALREADY CONNECTED (Fast Path) -->
-    <div id="state-connected" class="{{ $isConnected ? '' : 'hidden' }}">
-        <h2 style="color: #10b981;">✓ You are Connected!</h2>
-        <p>Opening internet...</p>
-        <script> triggerPortalClose(); </script>
-    </div>
-
-    <!-- STATE 2: MAIN MENU -->
-    <div id="state-menu" class="{{ $isConnected ? 'hidden' : '' }}">
+    <!-- MAIN MENU -->
+    <div id="state-menu">
         <h2>Get Internet Access</h2>
         
         <div class="packages-grid">
@@ -159,7 +152,7 @@
         </footer>
     </div>
 
-    <!-- STATE 2.5: CLEAN PHONE INPUT -->
+    <!-- PHONE INPUT -->
     <div id="state-phone-input" class="hidden">
         <h2>Enter M-Pesa Number</h2>
         <p id="phone-input-details" style="color: #6b7280; margin-bottom: 0.5rem; font-size: 0.95rem;"></p>
@@ -170,7 +163,7 @@
         <button class="btn btn-secondary" onclick="showState('menu')">Cancel</button>
     </div>
 
-    <!-- STATE 3: PROCESSING -->
+    <!-- PROCESSING -->
     <div id="state-processing" class="hidden">
         <div class="spinner"></div>
         <h3 id="processing-title">Processing...</h3>
@@ -285,8 +278,8 @@
 
                 if (data.status === 'connected') {
                     clearInterval(interval);
-                    showState('connected');
-                    triggerPortalClose(); 
+                    // Immediately redirect to test connectivity - let MikroTik handle the rest
+                    triggerPortalClose();
                 } else if (data.status === 'failed') {
                     clearInterval(interval);
                     alert(data.message);
@@ -334,7 +327,7 @@
             }
 
             if (data.status === 'connected') {
-                showState('connected');
+                // Immediately redirect to test connectivity
                 triggerPortalClose();
             } else {
                 alert(data.message || 'Invalid code.');
@@ -347,24 +340,16 @@
     }
 
     function triggerPortalClose() {
-        window.open('', '_self');
-        window.close();
-
-        setTimeout(() => {
-            const ua = navigator.userAgent;
-            if (/iPhone|iPad|iPod|Macintosh/.test(ua)) {
-                window.location.replace('http://captive.apple.com/hotspot-detect.html');
-            } else {
-                window.location.replace('http://neverssl.com');
-            }
-        }, 1000);
+        // Redirect to neverssl.com to test connectivity
+        // If authenticated, the page will load and the captive portal will close
+        // If not authenticated, MikroTik will redirect back to the portal
+        window.location.replace('http://neverssl.com');
     }
 
     function showState(state, title = '', message = '') {
         document.getElementById('state-menu').classList.toggle('hidden', state !== 'menu');
         document.getElementById('state-phone-input').classList.toggle('hidden', state !== 'phone-input');
         document.getElementById('state-processing').classList.toggle('hidden', state !== 'processing');
-        document.getElementById('state-connected').classList.toggle('hidden', state !== 'connected');
         
         if (title) document.getElementById('processing-title').innerText = title;
         if (message) document.getElementById('processing-message').innerText = message;

@@ -326,6 +326,10 @@ class RadiusAccountingService
         $recordMac = $this->identityResolver->normalizeMacAddress($record['callingstationid'] ?? null);
         $recordIp = $this->normalizeIpAddress($record['framedipaddress'] ?? null);
 
+        if ($macAddress !== null && $recordMac !== $macAddress) {
+            return 0;
+        }
+
         if ($recordSessionId !== null && in_array($recordSessionId, $acctSessionIds, true)) {
             $score += 100;
         }
