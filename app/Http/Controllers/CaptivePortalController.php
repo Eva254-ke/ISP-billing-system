@@ -292,6 +292,7 @@ class CaptivePortalController extends Controller
             ]);
         }
 
+        // FIX: Set checkout_request_id to null initially - will be populated from real Daraja response
         $payment = Payment::create([
             'tenant_id' => $package->tenant_id,
             'phone' => $normalizedPhone,
@@ -300,7 +301,7 @@ class CaptivePortalController extends Controller
             'package_name' => $package->name, 
             'amount' => $package->price,
             'currency' => $package->currency ?? 'KES',
-            'mpesa_checkout_request_id' => 'CP-' . strtoupper(uniqid()),
+            'mpesa_checkout_request_id' => null,
             'status' => 'pending',
             'type' => 'captive_portal',
             'initiated_at' => now(),
@@ -316,25 +317,65 @@ class CaptivePortalController extends Controller
 
         try {
             $triggered = false;
+            $stkResult = null;
             
             if (method_exists($this->daraja, 'initiateStkPush')) {
                 try {
-                    $this->daraja->initiateStkPush($payment, $normalizedPhone, $package->price);
+                    $stkResult = $this->daraja->initiateStkPush($payment, $normalizedPhone, $package->price);
                     $triggered = true;
                 } catch (\ArgumentCountError $e) {
-                    $this->daraja->initiateStkPush($normalizedPhone, $package->price, $payment->id);
+                    $stkResult = $this->daraja->initiateStkPush($normalizedPhone, $package->price, $payment->id);
                     $triggered = true;
                 }
             } elseif (method_exists($this->daraja, 'stkPush')) {
-                $this->daraja->stkPush($normalizedPhone, $package->price, $payment->id);
+                $stkResult = $this->daraja->stkPush($normalizedPhone, $package->price, $payment->id);
                 $triggered = true;
             } elseif (method_exists($this->daraja, 'sendStkPush')) {
-                $this->daraja->sendStkPush($normalizedPhone, $package->price);
+                $stkResult = $this->daraja->sendStkPush($normalizedPhone, $package->price);
                 $triggered = true;
             }
             
             if (!$triggered) {
                 throw new \Exception("DarajaService is missing a recognized STK push method.");
+            }
+
+            // FIX: Save the REAL CheckoutRequestID from Safaricom response
+            // This ensures callbacks are matched exactly - no more ambiguous matching
+            if (is_array($stkResult) && !empty($stkResult['CheckoutRequestID'])) {
+                $payment->update([
+                    'mpesa_checkout_request_id' => $stkResult['CheckoutRequestID'],
+                    'metadata' => array_merge(is_array($payment->metadata) ? $payment->metadata : [], [
+                        'daraja_merchant_request_id' => $stkResult['MerchantRequestID'] ?? null,
+                        'daraja_response_code' => $stkResult['ResponseCode'] ?? null,
+                        'daraja_response_description' => $stkResult['ResponseDescription'] ?? null,
+                        'daraja_customer_message' => $stkResult['CustomerMessage'] ?? null,
+                    ]),
+                ]);
+
+                Log::channel('payment')->info('Captured real Daraja CheckoutRequestID', [
+                    'payment_id' => $payment->id,
+                    'checkout_request_id' => $stkResult['CheckoutRequestID'],
+                    'merchant_request_id' => $stkResult['MerchantRequestID'] ?? null,
+                    'response_code' => $stkResult['ResponseCode'] ?? null,
+                ]);
+            } elseif (is_object($stkResult)) {
+                // Handle object response (some Daraja implementations return objects)
+                $checkoutId = $stkResult->CheckoutRequestID ?? ($stkResult->checkout_request_id ?? null);
+                $merchantId = $stkResult->MerchantRequestID ?? ($stkResult->merchant_request_id ?? null);
+                
+                if ($checkoutId) {
+                    $payment->update([
+                        'mpesa_checkout_request_id' => $checkoutId,
+                        'metadata' => array_merge(is_array($payment->metadata) ? $payment->metadata : [], [
+                            'daraja_merchant_request_id' => $merchantId,
+                        ]),
+                    ]);
+
+                    Log::channel('payment')->info('Captured real Daraja CheckoutRequestID (object response)', [
+                        'payment_id' => $payment->id,
+                        'checkout_request_id' => $checkoutId,
+                    ]);
+                }
             }
 
         } catch (\Throwable $e) {
