@@ -143,8 +143,17 @@ class CaptivePortalController extends Controller
                         return response()->json(['status' => 'connected', 'message' => 'Access granted!']);
                     }
 
-                    // Trigger MikroTik login immediately if session exists but RADIUS accounting hasn't synced yet
+                    // FIXED: In Pure RADIUS mode, return connected immediately
+                    // FreeRADIUS will handle authentication when device connects through hotspot
                     if ($session) {
+                        if ((bool) config('radius.pure_radius', false)) {
+                            return response()->json([
+                                'status' => 'connected',
+                                'message' => 'Access granted! Connecting...',
+                            ]);
+                        }
+                        
+                        // Non-pure RADIUS mode: trigger MikroTik login via API
                         try {
                             $sessionManager = app(SessionManager::class);
                             $package = $session->package;
