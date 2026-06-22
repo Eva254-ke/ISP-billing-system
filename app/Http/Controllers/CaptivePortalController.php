@@ -142,6 +142,28 @@ class CaptivePortalController extends Controller
                         return response()->json(['status' => 'connected', 'message' => 'Access granted!']);
                     }
 
+                    // Trigger MikroTik login immediately if session exists but RADIUS accounting hasn't synced yet
+                    if ($session) {
+                        try {
+                            $sessionManager = app(SessionManager::class);
+                            $package = $session->package;
+                            if ($package && (bool) config('radius.enabled', false)) {
+                                Log::channel('mikrotik')->info('Triggering MikroTik login after payment confirmation', [
+                                    'session_id' => $session->id,
+                                    'payment_id' => $payment->id,
+                                    'mac' => $pMac,
+                                    'ip' => $pIp,
+                                ]);
+                                $sessionManager->activateSession($session, $package);
+                            }
+                        } catch (\Throwable $e) {
+                            Log::channel('mikrotik')->warning('MikroTik login trigger failed', [
+                                'session_id' => $session->id,
+                                'error' => $e->getMessage(),
+                            ]);
+                        }
+                    }
+
                     Log::channel('radius')->info('Payment confirmed; waiting for MikroTik RADIUS accounting', [
                         'payment_id' => $payment->id,
                         'tenant_id' => $payment->tenant_id,
