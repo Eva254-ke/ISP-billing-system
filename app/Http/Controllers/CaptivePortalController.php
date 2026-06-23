@@ -7,7 +7,7 @@ use Illuminate\Http\JsonResponse;
 use App\Models\Package;
 use App\Models\Payment;
 use App\Models\Tenant;
-use App\Models\Router; // <--- ADDED
+use App\Models\Router;
 use App\Models\Voucher;
 use App\Models\UserSession;
 use App\Services\MikroTik\MikroTikService;
@@ -388,10 +388,12 @@ class CaptivePortalController extends Controller
             ], 500);
         }
 
+        // FIX: Include status_url so frontend knows exactly where to poll
         return response()->json([
             'status' => 'pending', 
             'payment_id' => $payment->id,
-            'message' => 'M-Pesa prompt sent. Enter your PIN.'
+            'message' => 'M-Pesa prompt sent. Enter your PIN.',
+            'status_url' => url('/wifi/status/' . $payment->id),
         ]);
     }
 

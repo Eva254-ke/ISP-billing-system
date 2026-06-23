@@ -33,6 +33,7 @@
     <meta name="color-scheme" content="light dark">
     <meta name="theme-color" media="(prefers-color-scheme: light)" content="{{ $accentColor }}">
     <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#020617">
+    <meta name="csrf-token" content="{{ csrf_token() }}">
     <title>{{ $brandTitle }} - WiFi Packages</title>
     @php
         $captiveCssPath = public_path('css/captive-portal.css');
@@ -341,10 +342,51 @@
         })();
         @endif
 
-        payForm?.addEventListener('submit', () => {
+        // FIXED: Intercept form submission and use fetch to call initiate endpoint
+        payForm?.addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
             if (!payButton) return;
+            
+            // Disable button and show loading state
             payButton.disabled = true;
             payButton.textContent = 'Sending M-Pesa prompt...';
+            
+            const form = e.target;
+            const formData = new FormData(form);
+            
+            try {
+                const response = await fetch(form.action, {
+                    method: 'POST',
+                    body: formData,
+                    headers: {
+                        'Accept': 'application/json',
+                        'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]')?.content || '{{ csrf_token() }}'
+                    }
+                });
+                
+                const json = await response.json();
+                
+                // If we got a status_url, redirect to the payment status page
+                if (json.status_url) {
+                    window.location.href = json.status_url;
+                } else if (json.message) {
+                    // Show error message and re-enable button
+                    alert(json.message);
+                    payButton.disabled = false;
+                    payButton.textContent = 'Pay and Connect';
+                } else {
+                    // Unexpected response
+                    alert('An unexpected error occurred. Please try again.');
+                    payButton.disabled = false;
+                    payButton.textContent = 'Pay and Connect';
+                }
+            } catch (error) {
+                console.error('Payment submission error:', error);
+                alert('Network error. Please check your connection and try again.');
+                payButton.disabled = false;
+                payButton.textContent = 'Pay and Connect';
+            }
         });
 
     </script>
