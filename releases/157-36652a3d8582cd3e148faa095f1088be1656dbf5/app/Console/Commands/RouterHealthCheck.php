@@ -1,0 +1,352 @@
+<?php
+
+namespace App\Console\Commands;
+
+use App\Models\Router;
+use App\Services\MikroTik\MikroTikService;
+use App\Services\Radius\RadiusAccountingService;
+use App\Services\Notifications\WhatsAppNotificationService;
+use Illuminate\Console\Command;
+use Illuminate\Support\Facades\Log;
+
+class RouterHealthCheck extends Command
+{
+    /**
+     * The name and signature of the console command.
+     */
+    protected $signature = 'routers:health-check';
+
+    /**
+     * The console command description.
+     */
+    protected $description = 'Check health status of all routers (online/offline, CPU, memory)';
+
+    /**
+     * Minimum minutes between repeat offline alerts for the same router.
+     */
+    private const OFFLINE_ALERT_COOLDOWN_MINUTES = 30;
+
+    public function __construct(
+        protected MikroTikService $mikrotikService,
+        protected RadiusAccountingService $radiusAccountingService,
+        protected WhatsAppNotificationService $whatsappService,
+    ) {
+        parent::__construct();
+    }
+
+    /**
+     * Execute the console command.
+     */
+    public function handle(): int
+    {
+        Log::channel('mikrotik')->info('Starting router health check');
+        $this->info('Starting router health check...');
+
+        $routers = Router::all();
+        $online = 0;
+        $offline = 0;
+        $warning = 0;
+
+        $this->table(
+            ['Router', 'IP Address', 'Status', 'CPU', 'Memory', 'Uptime'],
+            $routers->map(function (Router $router) {
+                return [
+                    $router->name,
+                    $router->ip_address,
+                    $router->status,
+                    $router->cpu_usage === null ? 'N/A' : $router->cpu_usage . '%',
+                    $router->memory_usage === null ? 'N/A' : $router->memory_usage . '%',
+                    $router->uptime_formatted,
+                ];
+            })
+        );
+
+        $this->newLine();
+
+        foreach ($routers as $router) {
+            $this->line("Checking: {$router->name} ({$router->ip_address})...");
+
+            try {
+                if ((bool) config('radius.pure_radius', false) && $this->hasRecentRadiusActivity($router)) {
+                    $router->markOnline();
+                    $router->refresh();
+                    $online++;
+
+                    $cpuLabel = $router->cpu_usage === null ? 'N/A' : ((int) $router->cpu_usage) . '%';
+                    $memoryLabel = $router->memory_usage === null ? 'N/A' : ((int) $router->memory_usage) . '%';
+
+                    Log::channel('radius')->info('Router marked online from recent RADIUS accounting', [
+                        'router_id' => $router->id,
+                        'router' => $router->name,
+                        'ip' => $router->ip_address,
+                        'resource_source' => is_array($router->metadata) ? ($router->metadata['metrics_source'] ?? 'cached') : 'cached',
+                    ]);
+
+                    $this->info("   OK {$router->name} (RADIUS accounting, CPU: {$cpuLabel}, RAM: {$memoryLabel})");
+                    continue;
+                }
+
+                $isOnline = $this->mikrotikService->pingRouter($router);
+                $router->refresh();
+
+                if ($isOnline) {
+                    $systemInfo = $this->mikrotikService->getRouterSystemInfo($router);
+                    $router->refresh();
+                    $cpu = $systemInfo['cpu_load'] ?? $router->cpu_usage;
+                    $memory = $systemInfo['memory_usage'] ?? $router->memory_usage;
+                    $cpuLabel = $cpu === null ? 'N/A' : ((int) $cpu) . '%';
+                    $memoryLabel = $memory === null ? 'N/A' : ((int) $memory) . '%';
+
+                    if (($cpu !== null && (int) $cpu > 80) || ($memory !== null && (int) $memory > 80)) {
+                        $router->markWarning('High resource usage');
+                        $warning++;
+
+                        Log::channel('mikrotik')->warning('Router resource warning', [
+                            'router' => $router->name,
+                            'cpu' => $cpu,
+                            'memory' => $memory,
+                        ]);
+
+                        $this->warn("   WARNING {$router->name} (CPU: {$cpuLabel}, RAM: {$memoryLabel})");
+                    } else {
+                        $wasOffline = $router->status === Router::STATUS_OFFLINE;
+                        $router->markOnline();
+                        $online++;
+
+                        $this->info("   OK {$router->name} (CPU: {$cpuLabel}, RAM: {$memoryLabel})");
+
+                        if ($wasOffline) {
+                            $this->notifyRouterOnline($router);
+                        }
+                    }
+
+                    continue;
+                }
+
+                if ($router->status === Router::STATUS_WARNING) {
+                    $warning++;
+                    $diagnostics = $this->mikrotikService->getConnectivityDiagnostics($router);
+
+                    Log::channel('mikrotik')->warning('Router reachable but MikroTik API check failed', [
+                        'router' => $router->name,
+                        'ip' => $router->ip_address,
+                        'diagnostics' => $diagnostics,
+                    ]);
+
+                    $message = (string) ($diagnostics['message'] ?? 'Router reachable but API check failed');
+                    $this->warn("   WARNING {$router->name} ({$message})");
+                    continue;
+                }
+
+                if ($this->hasRecentRadiusActivity($router)) {
+                    $router->markOnline();
+                    $online++;
+
+                    Log::channel('radius')->info('Router marked online from recent RADIUS accounting', [
+                        'router_id' => $router->id,
+                        'router' => $router->name,
+                        'ip' => $router->ip_address,
+                    ]);
+
+                    $this->info("   OK {$router->name} (recent RADIUS accounting)");
+                    continue;
+                }
+
+                $router->markOffline();
+                $offline++;
+
+                Log::channel('mikrotik')->error('Router offline', [
+                    'router' => $router->name,
+                    'ip' => $router->ip_address,
+                    'model' => $router->model,
+                ]);
+
+                $this->error("   OFFLINE {$router->name}");
+                $this->notifyRouterOffline($router);
+            } catch (\Exception $e) {
+                $router->markOffline();
+                $offline++;
+
+                Log::channel('mikrotik')->error('Router health check failed', [
+                    'router' => $router->name,
+                    'error' => $e->getMessage(),
+                ]);
+
+                $this->error("   ERROR {$router->name}: {$e->getMessage()}");
+            }
+        }
+
+        Log::channel('mikrotik')->info('Router health check completed', [
+            'total' => $routers->count(),
+            'online' => $online,
+            'offline' => $offline,
+            'warning' => $warning,
+        ]);
+
+        $this->newLine();
+        $this->info('Health Check Summary:');
+        $this->info("   Total routers: {$routers->count()}");
+        $this->info("   Online: {$online}");
+        $this->warn("   Warning: {$warning}");
+        $this->error("   Offline: {$offline}");
+
+        if ($offline > 0) {
+            $this->newLine();
+            $this->error("Action required: {$offline} router(s) offline - check immediately.");
+        }
+
+        return Command::SUCCESS;
+    }
+
+    private function hasRecentRadiusActivity(Router $router): bool
+    {
+        if (!(bool) config('radius.enabled', false)) {
+            return false;
+        }
+
+        if (!$router->radius_enabled && !(bool) config('radius.pure_radius', false)) {
+            return false;
+        }
+
+        try {
+            return $this->radiusAccountingService->findRecentRouterActivity($router) !== null;
+        } catch (\Throwable $e) {
+            Log::channel('radius')->warning('Router RADIUS activity lookup failed', [
+                'router_id' => $router->id,
+                'router' => $router->name,
+                'error' => $e->getMessage(),
+            ]);
+
+            return false;
+        }
+    }
+
+    private function notifyRouterOffline(Router $router): void
+    {
+        if (!$this->shouldSendOfflineAlert($router)) {
+            return;
+        }
+
+        $adminPhone = $this->resolveAdminPhone($router);
+        if (!$adminPhone) {
+            return;
+        }
+
+        $this->recordAlertAttempt($router, 'offline');
+
+        $sent = $this->whatsappService->sendRouterOfflineAlert(
+            $adminPhone,
+            $router->name,
+            $router->location
+        );
+
+        if ($sent) {
+            $this->recordAlertSent($router, 'offline');
+        }
+    }
+
+    private function notifyRouterOnline(Router $router): void
+    {
+        $metadata = is_array($router->metadata) ? $router->metadata : [];
+        $alertSent = (bool) ($metadata['last_offline_alert_sent'] ?? false);
+
+        if (!$alertSent) {
+            return;
+        }
+
+        $adminPhone = $this->resolveAdminPhone($router);
+        if (!$adminPhone) {
+            return;
+        }
+
+        $sent = $this->whatsappService->sendRouterOnlineAlert(
+            $adminPhone,
+            $router->name,
+            $router->location
+        );
+
+        if ($sent) {
+            $this->recordAlertSent($router, 'online');
+        }
+    }
+
+    private function shouldSendOfflineAlert(Router $router): bool
+    {
+        $metadata = is_array($router->metadata) ? $router->metadata : [];
+        $lastAlertAt = $metadata['last_offline_alert_at'] ?? null;
+
+        if ($lastAlertAt === null) {
+            return true;
+        }
+
+        try {
+            $lastAlert = \Illuminate\Support\Carbon::parse($lastAlertAt);
+            if ($lastAlert->diffInMinutes(now()) >= self::OFFLINE_ALERT_COOLDOWN_MINUTES) {
+                return true;
+            }
+        } catch (\Throwable $e) {
+            return true;
+        }
+
+        return false;
+    }
+
+    private function recordAlertSent(Router $router, string $type): void
+    {
+        $router->refresh();
+        $metadata = is_array($router->metadata) ? $router->metadata : [];
+
+        if ($type === 'offline') {
+            $metadata['last_offline_alert_sent'] = true;
+            $metadata['last_offline_alert_at'] = now()->toIso8601String();
+        } elseif ($type === 'online') {
+            $metadata['last_online_alert_sent'] = true;
+            $metadata['last_online_alert_at'] = now()->toIso8601String();
+            $metadata['last_offline_alert_sent'] = false;
+        }
+
+        try {
+            $router->update(['metadata' => $metadata]);
+        } catch (\Throwable $e) {
+            Log::channel('notification')->warning('Failed to persist router alert metadata', [
+                'router_id' => $router->id,
+                'type' => $type,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    private function recordAlertAttempt(Router $router, string $type): void
+    {
+        $metadata = is_array($router->metadata) ? $router->metadata : [];
+
+        if ($type === 'offline') {
+            $metadata['last_offline_alert_at'] = now()->toIso8601String();
+        }
+
+        try {
+            $router->update(['metadata' => $metadata]);
+        } catch (\Throwable $e) {
+            Log::channel('notification')->warning('Failed to persist router alert attempt metadata', [
+                'router_id' => $router->id,
+                'type' => $type,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    private function resolveAdminPhone(Router $router): ?string
+    {
+        $tenant = $router->tenant;
+
+        if (!$tenant) {
+            return null;
+        }
+
+        $phone = $tenant->contact_phone
+            ?: $tenant->personal_phone
+            ?: $tenant->captive_portal_support_phone;
+
+        return $phone ? preg_replace('/[^0-9]/', '', $phone) : null;
+    }
+}

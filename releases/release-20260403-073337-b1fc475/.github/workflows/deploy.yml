@@ -1,0 +1,167 @@
+name: Deploy to DigitalOcean
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: mbstring, intl, pdo_mysql, bcmath, xml, curl, zip
+          coverage: none
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Cache composer
+        uses: actions/cache@v4
+        with:
+          path: vendor
+          key: composer-${{ hashFiles('**/composer.lock') }}
+          restore-keys: composer-
+
+      - name: Cache npm
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: npm-
+
+      - name: Update Composer
+        run: composer self-update
+
+      - name: Install PHP deps (prod)
+        run: composer install --no-dev --prefer-dist --no-interaction --optimize-autoloader
+
+      - name: Install JS deps + build
+        run: |
+          npm ci
+          npm run build
+
+      - name: Create release archive
+        run: |
+          set -eo pipefail
+          tar --warning=no-file-changed --ignore-failed-read --delay-directory-restore -czf release.tar.gz \
+            --exclude='.git' \
+            --exclude='node_modules' \
+            --exclude='.github' \
+            --exclude='storage' \
+            --exclude='.env' \
+            .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release
+          path: release.tar.gz
+          retention-days: 5
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: release
+          path: .
+
+      - name: Copy to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.DO_HOST }}
+          username: root
+          port: 22
+          key: ${{ secrets.DO_SSH_PRIVATE_KEY }}
+          source: "release.tar.gz"
+          target: "/tmp/deploy"
+          rm: true
+          overwrite: true
+
+      - name: Deploy on server (atomic release)
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DO_HOST }}
+          username: root
+          port: 22
+          key: ${{ secrets.DO_SSH_PRIVATE_KEY }}
+          script: |
+            set -e
+            APP_ROOT=/var/www/cloudbridge
+            RELEASES=$APP_ROOT/releases
+            SHARED=$APP_ROOT/shared
+            RELEASE=$RELEASES/${{ github.run_number }}-${{ github.sha }}
+            CURRENT=$APP_ROOT/current
+            ARCHIVE=/tmp/deploy/release.tar.gz
+
+            echo "Starting CloudBridge deployment..."
+            echo "Release: $RELEASE"
+
+            mkdir -p \
+              "$RELEASES" \
+              "$SHARED/storage/app" \
+              "$SHARED/storage/framework" \
+              "$SHARED/storage/framework/views" \
+              "$SHARED/storage/framework/sessions" \
+              "$SHARED/storage/framework/cache" \
+              "$SHARED/storage/logs" \
+              "$SHARED/bootstrap/cache"
+
+            mkdir -p "$RELEASE"
+            if [ ! -f "$ARCHIVE" ]; then
+              echo "Archive not found at $ARCHIVE" >&2
+              exit 1
+            fi
+            tar -xzf "$ARCHIVE" -C "$RELEASE"
+
+            rm -rf "$RELEASE/storage"
+            ln -sfn "$SHARED/storage" "$RELEASE/storage"
+
+            rm -rf "$RELEASE/bootstrap/cache"
+            ln -sfn "$SHARED/bootstrap/cache" "$RELEASE/bootstrap/cache"
+
+            if [ -f "$CURRENT/.env" ]; then
+                cp "$CURRENT/.env" "$RELEASE/.env"
+            fi
+
+            cd "$RELEASE"
+
+            composer install --no-dev --optimize-autoloader --quiet
+
+            php artisan optimize:clear
+            php artisan config:cache
+            php artisan route:cache
+            php artisan view:cache
+            php artisan event:cache
+
+            if id -u www-data >/dev/null 2>&1; then
+              chown -R www-data:www-data storage bootstrap/cache
+            fi
+            chmod -R 775 storage bootstrap/cache
+
+            ln -sfn "$RELEASE" "$CURRENT"
+
+            systemctl reload php8.4-fpm
+
+            cd "$RELEASES"
+            ls -dt */ 2>/dev/null | tail -n +6 | xargs rm -rf 2>/dev/null || true
+
+            rm -f "$ARCHIVE"
+
+            echo "Deployment successful."

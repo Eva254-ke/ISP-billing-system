@@ -7,7 +7,7 @@ use Illuminate\Http\JsonResponse;
 use App\Models\Package;
 use App\Models\Payment;
 use App\Models\Tenant;
-use App\Models\Router;
+use App\Models\Router; // <--- ADDED
 use App\Models\Voucher;
 use App\Models\UserSession;
 use App\Services\MikroTik\MikroTikService;

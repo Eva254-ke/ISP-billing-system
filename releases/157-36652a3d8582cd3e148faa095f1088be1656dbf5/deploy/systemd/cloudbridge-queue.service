@@ -1,0 +1,19 @@
+[Unit]
+Description=CloudBridge Laravel Queue Worker
+After=network.target redis.service
+Wants=redis.service
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/cloudbridge
+ExecStart=/usr/bin/php artisan queue:work redis --queue=critical,high,medium,low,default --sleep=1 --tries=5 --timeout=120 --backoff=10 --max-time=3600 --memory=256
+ExecReload=/usr/bin/php artisan queue:restart
+Restart=always
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target
