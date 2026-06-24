@@ -36,7 +36,7 @@ class CaptivePortalController extends Controller
                 return response('Network configuration error. Please contact support.', 400);
             }
 
-            $mac = $this->cleanMac($request->query('mac') ?? $request->query('mac-address') ?? '');
+            $mac = $this->cleanMac((string) ($request->query('mac') ?? $request->query('mac-address') ?? ''));
             $ip = $request->query('ip') ?? $request->query('ip-address') ?? $request->ip();
 
             if (empty($mac) || strlen($mac) < 12) {
@@ -66,7 +66,7 @@ class CaptivePortalController extends Controller
     public function initiate(Request $request): JsonResponse
     {
         try {
-            $mac = $this->cleanMac($request->input('mac') ?? '');
+            $mac = $this->cleanMac((string) $request->input('mac', ''));
             $ip = $request->input('ip') ?? $request->ip();
 
             if (empty($mac) || strlen($mac) < 12) {
@@ -205,7 +205,7 @@ class CaptivePortalController extends Controller
     public function reconnect(Request $request): JsonResponse
     {
         try {
-            $mac = $this->cleanMac($request->input('mac') ?? '');
+            $mac = $this->cleanMac((string) $request->input('mac', ''));
             $ip = $request->input('ip') ?? $request->ip();
 
             if (empty($mac) || strlen($mac) < 12) {
