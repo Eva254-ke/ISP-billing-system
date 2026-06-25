@@ -104,6 +104,11 @@ class Payment extends Model
         return $this->belongsTo(UserSession::class, 'session_id');
     }
 
+    public function userSession(): BelongsTo
+    {
+        return $this->session();
+    }
+
     public function sessions(): HasMany
     {
         return $this->hasMany(UserSession::class);
