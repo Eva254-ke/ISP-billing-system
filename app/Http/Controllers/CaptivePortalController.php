@@ -33,14 +33,20 @@ class CaptivePortalController extends Controller
         try {
             $tenant = $this->resolveTenant($request);
             if (!$tenant) {
-                return response('Network configuration error. Please contact support.', 400);
+                return response()->view('captive.error', [
+                    'title' => 'Network Error',
+                    'message' => 'Network configuration error. Please contact support.',
+                ], 400);
             }
 
             $mac = $this->cleanMac($request->query('mac') ?? $request->query('mac-address') ?? '');
             $ip = $request->query('ip') ?? $request->query('ip-address') ?? $request->ip();
 
             if (empty($mac) || strlen($mac) < 12) {
-                return response('WiFi network error: Missing device MAC. Please "Forget" this WiFi network in your phone settings and reconnect.', 400);
+                return response()->view('captive.error', [
+                    'title' => 'Connection Error',
+                    'message' => 'We couldn\'t detect your device. Please go to your phone\'s WiFi settings, tap "Forget Network" on this WiFi, and reconnect. The portal will open automatically.',
+                ], 400);
             }
 
             $isConnected = $this->isDeviceAuthorized($mac, $ip);
@@ -59,7 +65,10 @@ class CaptivePortalController extends Controller
             ]);
         } catch (\Throwable $e) {
             Log::error('Captive Portal Index Fatal Error', ['error' => $e->getMessage()]);
-            return response('A temporary network error occurred. Please try again in a moment.', 500);
+            return response()->view('captive.error', [
+                'title' => 'Temporary Error',
+                'message' => 'A temporary network error occurred. Please try again in a moment.',
+            ], 500);
         }
     }
 
